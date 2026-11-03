@@ -4,7 +4,7 @@ extends CanvasLayer
 signal play_pressed
 signal resume_pressed
 signal quit_pressed
-signal settings_changed(sensitivity: float, volume: float, fov: float)
+signal settings_changed(sensitivity: float, volume: float, fov: float, players: int)
 signal loadout_changed(primary: String, secondary: String, optic: String, enabled: bool)
 
 # All HUD is constructed in code so the project stays scene-file free and the
@@ -77,6 +77,7 @@ var end_hint: Label
 var zone_panel: Control
 var pause_panel: Control
 var menu_card: VBoxContainer
+var menu_kicker: Label
 var menu_preview: GunPreview
 var menu_loadout: Label
 var menu_loadout_sub: Label
@@ -87,6 +88,8 @@ var _pause_leave: Button
 var _pause_title: Label
 var fov_slider: HSlider
 var lbl_fov: Label
+var size_slider: HSlider
+var lbl_size: Label
 var sens_slider: HSlider
 var vol_slider: HSlider
 var lbl_sens: Label
@@ -663,7 +666,8 @@ func _build_menu() -> void:
 	col.alignment = BoxContainer.ALIGNMENT_CENTER
 	menu.add_child(col)
 
-	col.add_child(_lv("I S L A N D   D R O P   ·   2 0   P L A Y E R S   ·   S O L O", 12, ACCENT))
+	menu_kicker = _lv("", 12, ACCENT)
+	col.add_child(menu_kicker)
 	var title := _lv("BLOCK ROYALE", 96, WHITE)
 	title.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.55))
 	title.add_theme_constant_override("shadow_offset_y", 4)
@@ -853,6 +857,17 @@ func _build_pause() -> void:
 	fov_slider.custom_minimum_size = Vector2(300, 22)
 	fov_slider.value_changed.connect(func(_v): _settings_changed())
 	col.add_child(fov_slider)
+
+	lbl_size = _lv("MATCH SIZE", 12, MUTED)
+	col.add_child(lbl_size)
+	size_slider = HSlider.new()
+	size_slider.min_value = 10
+	size_slider.max_value = 60
+	size_slider.step = 5
+	size_slider.value = 50
+	size_slider.custom_minimum_size = Vector2(300, 22)
+	size_slider.value_changed.connect(func(_v): _settings_changed())
+	col.add_child(size_slider)
 	col.add_child(_spacer(12))
 
 	var resume := _button("RESUME", true)
@@ -881,19 +896,21 @@ func _on_resume_button() -> void:
 
 func _settings_changed() -> void:
 	_settings_labels()
-	settings_changed.emit(sens_slider.value, vol_slider.value, fov_slider.value)
+	settings_changed.emit(sens_slider.value, vol_slider.value, fov_slider.value, int(size_slider.value))
 
 
 func _settings_labels() -> void:
 	lbl_sens.text = "MOUSE SENSITIVITY   %.2f" % sens_slider.value
 	lbl_vol.text = "VOLUME   %d%%" % int(vol_slider.value * 100.0)
 	lbl_fov.text = "FIELD OF VIEW   %d°" % int(fov_slider.value)
+	lbl_size.text = "MATCH SIZE   %d PLAYERS  (NEXT MATCH)" % int(size_slider.value)
 
 
-func set_settings(sens: float, vol: float, fov: float = 82.0) -> void:
+func set_settings(sens: float, vol: float, fov: float = 82.0, players: int = 50) -> void:
 	sens_slider.set_value_no_signal(sens)
 	vol_slider.set_value_no_signal(vol)
 	fov_slider.set_value_no_signal(fov)
+	size_slider.set_value_no_signal(players)
 	_settings_labels()
 
 
@@ -1177,6 +1194,15 @@ func add_ping(pos: Vector3) -> void:
 	pings.append({"p": Vector2(pos.x, pos.z), "t": 2.2})
 	if pings.size() > 24:
 		pings.pop_front()
+
+
+func set_match_size(n: int) -> void:
+	if menu_kicker != null:
+		var src := "ISLAND DROP  ·  %d PLAYERS  ·  SOLO" % n
+		var spaced := ""
+		for i in src.length():
+			spaced += src[i] + (" " if i < src.length() - 1 else "")
+		menu_kicker.text = spaced
 
 
 func show_menu(seed_text: String) -> void:

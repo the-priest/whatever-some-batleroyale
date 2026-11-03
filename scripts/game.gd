@@ -3,11 +3,15 @@ extends Node3D
 # BLOCK ROYALE — match orchestrator.
 # menu -> plane -> freefall -> ground -> win / eliminated
 
-const MAX_BOTS := 19
 const BOT_NAMES := [
 	"RAVEN", "GHOST", "BOLT", "VEX", "SABLE", "NOMAD", "CINDER", "HALO",
 	"TALON", "DRIFT", "ECHO", "FLINT", "ONYX", "PIKE", "RUNE", "SLATE",
 	"THORN", "VOID", "WREN", "ZERO", "ASH", "BRICK", "COBRA", "DUSK",
+	"ANVIL", "BADGER", "CROW", "DAGGER", "EMBER", "FALCON", "GRIT", "HAWK",
+	"IRON", "JACKAL", "KNOX", "LYNX", "MAMBA", "NOVA", "ORCA", "PROWLER",
+	"QUILL", "REAPER", "STEEL", "TUNDRA", "UMBRA", "VIPER", "WOLF", "XENON",
+	"YARROW", "ZULU", "BISHOP", "DOZER", "FROST", "GUNNER", "HUNTER", "KILO",
+	"MAVERICK", "ROOK", "SHADE", "TANGO",
 ]
 const WEAPON_DROP_WEIGHTS := {
 	"pistol": 12, "m1911": 9, "smg": 14, "grease": 10, "shotgun": 11, "autoshotgun": 4,
@@ -39,6 +43,8 @@ var ballistics: Ballistics
 var menu_cam: Camera3D
 
 var phase := "boot"      # boot | menu | plane | playing | end
+var match_size := 50
+var MAX_BOTS := 49
 var lobby_ready := false
 var seed_value := 20261101
 var loot_pool: Array = []
@@ -132,6 +138,7 @@ func _ready() -> void:
 
 
 func _show_menu() -> void:
+	hud.set_match_size(MAX_BOTS + 1)
 	hud.show_menu("SEED  %d   ·   %d LOOT SPOTS   ·   %d PLAYERS" % [seed_value, world.loot_points.size(), MAX_BOTS + 1])
 
 
@@ -168,6 +175,7 @@ func _load_settings() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(SETTINGS_PATH) == OK:
 		mouse_sens = float(cfg.get_value("input", "sensitivity", 1.0))
+		match_size = int(cfg.get_value("match", "players", 50))
 		volume = float(cfg.get_value("audio", "volume", 0.8))
 		fov = float(cfg.get_value("video", "fov", 82.0))
 		loadout_primary = str(cfg.get_value("loadout", "primary", loadout_primary))
@@ -178,7 +186,9 @@ func _load_settings() -> void:
 		loadout_primary = "carbine"
 	if not Weapons.DEFS.has(loadout_secondary):
 		loadout_secondary = "pistol"
-	hud.set_settings(mouse_sens, volume, fov)
+	match_size = clampi(match_size, 10, 60)
+	MAX_BOTS = match_size - 1
+	hud.set_settings(mouse_sens, volume, fov, match_size)
 	hud.set_loadout(loadout_primary, loadout_secondary, loadout_optic, loadout_enabled)
 	_apply_settings()
 
@@ -190,10 +200,14 @@ func _apply_settings() -> void:
 	AudioServer.set_bus_volume_db(0, linear_to_db(maxf(0.0001, volume)))
 
 
-func _on_settings_changed(sens: float, vol: float, p_fov: float) -> void:
+func _on_settings_changed(sens: float, vol: float, p_fov: float, players: int) -> void:
 	mouse_sens = sens
 	volume = vol
 	fov = p_fov
+	match_size = players
+	MAX_BOTS = players - 1
+	if phase == "menu" and world != null:
+		_show_menu()
 	_apply_settings()
 	_save_settings()
 
@@ -211,6 +225,7 @@ func _save_settings() -> void:
 	cfg.set_value("input", "sensitivity", mouse_sens)
 	cfg.set_value("audio", "volume", volume)
 	cfg.set_value("video", "fov", fov)
+	cfg.set_value("match", "players", match_size)
 	cfg.set_value("loadout", "primary", loadout_primary)
 	cfg.set_value("loadout", "secondary", loadout_secondary)
 	cfg.set_value("loadout", "optic", loadout_optic)
@@ -317,13 +332,24 @@ func _start_match() -> void:
 		if is_instance_valid(l) and l.kind == "weapon" and l.global_position.y > 0.0:
 			weapon_spots.append(l.global_position)
 	bots.clear()
+	var drop_targets: Array = []
 	var route := plane_end - plane_start
 	var route_len2 := maxf(1.0, route.x * route.x + route.z * route.z)
 	for i in range(MAX_BOTS):
 		var b := Bot.new()
 		var target := _random_ground_point(390.0)
 		var jump_t := randf_range(0.05, 0.90)
-		if weapon_spots.size() > 0 and randf() < 0.6:
+		# Spread the lobby out: no two landing spots within 45 m.
+		for tries in 12:
+			var clash := false
+			for other in drop_targets:
+				if Vector2(target.x, target.z).distance_to(other) < 45.0:
+					clash = true
+					break
+			if not clash:
+				break
+			target = _random_ground_point(390.0)
+		if weapon_spots.size() > 0 and randf() < 0.3:
 			var best_spot: Vector3
 			var best_cost := 1.0e9
 			for attempt in 10:
@@ -341,7 +367,8 @@ func _start_match() -> void:
 				var a := randf() * TAU
 				var r := randf_range(10.0, 45.0)
 				target = Vector3(best_spot.x + cos(a) * r, best_spot.y, best_spot.z + sin(a) * r)
-		b.setup(BOT_NAMES[i % BOT_NAMES.size()] + ("" if i < BOT_NAMES.size() else str(i)), Vector2(target.x, target.z), self, seed_value + i * 977 + randi() % 1000)
+		drop_targets.append(Vector2(target.x, target.z))
+		b.setup(BOT_NAMES[(i + seed_value) % BOT_NAMES.size()] + ("" if i < BOT_NAMES.size() else str(i)), Vector2(target.x, target.z), self, seed_value + i * 977 + randi() % 1000)
 		add_child(b)
 		b.global_position = plane.seat_position() + Vector3(randf_range(-1, 1), 0, randf_range(-1, 1))
 		b.set_meta("jump_at", clampf(jump_t + randf_range(-0.02, 0.02), 0.03, 0.93))
@@ -941,6 +968,15 @@ func _on_notice(text: String) -> void:
 
 func _on_bot_eliminated(victim: Bot, killer: String) -> void:
 	alive = maxi(0, alive - 1)
+	if OS.get_cmdline_user_args().has("--sim"):
+		var src = victim.last_killer_node
+		var dist := -1.0
+		var info := ""
+		if src is Node3D and is_instance_valid(src):
+			dist = (src as Node3D).global_position.distance_to(victim.global_position)
+			if src is Bot:
+				info = "calm=%.0f wpn=%s" % [(src as Bot).calm_t, (src as Bot).weapon_id]
+		print("[kill] t=%d %s -> %s dist=%.0f victim_calm=%.0f victim_state=%d %s" % [int(match_time), killer, victim.bot_name, dist, victim.calm_t, victim.state, info])
 	var k := killer if killer != "" else "THE STORM"
 	var weapon := ""
 	var src = victim.last_killer_node
@@ -1873,9 +1909,9 @@ func _run_sim() -> void:
 	player.spawn_protect = 1.0e9
 	var t0 := match_time
 	var last_print := 0.0
-	while alive > 1 and match_time - t0 < 700.0:
+	while alive > 1 and match_time - t0 < 1300.0:
 		await get_tree().physics_frame
-		if match_time - last_print > 30.0:
+		if match_time - last_print > 60.0:
 			last_print = match_time
 			print("[sim] t=%d alive=%d zone phase=%d r=%d armed=%d" % [int(match_time), alive, zone.phase, int(zone.radius), _count_armed_bots()])
 	print("[sim] match over t=%d alive=%d bullets_live=%d" % [int(match_time), alive, ballistics.bullets.size()])

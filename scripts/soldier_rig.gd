@@ -257,8 +257,24 @@ func muzzle_position() -> Vector3:
 	return gun_holder.global_position + gun_holder.global_basis * Vector3(0, 0.02, -0.5 * _gun_len)
 
 
-func _process(_delta: float) -> void:
-	if not _armed or hand_r == null or _dead:
+var _lod_t := 0.0
+
+
+func _process(delta: float) -> void:
+	# Far away: stop animating and stop drawing. You could not make out a
+	# soldier past ~260 m, and 50 animated rigs are not free.
+	_lod_t -= delta
+	if _lod_t <= 0.0 and not _dead:
+		_lod_t = 0.4 + randf() * 0.2
+		var cam := get_viewport().get_camera_3d()
+		if cam != null and model != null:
+			var near := cam.global_position.distance_to(global_position) < 260.0
+			if near != model.visible:
+				model.visible = near
+				gun_holder.visible = near
+				if tree != null:
+					tree.active = near
+	if not _armed or hand_r == null or _dead or not model.visible:
 		return
 	# The gun follows the right hand and points where the soldier is aiming;
 	# the grip (behind the centre of the model) sits in the hand.

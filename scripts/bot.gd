@@ -69,6 +69,7 @@ var _shot_seq := 0
 var _col: CollisionShape3D
 var _cap: CapsuleShape3D
 var crouched := false
+var calm_t := 0.0
 var _posture_t := 0.0
 var _reload_t := 0.0
 
@@ -248,6 +249,8 @@ func _land() -> void:
 	global_position.y = game_ground_y() + 1.4
 	_play("Jump_Land")
 	roam_point = drop_target
+	# Fresh off the plane, people loot first and only fight what is in their face.
+	calm_t = randf_range(60.0, 150.0)
 	if game != null and game.has_method("on_bot_landed"):
 		game.on_bot_landed(self)
 
@@ -256,6 +259,7 @@ func _ground(delta: float) -> void:
 	if not is_on_floor():
 		velocity.y -= GRAVITY * delta
 	alert_timer = maxf(0.0, alert_timer - delta)
+	calm_t = maxf(0.0, calm_t - delta)
 	_shoot_logic(delta)
 	if heal_timer > 0.0:
 		heal_timer -= delta
@@ -303,7 +307,17 @@ func _ground(delta: float) -> void:
 				strafe_dir = -strafe_dir
 			var to_e := (enemy.global_position - global_position).normalized()
 			var side := Vector3(-to_e.z, 0, to_e.x) * strafe_dir
-			var hold := 16.0
+			# Fight at the range the weapon is made for.
+			var hold := 45.0
+			match Weapons.cls(weapon_id):
+				"smg", "pistol":
+					hold = 16.0
+				"shotgun":
+					hold = 8.0
+				"dmr", "sniper":
+					hold = 90.0
+				"lmg":
+					hold = 55.0
 			# At range, alternate between crouched shooting and standing to
 			# reposition; up close, stay up and strafe.
 			_posture_t -= delta
@@ -333,8 +347,11 @@ func _ground(delta: float) -> void:
 				# Head for safety early, not when the storm is already on top of us.
 				var nr: float = game.zone.next_radius()
 				var nc: Vector2 = game.zone.next_center()
-				if roam_point.distance_to(nc) > nr * 0.9 or (here.distance_to(zc) > r * 0.85 and roam_point.distance_to(zc) > r * 0.85):
-					roam_point = nc + (here - nc).normalized() * (nr * randf_range(0.2, 0.6))
+				# Rotate when the storm is coming or we are well outside the
+				# next circle; otherwise keep to our own area.
+				var must_move: bool = here.distance_to(zc) > r * 0.8 or (game.zone.warning and here.distance_to(nc) > nr * 0.9)
+				if must_move and roam_point.distance_to(nc) > nr * 0.85:
+					roam_point = nc + (here - nc).normalized() * (nr * randf_range(0.45, 0.8))
 					roam_point += Vector2(randf_range(-10, 10), randf_range(-10, 10))
 			if alert_timer > 0.0 and aggression > 0.6 and heard_pos.distance_to(global_position) > 10.0:
 				# Go and see who is shooting.
@@ -458,18 +475,24 @@ func _animate_ground() -> void:
 
 
 func _pick_roam_point() -> void:
-	var c := Vector2(global_position.x, global_position.z)
-	var r := 60.0
+	# Wander your own patch of the safe area rather than its centre, so the
+	# lobby does not funnel into one spot.
+	var here := Vector2(global_position.x, global_position.z)
+	var nc := here
+	var nr := 1e9
 	if game != null and game.zone != null:
-		c = game.zone.next_center()
-		r = game.zone.next_radius() * 0.75
-	for i in 8:
+		nc = game.zone.next_center()
+		nr = maxf(8.0, game.zone.next_radius())
+	for i in 10:
 		var a := randf() * TAU
-		var p := c + Vector2(cos(a), sin(a)) * sqrt(randf()) * r
+		var p := here + Vector2(cos(a), sin(a)) * randf_range(15.0, 70.0)
+		if p.distance_to(nc) > nr * 0.85:
+			# Outside the next circle: aim for its near edge instead.
+			p = nc + (p - nc).normalized() * nr * randf_range(0.45, 0.8)
 		if game == null or game.terrain == null or not bool(game.terrain.is_water(p.x, p.y)):
 			roam_point = p
 			return
-	roam_point = c
+	roam_point = nc
 
 
 ## Someone fired a gun nearby.
@@ -631,7 +654,7 @@ func _shoot_logic(delta: float) -> void:
 	var aim_pt := enemy.global_position + Vector3(0, aim_h, 0) + tvel * tof * comp
 	aim_pt.y += 0.5 * Ballistics.GRAVITY * tof * tof * comp
 	var base_dir := (aim_pt - from).normalized()
-	var mult := 0.62 if enemy is Player else 0.27
+	var mult := 0.62 if enemy is Player else 0.2
 	var pellets := int(d["pellets"])
 	_shot_seq += 1
 	for i in pellets:
@@ -666,8 +689,13 @@ func _find_enemy() -> Node3D:
 	for c in candidates:
 		var to: Vector3 = (c as Node3D).global_position - global_position
 		var d := to.length()
-		# Bots pick fights with each other at shorter range than with you.
-		if d > (sight if c is Player else sight * 0.65):
+		# Bots pick fights with each other at shorter range than with you, and
+		# barely at all while still looting after the drop.
+		var reach := sight if c is Player else sight * 0.5
+		if calm_t > 0.0 and c != enemy:
+			# Only the aggressive ones start a fight while still looting.
+			reach = 18.0 if aggression > 0.72 else 0.0
+		if d > reach:
 			continue
 		var flat := Vector3(to.x, 0, to.z).normalized()
 		var in_view: bool = d < CLOSE_SENSE or alert_timer > 0.0 or fwd.dot(flat) > FOV_COS or c == enemy

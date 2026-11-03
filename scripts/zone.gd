@@ -6,10 +6,11 @@ signal phase_changed(phase: int, warning: bool)
 # Shrinking storm circle. Each phase holds (next circle already known and shown
 # on the map), then closes onto it. Anyone outside takes ramping damage.
 
-const HOLD := [45.0, 35.0, 28.0, 22.0, 18.0, 14.0, 10.0]
-const SHRINK := [40.0, 32.0, 26.0, 22.0, 18.0, 15.0, 12.0]
-const FRACTION := [0.55, 0.55, 0.52, 0.50, 0.45, 0.40, 0.0]
-const DAMAGE := [1.0, 2.0, 4.0, 6.0, 9.0, 12.0, 16.0, 20.0]
+# Roughly 11-12 minutes from landing to the last circle.
+const HOLD := [100.0, 80.0, 65.0, 55.0, 45.0, 35.0, 25.0]
+const SHRINK := [75.0, 60.0, 50.0, 42.0, 35.0, 28.0, 22.0]
+const FRACTION := [0.62, 0.60, 0.55, 0.52, 0.48, 0.42, 0.0]
+const DAMAGE := [1.0, 2.0, 3.0, 5.0, 8.0, 11.0, 15.0, 20.0]
 
 var terrain: Terrain = null
 
