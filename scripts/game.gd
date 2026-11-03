@@ -104,6 +104,15 @@ func _ready() -> void:
 	phase = "menu"
 	_show_menu()
 	hud.set_minimap(world.minimap_texture)
+	var places: Array = []
+	for v in world.villages.village_pads:
+		places.append([v.name, v.center, "town"])
+	for t in world.villages.towers:
+		places.append(["LOOKOUT", t.center, "tower"])
+	for p in world.villages.poi_pads:
+		if p.type == "ruin":
+			places.append(["RUINS", p.center, "ruin"])
+	hud.set_places(places)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	if OS.get_cmdline_user_args().has("--smoke"):
 		_run_smoke()
@@ -827,6 +836,7 @@ func _win() -> void:
 
 func on_player_landed() -> void:
 	sfx.play_ui("land_thud", -6.0)
+	hud.set_plane_path(Vector3.ZERO, Vector3.ZERO)
 	hud.show_notice("FIND A WEAPON  —  LOOK FOR THE GLOW", 3.0)
 	player.add_trauma(0.35)
 
@@ -1127,6 +1137,14 @@ func _run_shot() -> void:
 				spot = Vector3(float(parts[0]), 0.0, float(parts[1]))
 		elif a.begins_with("--yaw="):
 			ang = float(a.substr(6))
+	if OS.get_cmdline_user_args().has("--menu"):
+		for i in 30:
+			await get_tree().process_frame
+		await RenderingServer.frame_post_draw
+		get_viewport().get_texture().get_image().save_png(out)
+		print("[shot] saved ", out)
+		get_tree().quit()
+		return
 	print("[shot] starting match")
 	_start_match()
 	await get_tree().process_frame
@@ -1136,6 +1154,14 @@ func _run_shot() -> void:
 		var tc: Vector2 = world.villages.towers[0].center
 		spot = Vector3(tc.x + 14.0, 0.0, tc.y + 10.0)
 		ang = atan2(14.0, 10.0)
+	if OS.get_cmdline_user_args().has("--inside") and world.villages.towers.size() > 0:
+		var tw: Dictionary = world.villages.towers[0]
+		var tb := Basis(Vector3.UP, float(tw.yaw))
+		var local := tb * Vector3(-1.6, 0, 2.0)
+		spot = Vector3(tw.center.x + local.x, 0.0, tw.center.y + local.z)
+		# Look toward the stair (+x side, climbing to -z).
+		var look := tb * Vector3(1.0, 0, -0.35)
+		ang = atan2(-look.x, -look.z)
 	if p == null:
 		print("[shot] no player")
 		get_tree().quit()

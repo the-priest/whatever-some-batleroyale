@@ -98,6 +98,7 @@ var next_center := Vector2.ZERO
 var next_radius := 100.0
 var player_pos := Vector3.ZERO
 var plane_path: Array = []
+var places: Array = []  # [name, Vector2, kind]
 var prompt_label := ""
 var progress_text := ""
 var progress_frac := -1.0
@@ -1041,6 +1042,10 @@ func set_minimap(tex: Texture2D) -> void:
 	minimap_tex = tex
 
 
+func set_places(p: Array) -> void:
+	places = p
+
+
 func set_plane_path(a: Vector3, b: Vector3) -> void:
 	plane_path = [Vector2(a.x, a.z), Vector2(b.x, b.z)] if a != b else []
 
@@ -1291,9 +1296,9 @@ func _draw_world(ctrl: Control, inner: Rect2, origin: Vector2, span: float, big:
 
 	# Plane route.
 	if plane_path.size() == 2:
-		var a: Vector2 = to_map.call(plane_path[0])
-		var b: Vector2 = to_map.call(plane_path[1])
-		ctrl.draw_dashed_line(a, b, Color(1, 1, 1, 0.55), 2.0, 10.0)
+		var seg := _clip_segment(to_map.call(plane_path[0]), to_map.call(plane_path[1]), inner)
+		if seg.size() == 2:
+			ctrl.draw_dashed_line(seg[0], seg[1], Color(1, 1, 1, 0.55), 2.0, 10.0)
 
 	# Storm: current circle (purple) and next safe zone (white).
 	if zone_radius > 0.5:
@@ -1303,6 +1308,18 @@ func _draw_world(ctrl: Control, inner: Rect2, origin: Vector2, span: float, big:
 		var nc: Vector2 = to_map.call(next_center)
 		ctrl.draw_arc(nc, next_radius * scale, 0, TAU, 96, Color(1, 1, 1, 0.9), 1.5)
 
+	# Named places on the big map.
+	if big:
+		for pl in places:
+			var mp: Vector2 = to_map.call(pl[1])
+			var kind: String = pl[2]
+			if kind == "town":
+				ctrl.draw_string(font_bold, mp + Vector2(-60, -14), pl[0], HORIZONTAL_ALIGNMENT_CENTER, 120, 13, WHITE)
+			elif kind == "tower":
+				ctrl.draw_colored_polygon(PackedVector2Array([mp + Vector2(0, -7), mp + Vector2(-6, 5), mp + Vector2(6, 5)]), Color(0.95, 0.75, 0.35))
+				ctrl.draw_string(font_bold, mp + Vector2(-50, 18), "LOOKOUT", HORIZONTAL_ALIGNMENT_CENTER, 100, 10, Color(0.95, 0.85, 0.6))
+			elif kind == "ruin":
+				ctrl.draw_rect(Rect2(mp - Vector2(3, 3), Vector2(6, 6)), Color(0.8, 0.78, 0.72), false, 1.5)
 	# Markers (supply drops).
 	for m in markers:
 		var mp: Vector2 = to_map.call(Vector2(m.x, m.z))
@@ -1333,6 +1350,28 @@ func _draw_world(ctrl: Control, inner: Rect2, origin: Vector2, span: float, big:
 		if me.distance_to(nc) > next_radius * scale:
 			var edge := nc + (me - nc).normalized() * next_radius * scale
 			ctrl.draw_dashed_line(me, edge, Color(1, 1, 1, 0.6), 1.5, 6.0)
+
+
+## Liang-Barsky: the part of a-b inside r, or [] if none.
+func _clip_segment(a: Vector2, b: Vector2, r: Rect2) -> Array:
+	var d := b - a
+	var t0 := 0.0
+	var t1 := 1.0
+	var p := [-d.x, d.x, -d.y, d.y]
+	var q := [a.x - r.position.x, r.end.x - a.x, a.y - r.position.y, r.end.y - a.y]
+	for i in 4:
+		if absf(p[i]) < 1e-6:
+			if q[i] < 0.0:
+				return []
+			continue
+		var t: float = q[i] / p[i]
+		if p[i] < 0.0:
+			t0 = maxf(t0, t)
+		else:
+			t1 = minf(t1, t)
+	if t0 > t1:
+		return []
+	return [a + d * t0, a + d * t1]
 
 
 func _draw_minimap() -> void:

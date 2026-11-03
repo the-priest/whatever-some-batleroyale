@@ -125,13 +125,16 @@ func _ready() -> void:
 	label = Label3D.new()
 	label.text = display_name()
 	label.font = load("res://assets/fonts/ui_bold.ttf")
-	label.font_size = 56
-	label.pixel_size = 0.0040
+	label.font_size = 40
+	# Constant size on screen, so it is readable from 10 m and not a wall of
+	# text when you stand right over the item.
+	label.fixed_size = true
+	label.pixel_size = 0.0009
 	label.modulate = accent.lightened(0.2)
 	label.outline_modulate = Color(0, 0, 0, 0.85)
-	label.outline_size = 12
+	label.outline_size = 10
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	label.position.y = 1.35
+	label.position.y = 1.15
 	label.visible = false
 	add_child(label)
 

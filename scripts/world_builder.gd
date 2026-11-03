@@ -4,8 +4,12 @@ class_name WorldBuilder
 ## Builds the whole island: sky + lighting, chunked terrain with collision, sea,
 ## instanced forest and ground cover, modular villages, distant islands, clouds.
 
-const TREE_TILE := 300.0
-const CHUNK_SIZE := 150.0
+const TREE_TILE := 150.0
+const CHUNK_SIZE := 50.0
+## Godot measures visibility range to the centre of a MultiMesh's bounds, so a
+## tile's range must cover its own half-diagonal or it pops out in big squares.
+const TREE_HALF_DIAG := TREE_TILE * 0.7072
+const GROUND_HALF_DIAG := CHUNK_SIZE * 0.7072
 
 var terrain: Terrain
 var villages: Villages
@@ -243,7 +247,7 @@ func _build_water() -> void:
 	_mat_water = ShaderMaterial.new()
 	_mat_water.shader = load("res://shaders/water.gdshader")
 	var plane := PlaneMesh.new()
-	plane.size = Vector2(2600.0, 2600.0)
+	plane.size = Vector2(9000.0, 9000.0)
 	plane.subdivide_width = 1
 	plane.subdivide_depth = 1
 	var mi := MeshInstance3D.new()
@@ -379,7 +383,7 @@ func _scatter_trees() -> void:
 		mmi.name = "T_" + key
 		mmi.multimesh = mm
 		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-		mmi.visibility_range_end = 340.0
+		mmi.visibility_range_end = 430.0 + TREE_HALF_DIAG
 		add_child(mmi)
 		stats.trees += list.size()
 
@@ -487,7 +491,7 @@ func _scatter_ground_cover() -> void:
 			mmi.multimesh = mm
 			mmi.material_override = mat
 			mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			mmi.visibility_range_end = k.view
+			mmi.visibility_range_end = float(k.view) + GROUND_HALF_DIAG
 			add_child(mmi)
 			stats.ground += arr.size()
 
@@ -550,20 +554,28 @@ func _scatter_rocks() -> void:
 		var data := _nature_mesh(k)
 		if data.is_empty():
 			continue
-		var mm := MultiMesh.new()
-		mm.transform_format = MultiMesh.TRANSFORM_3D
-		mm.mesh = data.mesh
-		mm.instance_count = list.size()
-		for i in list.size():
-			var it: Dictionary = list[i]
-			mm.set_instance_transform(i, Transform3D(
-				Basis(Vector3.UP, it.rot).scaled(Vector3.ONE * it.scale), it.pos))
-		var mmi := MultiMeshInstance3D.new()
-		mmi.name = "R_" + k
-		mmi.multimesh = mm
-		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-		mmi.visibility_range_end = 380.0
-		add_child(mmi)
+		var tiles: Dictionary = {}
+		for it in list:
+			var key := "%d_%d" % [int(floor((it.pos.x + Terrain.HALF) / TREE_TILE)), int(floor((it.pos.z + Terrain.HALF) / TREE_TILE))]
+			if not tiles.has(key):
+				tiles[key] = []
+			tiles[key].append(it)
+		for key in tiles:
+			var arr: Array = tiles[key]
+			var mm := MultiMesh.new()
+			mm.transform_format = MultiMesh.TRANSFORM_3D
+			mm.mesh = data.mesh
+			mm.instance_count = arr.size()
+			for i in arr.size():
+				var it: Dictionary = arr[i]
+				mm.set_instance_transform(i, Transform3D(
+					Basis(Vector3.UP, it.rot).scaled(Vector3.ONE * it.scale), it.pos))
+			var mmi := MultiMeshInstance3D.new()
+			mmi.name = "R_%s_%s" % [k, key]
+			mmi.multimesh = mm
+			mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+			mmi.visibility_range_end = (120.0 if k == "Pebble_Round_1" else 420.0) + TREE_HALF_DIAG
+			add_child(mmi)
 		stats.rocks += list.size()
 		# Rocks stop bullets and bodies. Pebbles do not.
 		if k == "Pebble_Round_1":
@@ -693,7 +705,7 @@ func _build_clouds() -> void:
 
 
 func _build_minimap() -> void:
-	var res := 256
+	var res := 512
 	var img := Image.create(res, res, false, Image.FORMAT_RGBA8)
 	for py in res:
 		for px in res:
@@ -713,22 +725,42 @@ func _build_minimap() -> void:
 			else:
 				var hv := clampf((h - 2.0) / 40.0, 0.0, 1.0)
 				c = Color(0.31, 0.44, 0.22).lerp(Color(0.46, 0.53, 0.30), hv)
-			var shade := 1.0 + (terrain.macro.get_noise_2d(x, z)) * 0.10
+			var shade := 1.0 + (terrain.macro.get_noise_2d(x, z)) * 0.06
+			if h >= Terrain.WATER_LEVEL:
+				# Hillshade from the north-west so ridges and high ground read.
+				var light := Vector3(-0.6, 0.75, -0.5).normalized()
+				var ndl := clampf(n.dot(light), 0.0, 1.0)
+				shade *= 0.55 + ndl * 0.6
+				# Faint contour every 8 m.
+				if fmod(h, 8.0) < 0.45 and h > 3.0:
+					shade *= 0.88
+				# Forest tint.
+				if terrain.forest_density(x, z) > 0.62:
+					c = c.lerp(Color(0.18, 0.32, 0.16), 0.35)
 			c = Color(c.r * shade, c.g * shade, c.b * shade, 1.0)
 			img.set_pixel(px, py, c)
-	for v in villages.village_pads:
-		var cvec: Vector2 = v.center
-		var px := int((cvec.x / Terrain.SIZE + 0.5) * res)
-		var py := int((cvec.y / Terrain.SIZE + 0.5) * res)
-		for oy in range(-4, 5):
-			for ox in range(-4, 5):
-				if ox * ox + oy * oy > 16:
-					continue
-				var tx := px + ox
-				var ty := py + oy
-				if tx >= 0 and ty >= 0 and tx < res and ty < res:
-					img.set_pixel(tx, ty, Color(0.60, 0.50, 0.34))
+	# Buildings as small dark blocks, like a real map.
+	for h in villages.houses:
+		var hc: Vector2 = h.center
+		_map_rect(img, res, hc, Vector2(float(h.w), float(h.d)) * 0.5, Color(0.36, 0.30, 0.26))
+	for t in villages.towers:
+		_map_rect(img, res, t.center, Vector2(3.5, 3.5), Color(0.22, 0.20, 0.20))
+	for p in villages.poi_pads:
+		if p.type == "ruin":
+			_map_rect(img, res, p.center, Vector2(4.0, 3.0), Color(0.45, 0.42, 0.38))
 	minimap_texture = ImageTexture.create_from_image(img)
+
+
+func _map_rect(img: Image, res: int, c: Vector2, half: Vector2, col: Color) -> void:
+	var k := float(res) / Terrain.SIZE
+	var x0 := int((c.x - half.x + Terrain.HALF) * k)
+	var x1 := int((c.x + half.x + Terrain.HALF) * k)
+	var y0 := int((c.y - half.y + Terrain.HALF) * k)
+	var y1 := int((c.y + half.y + Terrain.HALF) * k)
+	for y in range(y0, y1 + 1):
+		for x in range(x0, x1 + 1):
+			if x >= 0 and y >= 0 and x < res and y < res:
+				img.set_pixel(x, y, col)
 
 
 
@@ -840,6 +872,6 @@ func _fill_gaps() -> void:
 			mmi.multimesh = mm
 			mmi.material_override = mat
 			mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			mmi.visibility_range_end = VIEW
+			mmi.visibility_range_end = VIEW + GROUND_HALF_DIAG
 			add_child(mmi)
 			stats.ground += arr.size()

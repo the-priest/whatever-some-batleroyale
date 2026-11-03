@@ -10,6 +10,8 @@ const MODEL_PATH := "res://assets/village/%s.gltf"
 const WALL_HEIGHT := 3.123
 const DOOR_WIDTH := 1.30
 
+const TOWN_NAMES := ["MOSSFORD", "HOLLOWMERE", "BRIARWICK", "STONEHELM", "ASHVALE", "THORNBY"]
+
 ## Footprints that have a matching roof piece in the kit.
 const LOTS := [
 	Vector2i(4, 6), Vector2i(6, 6), Vector2i(6, 8),
@@ -60,7 +62,7 @@ func _plan_villages() -> void:
 		if terrain.height_at(site.x, site.y) < 4.0:
 			continue
 		var pad := terrain.flatten_circle(site.x, site.y, 31.0, 26.0)
-		village_pads.append({"center": site, "pad": pad})
+		village_pads.append({"center": site, "pad": pad, "name": TOWN_NAMES[village_pads.size() % TOWN_NAMES.size()]})
 		_stat.village_count += 1
 
 		var count := rng.randi_range(3, 5)
@@ -348,7 +350,9 @@ func _commit_batches() -> void:
 		mmi.name = "V_" + key
 		mmi.multimesh = mm
 		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-		mmi.visibility_range_end = 260.0
+		# One batch spans the whole island, so no distance cut-off: Godot would
+		# measure it from the batch centre and hide whole villages at random.
+		mmi.visibility_range_end = 0.0
 		add_child(mmi)
 
 
@@ -413,6 +417,7 @@ func _build_tower(t: Dictionary) -> void:
 	var b := Basis(Vector3.UP, yaw)
 	var origin := Vector3(c.x, pad, c.y)
 	var half := 3.0
+	t["yaw"] = yaw
 	var door_side := rng.randi_range(0, 3)
 	# Never put the door behind the stair (side 1 is +x, where the stair runs).
 	if door_side == 1:
