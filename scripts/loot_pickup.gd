@@ -17,6 +17,9 @@ var spin: Node3D
 var tier := 1
 var radius := 2.2
 var spawn_time := 0.0
+var mag_override := -1
+var reserve_override := -1
+var dropped := false
 
 
 func setup(p_kind: String, p_id: String, p_amount: int = 1) -> void:
@@ -149,22 +152,33 @@ func prompt_text() -> String:
 		"weapon":
 			return "[E]  PICK UP  " + display_name()
 		"ammo":
-			return "[E]  TAKE  %d ROUNDS" % (amount * 30)
+			return "[E]  TAKE AMMO BOX"
 		"armor":
-			return "[E]  EQUIP ARMOR"
+			return "[E]  EQUIP ARMOR  +50"
 		"med":
-			return "[E]  USE MEDKIT"
+			return "[E]  TAKE MEDKIT"
 	return "[E]  TAKE"
 
 
-func can_pickup(player: Player) -> bool:
+## Empty string when the player can take this, otherwise the reason they cannot.
+func block_reason(player: Player) -> String:
 	if taken:
-		return false
-	if kind == "weapon":
-		return true
-	if kind == "ammo":
-		return player.has_gun()
-	return true
+		return "GONE"
+	match kind:
+		"ammo":
+			if not player.has_gun():
+				return "NEED A WEAPON FIRST"
+		"armor":
+			if player.armor >= 99.5:
+				return "ARMOR ALREADY FULL"
+		"med":
+			if player.meds >= Player.MAX_MEDS:
+				return "MEDKITS FULL  —  H TO USE ONE"
+	return ""
+
+
+func can_pickup(player: Player) -> bool:
+	return block_reason(player) == ""
 
 
 func pickup(player: Player) -> bool:
@@ -172,13 +186,13 @@ func pickup(player: Player) -> bool:
 		return false
 	match kind:
 		"weapon":
-			player.give_weapon(item_id)
+			player.give_weapon(item_id, mag_override, reserve_override)
 		"ammo":
-			player.add_ammo(player.current_id(), amount * 30)
+			player.add_ammo_box()
 		"armor":
 			player.add_armor(50.0)
 		"med":
-			player.heal(50.0)
+			player.add_med()
 		"gear":
 			player.add_armor(25.0)
 			player.heal(25.0)

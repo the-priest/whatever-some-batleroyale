@@ -7,6 +7,7 @@ extends RefCounted
 
 const DEFS := {
 	"rifle": {
+		"ads_time": 0.20, "bloom": 0.20, "bloom_max": 1.3,
 		"name": "VK-47 RIFLE", "short": "RIFLE", "damage": 26.0, "rpm": 620.0,
 		"mag": 30, "reserve": 210, "spread": 1.35, "ads_spread": 0.22,
 		"recoil": 1.05, "range": 150.0, "auto": true, "reload": 2.45,
@@ -15,6 +16,7 @@ const DEFS := {
 		"kick": 0.030, "zoom": 1.25,
 	},
 	"smg": {
+		"ads_time": 0.15, "bloom": 0.14, "bloom_max": 1.0,
 		"name": "SP-9 SMG", "short": "SMG", "damage": 18.0, "rpm": 920.0,
 		"mag": 35, "reserve": 280, "spread": 1.8, "ads_spread": 0.55,
 		"recoil": 0.62, "range": 85.0, "auto": true, "reload": 1.95,
@@ -23,6 +25,7 @@ const DEFS := {
 		"kick": 0.017, "zoom": 1.15,
 	},
 	"shotgun": {
+		"ads_time": 0.20, "bloom": 0.0, "bloom_max": 0.0,
 		"name": "M-12 BREACHER", "short": "SHOTGUN", "damage": 13.0, "rpm": 78.0,
 		"mag": 6, "reserve": 48, "spread": 4.6, "ads_spread": 3.4,
 		"recoil": 3.1, "range": 42.0, "auto": false, "reload": 3.05,
@@ -31,6 +34,7 @@ const DEFS := {
 		"kick": 0.075, "zoom": 1.1,
 	},
 	"lmg": {
+		"ads_time": 0.30, "bloom": 0.16, "bloom_max": 1.6,
 		"name": "PK-74 BELT", "short": "LMG", "damage": 24.0, "rpm": 700.0,
 		"mag": 100, "reserve": 300, "spread": 2.0, "ads_spread": 0.5,
 		"recoil": 1.15, "range": 160.0, "auto": true, "reload": 4.7,
@@ -39,6 +43,7 @@ const DEFS := {
 		"kick": 0.028, "zoom": 1.2,
 	},
 	"dmr": {
+		"ads_time": 0.24, "bloom": 0.45, "bloom_max": 1.2,
 		"name": "SKS MARKSMAN", "short": "DMR", "damage": 46.0, "rpm": 300.0,
 		"mag": 20, "reserve": 140, "spread": 0.9, "ads_spread": 0.10,
 		"recoil": 1.9, "range": 220.0, "auto": false, "reload": 2.65,
@@ -47,6 +52,7 @@ const DEFS := {
 		"kick": 0.050, "zoom": 1.8,
 	},
 	"pistol": {
+		"ads_time": 0.13, "bloom": 0.30, "bloom_max": 1.2,
 		"name": "P-18 SIDEARM", "short": "PISTOL", "damage": 23.0, "rpm": 380.0,
 		"mag": 15, "reserve": 120, "spread": 1.5, "ads_spread": 0.45,
 		"recoil": 0.85, "range": 70.0, "auto": false, "reload": 1.75,
@@ -55,6 +61,7 @@ const DEFS := {
 		"kick": 0.026, "zoom": 1.05,
 	},
 	"sniper": {
+		"ads_time": 0.32, "bloom": 0.0, "bloom_max": 0.0,
 		"name": "AWM LONGBOW", "short": "SNIPER", "damage": 92.0, "rpm": 45.0,
 		"mag": 5, "reserve": 40, "spread": 0.35, "ads_spread": 0.0,
 		"recoil": 4.2, "range": 420.0, "auto": false, "reload": 3.55,
@@ -80,6 +87,12 @@ static var _drop_mat: StandardMaterial3D
 
 static func def(id: String) -> Dictionary:
 	return DEFS.get(id, DEFS["pistol"])
+
+
+## Reserve ammo that comes with a freshly looted gun: two magazines.
+static func starting_reserve(id: String) -> int:
+	var d := def(id)
+	return mini(int(d["reserve"]), int(d["mag"]) * 2)
 
 
 static func tier_color(id: String) -> Color:
@@ -188,6 +201,35 @@ static func build_view_model(id: String) -> Node3D:
 	mi.layers = 2
 	holder.add_child(mi)
 	return holder
+
+
+## Where each gun's magazine sits in its normalised 1 m model space:
+## [centre, size]. Used for the drop-and-insert reload animation.
+const MAGS := {
+	"rifle": [Vector3(0.0, -0.080, 0.045), Vector3(0.046, 0.150, 0.066)],
+	"smg": [Vector3(0.0, -0.100, 0.000), Vector3(0.040, 0.160, 0.050)],
+	"lmg": [Vector3(0.0, -0.085, 0.020), Vector3(0.085, 0.120, 0.120)],
+	"dmr": [Vector3(0.0, -0.070, 0.060), Vector3(0.040, 0.100, 0.060)],
+	"pistol": [Vector3(0.0, -0.105, 0.235), Vector3(0.036, 0.120, 0.050)],
+	"sniper": [Vector3(0.0, -0.060, 0.000), Vector3(0.040, 0.070, 0.080)],
+}
+
+
+static func build_magazine(id: String) -> MeshInstance3D:
+	var spec: Array = MAGS.get(id, MAGS["rifle"])
+	var mi := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = spec[1]
+	mi.mesh = bm
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color(0.07, 0.075, 0.085)
+	m.metallic = 0.7
+	m.roughness = 0.42
+	mi.material_override = m
+	mi.position = spec[0]
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.layers = 2
+	return mi
 
 
 static func _apply_gun_shading(n: Node) -> void:

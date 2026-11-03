@@ -3,30 +3,33 @@ extends Node3D
 
 signal phase_changed(phase: int, warning: bool)
 
-# Shrinking circle. Phases hold, then close; anyone outside takes ramping damage.
+# Shrinking storm circle. Each phase holds (next circle already known and shown
+# on the map), then closes onto it. Anyone outside takes ramping damage.
 
-var center := Vector2(0, 0)
+const HOLD := [45.0, 35.0, 28.0, 22.0, 18.0, 14.0, 10.0]
+const SHRINK := [40.0, 32.0, 26.0, 22.0, 18.0, 15.0, 12.0]
+const FRACTION := [0.55, 0.55, 0.52, 0.50, 0.45, 0.40, 0.0]
+const DAMAGE := [1.0, 2.0, 4.0, 6.0, 9.0, 12.0, 16.0, 20.0]
+
+var terrain: Terrain = null
+
+var center := Vector2.ZERO
 var radius := 430.0
-var target_center := Vector2(0, 0)
+var target_center := Vector2.ZERO
 var target_radius := 430.0
 var start_radius := 430.0
-var start_center := Vector2(0, 0)
+var start_center := Vector2.ZERO
 
 var phase := 0
-var state := "hold"          # hold | shrink
-var timer := 22.0
-var hold_time := 22.0
-var shrink_time := 18.0
+var state := "hold"          # hold | shrink | done
+var timer := 45.0
+var phase_duration := 40.0
 var warning := false
 var finished := false
 
 var wall: MeshInstance3D
 var ring: MeshInstance3D
-var damage_table := [1.0, 2.0, 4.0, 7.0, 10.0, 14.0]
-var island_radius := 430.0
-
-# Each phase target as a fraction of the previous radius.
-var targets := [0.62, 0.58, 0.55, 0.50, 0.46, 0.02]
+var _wall_mat: ShaderMaterial
 
 
 func _ready() -> void:
@@ -39,14 +42,14 @@ func _build_wall() -> void:
 	cyl.top_radius = 1.0
 	cyl.bottom_radius = 1.0
 	cyl.height = 2.0
-	cyl.radial_segments = 96
+	cyl.radial_segments = 128
 	cyl.rings = 1
 	cyl.cap_top = false
 	cyl.cap_bottom = false
 	wall.mesh = cyl
-	var mat := ShaderMaterial.new()
-	mat.shader = load("res://shaders/zone.gdshader")
-	wall.material_override = mat
+	_wall_mat = ShaderMaterial.new()
+	_wall_mat.shader = load("res://shaders/zone.gdshader")
+	wall.material_override = _wall_mat
 	wall.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	wall.position.y = 60.0
 	add_child(wall)
@@ -55,21 +58,16 @@ func _build_wall() -> void:
 	var torus := TorusMesh.new()
 	torus.inner_radius = 0.985
 	torus.outer_radius = 1.0
-	torus.rings = 96
+	torus.rings = 128
 	torus.ring_segments = 4
 	ring.mesh = torus
 	var rm := StandardMaterial3D.new()
 	rm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	rm.albedo_color = Color(0.4, 0.72, 1.0)
-	rm.emission_enabled = true
-	rm.emission = Color(0.35, 0.66, 1.0)
-	rm.emission_energy_multiplier = 2.4
-	rm.albedo_color.a = 0.9
+	rm.albedo_color = Color(0.72, 0.5, 1.0, 0.9)
 	rm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	# A razor-thin glowing ribbon lying on the ground must never write depth, or
-	# it fights the terrain/sea at grazing angles.
+	# A thin glowing ribbon on the ground must never write depth, or it fights
+	# the terrain at grazing angles.
 	rm.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
-	rm.no_depth_test = false
 	ring.material_override = rm
 	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(ring)
@@ -77,18 +75,43 @@ func _build_wall() -> void:
 
 
 func start(p_island_radius: float) -> void:
-	island_radius = p_island_radius
 	radius = p_island_radius
 	start_radius = radius
-	target_radius = radius
 	center = Vector2.ZERO
-	target_center = center
+	start_center = center
 	phase = 0
 	state = "hold"
-	timer = 20.0
+	timer = HOLD[0]
 	finished = false
 	warning = false
+	_choose_next()
 	_apply_wall()
+
+
+func _choose_next() -> void:
+	var idx := clampi(phase, 0, FRACTION.size() - 1)
+	target_radius = radius * float(FRACTION[idx])
+	if target_radius < 1.0:
+		target_radius = 0.0
+		target_center = center
+		return
+	# The new circle sits fully inside the old one, and its middle is on land.
+	var drift := maxf(0.0, radius - target_radius) * 0.85
+	var best := center
+	var best_score := -1e9
+	for i in 24:
+		var a := randf() * TAU
+		var c := center + Vector2(cos(a), sin(a)) * sqrt(randf()) * drift
+		var score := randf() * 4.0
+		if terrain != null:
+			var h := terrain.height_at(c.x, c.y)
+			if h < Terrain.WATER_LEVEL + 1.0:
+				score -= 100.0
+			score -= maxf(0.0, c.length() + target_radius - 400.0) * 0.5
+		if score > best_score:
+			best_score = score
+			best = c
+	target_center = best
 
 
 func _process(delta: float) -> void:
@@ -96,87 +119,86 @@ func _process(delta: float) -> void:
 		return
 	if state == "hold":
 		timer -= delta
-		warning = timer < 6.0
+		warning = timer < 8.0
 		if timer <= 0.0:
 			_begin_shrink()
 	else:
-		shrink_time -= delta
-		var t := 1.0 - clampf(shrink_time / maxf(0.01, shrink_time + 0.0001), 0.0, 1.0)
-		# Use elapsed ratio instead: recompute from stored duration.
-		var dur: float = float(maxf(0.5, phase_duration))
-		var k: float = clampf(1.0 - shrink_time / dur, 0.0, 1.0)
-		k = k * k * (3.0 - 2.0 * k)
+		timer -= delta
+		var k: float = clampf(1.0 - timer / maxf(0.5, phase_duration), 0.0, 1.0)
 		radius = lerpf(start_radius, target_radius, k)
 		center = start_center.lerp(target_center, k)
 		warning = true
-		if shrink_time <= 0.0:
+		if timer <= 0.0:
 			radius = target_radius
 			center = target_center
 			phase += 1
-			if phase >= targets.size() or radius < 3.0:
+			if phase >= FRACTION.size() or radius < 1.0:
 				finished = true
-				radius = maxf(radius, 2.0)
+				state = "done"
+				radius = maxf(radius, 0.0)
 			else:
 				state = "hold"
-				timer = maxf(8.0, hold_time * pow(0.86, phase))
+				timer = float(HOLD[mini(phase, HOLD.size() - 1)])
 				warning = false
+				_choose_next()
 			phase_changed.emit(phase, warning)
 	_apply_wall()
-
-
-var phase_duration := 18.0
 
 
 func _begin_shrink() -> void:
 	state = "shrink"
 	start_radius = radius
 	start_center = center
-	var idx: int = clampi(phase, 0, targets.size() - 1)
-	target_radius = maxf(2.0, radius * float(targets[idx]))
-	# New circle must sit inside the old one.
-	var drift: float = maxf(0.0, (radius - target_radius) * 0.7)
-	var ang := randf() * TAU
-	var d := randf() * drift
-	target_center = center + Vector2(cos(ang), sin(ang)) * d
-	phase_duration = maxf(10.0, shrink_time_max() * pow(0.9, phase))
-	shrink_time = phase_duration
+	phase_duration = float(SHRINK[mini(phase, SHRINK.size() - 1)])
+	timer = phase_duration
 	warning = true
 	phase_changed.emit(phase, warning)
-
-
-func shrink_time_max() -> float:
-	return 20.0
 
 
 func _apply_wall() -> void:
 	if wall == null:
 		return
-	wall.scale = Vector3(radius, 100.0, radius)
+	var r := maxf(radius, 0.05)
+	wall.scale = Vector3(r, 100.0, r)
 	wall.position = Vector3(center.x, 60.0, center.y)
-	ring.scale = Vector3(radius, 0.6, radius)
+	ring.scale = Vector3(r, 0.6, r)
 	ring.position = Vector3(center.x, 0.8, center.y)
+	ring.visible = radius > 0.5
+	if _wall_mat != null:
+		_wall_mat.set_shader_parameter("radius", r)
 
 
 func damage_per_second() -> float:
-	return float(damage_table[clampi(phase, 0, damage_table.size() - 1)])
+	return float(DAMAGE[clampi(phase, 0, DAMAGE.size() - 1)])
 
 
 func is_outside(pos: Vector3) -> bool:
 	return Vector2(pos.x, pos.z).distance_to(center) > radius
 
 
+func distance_outside(pos: Vector3) -> float:
+	return Vector2(pos.x, pos.z).distance_to(center) - radius
+
+
 func time_left() -> float:
-	return timer if state == "hold" else shrink_time
+	return maxf(0.0, timer) if not finished else 0.0
 
 
 func next_radius() -> float:
-	if state == "hold":
-		var idx: int = clampi(phase, 0, targets.size() - 1)
-		return maxf(2.0, radius * float(targets[idx]))
+	if finished:
+		return radius
 	return target_radius
 
 
+func next_center() -> Vector2:
+	if finished:
+		return center
+	return target_center
+
+
 func label() -> String:
+	if finished:
+		return "FINAL ZONE"
 	if state == "hold":
 		return "ZONE HOLDING"
 	return "ZONE CLOSING"

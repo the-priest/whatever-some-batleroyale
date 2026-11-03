@@ -12,6 +12,7 @@ func _enter_tree() -> void:
 	_key("crouch", [KEY_CTRL, KEY_C])
 	_key("interact", [KEY_E])
 	_key("reload", [KEY_R])
+	_key("heal", [KEY_H, KEY_4])
 	_key("slot_1", [KEY_1])
 	_key("slot_2", [KEY_2])
 	_key("swap_weapon", [KEY_Q])

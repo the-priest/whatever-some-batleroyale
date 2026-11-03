@@ -41,7 +41,7 @@ var chute_mesh: MeshInstance3D
 var speed_anim := "Idle"
 var hit_flash := 0.0
 var dead_timer := 0.0
-var head_offset := 1.62
+var head_offset := 1.50
 
 var _loot_scan := 0.0
 var _skip_loot: Array[int] = []
@@ -51,6 +51,24 @@ var _blocked := 0.0
 var _muzzle_flash: MeshInstance3D
 var _flash := 0.0
 
+# Awareness.
+var alert_timer := 0.0
+var heard_pos := Vector3.ZERO
+var aggression := 0.5
+var meds := 0
+var heal_timer := 0.0
+var _roam_wait := 0.0
+var _progress_t := 0.0
+var _progress_pos := Vector3.ZERO
+var _step := 0.0
+var _burst := 0
+var _see_cache := {}
+
+var last_killer_node: Node = null
+
+const FOV_COS := 0.42      # ~130 degree cone
+const CLOSE_SENSE := 13.0  # always noticed this close
+
 
 func setup(p_name: String, p_target: Vector2, p_game: Node, seed_n: int) -> void:
 	bot_name = p_name
@@ -59,8 +77,9 @@ func setup(p_name: String, p_target: Vector2, p_game: Node, seed_n: int) -> void
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed_n
 	shoot_skill = rng.randf_range(0.30, 0.82)
-	reaction = rng.randf_range(0.18, 0.55)
+	reaction = rng.randf_range(0.25, 0.65)
 	sight = rng.randf_range(95.0, 165.0)
+	aggression = rng.randf_range(0.2, 0.95)
 
 
 func _ready() -> void:
@@ -259,25 +278,43 @@ func _land() -> void:
 func _ground(delta: float) -> void:
 	if not is_on_floor():
 		velocity.y -= GRAVITY * delta
-	think_timer -= delta
+	alert_timer = maxf(0.0, alert_timer - delta)
 	_shoot_logic(delta)
+	if heal_timer > 0.0:
+		heal_timer -= delta
+		velocity.x = move_toward(velocity.x, 0.0, 30.0 * delta)
+		velocity.z = move_toward(velocity.z, 0.0, 30.0 * delta)
+		if heal_timer <= 0.0 and meds > 0:
+			meds -= 1
+			hp = minf(100.0, hp + 50.0)
+		move_and_slide()
+		_ground_safety()
+		_animate_ground()
+		return
+	if armed and meds > 0 and hp < 55.0 and (enemy == null or not is_instance_valid(enemy)):
+		heal_timer = 3.0
+		return
 
 	var target_pos := global_position
 	var want_sprint := false
 	var stop_dist := 0.0
 
-	if not armed:
+	var fighting := armed and enemy != null and is_instance_valid(enemy) and enemy_visible()
+	if not fighting:
 		if loot_target == null or not is_instance_valid(loot_target) or loot_target.taken:
 			loot_target = null
 			_loot_scan -= delta
 			if _loot_scan <= 0.0:
-				_loot_scan = 0.8
+				_loot_scan = 0.8 if not armed else 1.6
 				loot_target = _find_loot()
+	if not armed or (not fighting and loot_target != null):
 		if loot_target != null:
 			target_pos = loot_target.global_position
 			stop_dist = 1.8
 			want_sprint = true
 		else:
+			if Vector2(global_position.x, global_position.z).distance_to(roam_point) < 3.5:
+				_pick_roam_point()
 			target_pos = Vector3(roam_point.x, global_position.y, roam_point.y)
 			stop_dist = 3.0
 	else:
@@ -302,21 +339,32 @@ func _ground(delta: float) -> void:
 				stop_dist = 0.0
 		else:
 			enemy = null
+			var here := Vector2(global_position.x, global_position.z)
 			if game != null and game.zone != null:
 				var zc: Vector2 = game.zone.center
 				var r: float = game.zone.radius
-				var here := Vector2(global_position.x, global_position.z)
-				if here.distance_to(zc) > r * 0.72:
-					roam_point = zc + (here - zc).normalized() * (r * 0.45)
-					roam_point += Vector2(randf_range(-14, 14), randf_range(-14, 14))
+				# Head for safety early, not when the storm is already on top of us.
+				var nr: float = game.zone.next_radius()
+				var nc: Vector2 = game.zone.next_center()
+				if roam_point.distance_to(nc) > nr * 0.9 or (here.distance_to(zc) > r * 0.85 and roam_point.distance_to(zc) > r * 0.85):
+					roam_point = nc + (here - nc).normalized() * (nr * randf_range(0.2, 0.6))
+					roam_point += Vector2(randf_range(-10, 10), randf_range(-10, 10))
+			if alert_timer > 0.0 and aggression > 0.45 and heard_pos.distance_to(global_position) > 10.0:
+				# Go and see who is shooting.
+				roam_point = Vector2(heard_pos.x, heard_pos.z)
+			if here.distance_to(roam_point) < 3.0:
+				_roam_wait -= delta
+				if _roam_wait <= 0.0:
+					_roam_wait = randf_range(1.0, 5.0)
+					_pick_roam_point()
 			target_pos = Vector3(roam_point.x, global_position.y, roam_point.y)
 			stop_dist = 2.5
-			want_sprint = true
+			want_sprint = alert_timer <= 0.0
 
 	var flat := Vector3(target_pos.x - global_position.x, 0, target_pos.z - global_position.z)
 	var dist := flat.length()
 	var speed := RUN if want_sprint else WALK
-	if not armed and loot_target != null:
+	if loot_target != null and target_pos.is_equal_approx(loot_target.global_position):
 		if dist < _last_loot_d - 0.5:
 			_last_loot_d = dist
 			_loot_stuck = 0.0
@@ -331,7 +379,7 @@ func _ground(delta: float) -> void:
 	if dist <= stop_dist:
 		velocity.x = move_toward(velocity.x, 0.0, 30.0 * delta)
 		velocity.z = move_toward(velocity.z, 0.0, 30.0 * delta)
-		if not armed and loot_target != null and is_instance_valid(loot_target) and not loot_target.taken:
+		if loot_target != null and is_instance_valid(loot_target) and not loot_target.taken:
 			if loot_target.global_position.distance_to(global_position) < 2.8:
 				_take_loot(loot_target)
 	else:
@@ -342,8 +390,12 @@ func _ground(delta: float) -> void:
 		q.exclude = [get_rid()]
 		if not space.intersect_ray(q).is_empty():
 			dir = dir.rotated(Vector3.UP, deg_to_rad(70.0))
+		if game != null and game.terrain != null and bool(game.terrain.is_water(global_position.x, global_position.z)):
+			speed *= 0.6
 		velocity.x = move_toward(velocity.x, dir.x * speed, 26.0 * delta)
 		velocity.z = move_toward(velocity.z, dir.z * speed, 26.0 * delta)
+		if not fighting:
+			rotation.y = lerp_angle(rotation.y, atan2(-dir.x, -dir.z), clampf(delta * 8.0, 0.0, 1.0))
 		_blocked -= delta
 		if _blocked <= 0.0 and is_on_floor() and dist > 3.0:
 			var q2 := PhysicsRayQueryParameters3D.create(global_position + Vector3.UP * 0.4, global_position + Vector3.UP * 0.4 + dir * 0.9, 1)
@@ -353,8 +405,25 @@ func _ground(delta: float) -> void:
 				_blocked = 1.2
 
 	move_and_slide()
-	# Safety net: bilinear height and the collision mesh differ on steep slopes, and a
-	# trimesh is one-sided, so a body that ends up buried falls out of the world forever.
+	_ground_safety()
+	_animate_ground()
+	# Stuck detection: if we have barely moved in a while, try somewhere else.
+	_progress_t += delta
+	if _progress_t > 3.0:
+		if global_position.distance_to(_progress_pos) < 1.2 and dist > stop_dist + 1.0:
+			_pick_roam_point()
+			if loot_target != null:
+				_skip_loot.append(loot_target.get_instance_id())
+				loot_target = null
+			if is_on_floor():
+				velocity.y = 5.2
+		_progress_pos = global_position
+		_progress_t = 0.0
+
+
+func _ground_safety() -> void:
+	# Safety net: bilinear height and the collision mesh differ on steep slopes, so a
+	# body that ends up buried gets lifted back out instead of falling forever.
 	var gy := game_ground_y()
 	if game != null and game.terrain != null and bool(game.terrain.is_water(global_position.x, global_position.z)):
 		var surface: float = Terrain.WATER_LEVEL + 0.15
@@ -364,7 +433,18 @@ func _ground(delta: float) -> void:
 	elif global_position.y < gy - 0.4:
 		global_position.y = gy + 1.4
 		velocity.y = 0.0
+	if global_position.y < -20.0:
+		global_position = Vector3(roam_point.x, game_ground_y() + 2.0, roam_point.y)
+
+
+func _animate_ground() -> void:
 	var planar := Vector2(velocity.x, velocity.z).length()
+	if is_on_floor() and planar > 1.0:
+		_step += planar * get_physics_process_delta_time()
+		if _step > 2.9:
+			_step = 0.0
+			if game != null and game.player != null and game.player.global_position.distance_to(global_position) < 32.0:
+				game.play_sfx_at("footstep_%d" % (randi() % 4 + 1), global_position, -3.0)
 	if is_on_floor() and planar > 0.4:
 		var want := "Sprint" if planar > 5.6 else "Jog_Fwd"
 		if want != speed_anim:
@@ -376,8 +456,34 @@ func _ground(delta: float) -> void:
 		if speed_anim != "Idle":
 			speed_anim = "Idle"
 			_play("Idle")
-	if global_position.y < -20.0:
-		global_position = Vector3(roam_point.x, game_ground_y() + 2.0, roam_point.y)
+
+
+func _pick_roam_point() -> void:
+	var c := Vector2(global_position.x, global_position.z)
+	var r := 60.0
+	if game != null and game.zone != null:
+		c = game.zone.next_center()
+		r = game.zone.next_radius() * 0.75
+	for i in 8:
+		var a := randf() * TAU
+		var p := c + Vector2(cos(a), sin(a)) * sqrt(randf()) * r
+		if game == null or game.terrain == null or not bool(game.terrain.is_water(p.x, p.y)):
+			roam_point = p
+			return
+	roam_point = c
+
+
+## Someone fired a gun nearby.
+func hear_shot(pos: Vector3, shooter: Node) -> void:
+	if state != State.GROUND or not alive or shooter == self:
+		return
+	if enemy != null and is_instance_valid(enemy) and enemy_visible():
+		return
+	alert_timer = 5.0
+	heard_pos = pos
+	var to := pos - global_position
+	rotation.y = atan2(-to.x, -to.z)
+	think_timer = minf(think_timer, reaction)
 
 
 func _play(name: String) -> void:
@@ -394,9 +500,12 @@ func _find_loot() -> LootPickup:
 	if game == null or game.loot_pool == null:
 		return null
 	var best: LootPickup = null
-	var best_d := 130.0
+	var best_d := 130.0 if not armed else 28.0
+	var my_tier := int(Weapons.def(weapon_id).get("tier", 0)) if armed else 0
 	for l in game.loot_pool:
-		if not is_instance_valid(l) or l.taken or l.kind != "weapon":
+		if not is_instance_valid(l) or l.taken:
+			continue
+		if not _wants(l, my_tier):
 			continue
 		if _skip_loot.has(l.get_instance_id()):
 			continue
@@ -407,11 +516,28 @@ func _find_loot() -> LootPickup:
 	return best
 
 
+func _wants(l: LootPickup, my_tier: int) -> bool:
+	match l.kind:
+		"weapon":
+			return not armed or int(Weapons.def(l.item_id).get("tier", 1)) > my_tier
+		"armor":
+			return armed and armor < 60.0
+		"med":
+			return armed and meds < 2
+	return false
+
+
 func _take_loot(l: LootPickup) -> void:
 	if l == null or l.taken:
 		return
 	if l.kind == "weapon":
+		if armed and game != null and game.has_method("drop_weapon"):
+			game.drop_weapon(weapon_id, -1, -1, global_position + Vector3(0.6, 0, 0.6))
 		arm_weapon(l.item_id)
+	elif l.kind == "armor":
+		armor = minf(100.0, armor + 50.0)
+	elif l.kind == "med":
+		meds += 1
 	l.consume()
 	if game != null and game.has_method("play_sfx_at"):
 		game.play_sfx_at("pickup", global_position, 0.7)
@@ -441,8 +567,18 @@ func _shoot_logic(delta: float) -> void:
 		return
 	if think_timer <= 0.0:
 		think_timer = randf_range(0.22, 0.45)
-		enemy = _find_enemy()
-	if enemy == null or not is_instance_valid(enemy):
+		var prev := enemy
+		var found := _find_enemy()
+		if found != null:
+			enemy = found
+			if found != prev:
+				# Reaction time before the first shot on a new target.
+				fire_timer = maxf(fire_timer, reaction * randf_range(0.8, 1.4))
+				_burst = 0
+		elif enemy != null and (not is_instance_valid(enemy) or not bool(enemy.get("alive"))):
+			enemy = null
+	if enemy == null or not is_instance_valid(enemy) or not bool(enemy.get("alive")):
+		enemy = null
 		return
 	if not enemy_visible():
 		return
@@ -451,8 +587,11 @@ func _shoot_logic(delta: float) -> void:
 	var max_range: float = minf(float(d["range"]), sight)
 	if dist > max_range:
 		return
-	var aim := (enemy.global_position + Vector3(0, 1.1, 0)) - _shot_origin()
-	rotation.y = lerp_angle(rotation.y, atan2(-aim.x, -aim.z), delta * 7.0)
+	var aim_h := 1.15
+	if randf() < shoot_skill * 0.18:
+		aim_h = 1.55
+	var aim := (enemy.global_position + Vector3(0, aim_h, 0)) - _shot_origin()
+	rotation.y = lerp_angle(rotation.y, atan2(-aim.x, -aim.z), clampf(delta * 9.0, 0.0, 1.0))
 	if fire_timer > 0.0:
 		return
 	if mag <= 0:
@@ -465,7 +604,17 @@ func _shoot_logic(delta: float) -> void:
 	_muzzle_flash.visible = true
 	_muzzle_flash.rotation.z = randf() * TAU
 	var from := _shot_origin()
-	var spread := deg_to_rad(1.3 + (1.0 - shoot_skill) * 4.2)
+	# Aim error: skill, range, target movement and the first shots of a burst.
+	var tvel := Vector3.ZERO
+	if enemy is CharacterBody3D:
+		tvel = (enemy as CharacterBody3D).velocity
+	var spread_deg := 0.9 + (1.0 - shoot_skill) * 3.4
+	spread_deg += dist * 0.010
+	spread_deg += Vector2(tvel.x, tvel.z).length() * 0.20
+	spread_deg += maxf(0.0, 3.0 - float(_burst)) * 0.55
+	spread_deg *= float(d["spread"]) / 1.35 * 0.5 + 0.5
+	_burst += 1
+	var spread := deg_to_rad(spread_deg)
 	var dir := aim.normalized()
 	dir = (dir + Vector3(randf_range(-spread, spread), randf_range(-spread, spread), randf_range(-spread, spread))).normalized()
 	var to := from + dir * max_range
@@ -476,20 +625,31 @@ func _shoot_logic(delta: float) -> void:
 	var hit := space.intersect_ray(q)
 	if not hit.is_empty():
 		var col: Object = hit["collider"]
+		to = hit["position"]
 		if col != null and col.has_method("take_damage") and col != self:
-			var dmg := float(d["damage"]) * randf_range(0.75, 1.05)
+			var pellets := int(d["pellets"])
+			var dmg := float(d["damage"]) * randf_range(0.8, 1.0)
+			if pellets > 1:
+				# One ray stands in for the whole shotgun spread.
+				dmg *= float(pellets) * clampf(1.0 - dist / float(d["range"]), 0.25, 0.8)
+			if col is Player:
+				dmg *= 0.8
 			var hs := false
 			if col.has_method("head_y"):
 				hs = hit["position"].y >= float(col.call("head_y"))
 				if hs:
 					dmg *= 1.8
 			col.call("take_damage", dmg, hit["position"], hs, self)
+			if game != null and game.has_method("spawn_blood"):
+				game.spawn_blood(hit["position"])
 		elif game != null and game.has_method("spawn_impact"):
 			game.spawn_impact(hit["position"], hit.get("normal", Vector3.UP), col)
 	if game != null and game.has_method("play_sfx_at"):
-		game.play_sfx_at(str(d["sound"]), from, 0.85)
+		game.play_sfx_at("shot_" + str(d["sound"]), from, 0.85)
 	if game != null and game.has_method("bot_shot_fired"):
 		game.bot_shot_fired(from, to)
+	if game != null and game.has_method("on_gunshot"):
+		game.on_gunshot(from, self)
 
 
 func _shot_origin() -> Vector3:
@@ -497,36 +657,72 @@ func _shot_origin() -> Vector3:
 
 
 func _find_enemy() -> Node3D:
-	var best: Node3D = null
-	var best_d := sight
 	if game == null:
 		return null
 	var candidates: Array = []
-	if game.player != null and game.player.alive:
-		candidates.append(game.player)
+	var p = game.player
+	if p != null and p.alive and (p.mode == Player.Mode.GROUND or p.mode == Player.Mode.CHUTE):
+		candidates.append(p)
 	for b in get_tree().get_nodes_in_group("bots"):
-		if b != self and is_instance_valid(b) and (b as Bot).alive:
+		if b != self and is_instance_valid(b) and (b as Bot).alive and ((b as Bot).state == State.GROUND or (b as Bot).state == State.CHUTE):
 			candidates.append(b)
+	var fwd := -global_basis.z
+	fwd.y = 0.0
+	fwd = fwd.normalized()
+	var scored: Array = []
 	for c in candidates:
-		var d := global_position.distance_to((c as Node3D).global_position)
-		if d < best_d:
-			best_d = d
-			best = c
-	return best
+		var to: Vector3 = (c as Node3D).global_position - global_position
+		var d := to.length()
+		if d > sight:
+			continue
+		var flat := Vector3(to.x, 0, to.z).normalized()
+		var in_view: bool = d < CLOSE_SENSE or alert_timer > 0.0 or fwd.dot(flat) > FOV_COS or c == enemy
+		if not in_view:
+			continue
+		# Crouching targets in the distance are harder to spot.
+		if c is Player and Input.is_action_pressed("crouch") and d > 55.0:
+			continue
+		scored.append([d, c])
+	scored.sort_custom(func(a, b): return a[0] < b[0])
+	var checks := 0
+	for e in scored:
+		if checks >= 4:
+			break
+		checks += 1
+		if _can_see(e[1]):
+			return e[1]
+	return null
 
 
-func enemy_visible() -> bool:
-	if enemy == null or not is_instance_valid(enemy):
-		return false
+func _can_see(target: Node3D) -> bool:
 	var from := _shot_origin()
-	var to := (enemy as Node3D).global_position + Vector3(0, 1.2, 0)
+	var to := target.global_position + Vector3(0, 1.2, 0)
 	var q := PhysicsRayQueryParameters3D.create(from, to, 1 | 2 | 4)
 	q.exclude = [get_rid()]
 	var hit := get_world_3d().direct_space_state.intersect_ray(q)
 	if hit.is_empty():
 		return false
-	var col: Object = hit["collider"]
-	return col == enemy or (col is Node and (col as Node).is_ancestor_of(enemy))
+	return hit["collider"] == target
+
+
+func enemy_visible() -> bool:
+	if enemy == null or not is_instance_valid(enemy):
+		return false
+	var key := enemy.get_instance_id()
+	var now := Engine.get_physics_frames()
+	if _see_cache.get("id", -1) == key and now - int(_see_cache.get("f", -99)) < 6:
+		return bool(_see_cache.get("v", false))
+	var from := _shot_origin()
+	var to := (enemy as Node3D).global_position + Vector3(0, 1.2, 0)
+	var q := PhysicsRayQueryParameters3D.create(from, to, 1 | 2 | 4)
+	q.exclude = [get_rid()]
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	var vis := false
+	if not hit.is_empty():
+		var col: Object = hit["collider"]
+		vis = col == enemy or (col is Node and (col as Node).is_ancestor_of(enemy))
+	_see_cache = {"id": key, "f": now, "v": vis}
+	return vis
 
 
 # ------------------------------------------------------------------ damage --
@@ -543,10 +739,16 @@ func take_damage(amount: float, _pos: Vector3 = Vector3.ZERO, headshot: bool = f
 	if anim != null:
 		_play("Hit_Head" if headshot else "Hit_Chest")
 		anim.seek(0.0, true)
+	heal_timer = 0.0
 	# Being shot at makes bots fight back.
-	if enemy == null and source != null and is_instance_valid(source):
-		enemy = source as Node3D
-		think_timer = reaction
+	if source != null and is_instance_valid(source) and source != self:
+		alert_timer = 6.0
+		heard_pos = (source as Node3D).global_position
+		if enemy == null or not is_instance_valid(enemy) or not enemy_visible():
+			enemy = source as Node3D
+			var to: Vector3 = heard_pos - global_position
+			rotation.y = atan2(-to.x, -to.z)
+			think_timer = reaction
 	if hp <= 0.0:
 		_die(source)
 		return true
@@ -567,6 +769,7 @@ func _die(source: Node) -> void:
 		anim.speed_scale = 1.0
 		anim.play("Death01", 0.15)
 		anim.seek(0.0, true)
+	last_killer_node = source if source != null and is_instance_valid(source) else null
 	var killer := ""
 	if source != null and source.has_method("display_name"):
 		killer = str(source.call("display_name"))

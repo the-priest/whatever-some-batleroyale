@@ -12,6 +12,10 @@ const BOT_NAMES := [
 const WEAPON_DROP_WEIGHTS := {
 	"pistol": 22, "smg": 24, "rifle": 22, "shotgun": 14, "dmr": 8, "lmg": 6, "sniper": 4,
 }
+const AIRDROP_WEAPONS := ["sniper", "lmg", "dmr", "rifle"]
+const SETTINGS_PATH := "user://settings.cfg"
+const HEAR_RANGE := 85.0
+const PING_RANGE := 160.0
 
 var world: WorldBuilder
 var terrain: Terrain
@@ -27,12 +31,13 @@ var lobby_ready := false
 var seed_value := 20261101
 var loot_pool: Array = []
 var bots: Array = []
+var airdrops: Array = []
 var alive := 1
 var total_players := 1
 var player_kills := 0
 var damage_dealt := 0.0
 var match_time := 0.0
-var zone_delay := 16.0
+var survive_time := 0.0
 var zone_acc := 0.0
 var zone_was_warning := false
 var winner := false
@@ -44,6 +49,13 @@ var impacts: Array = []
 var cam_shake := 0.0
 var menu_t := 0.0
 var last_hud_alive := -1
+var end_cam_target: Node3D = null
+var end_cam_spot := Vector3.ZERO
+var end_cam_angle := 0.0
+var mouse_sens := 1.0
+var volume := 0.8
+var _loot_label_t := 0.0
+var _wind: AudioStreamPlayer3D = null
 
 
 func _ready() -> void:
@@ -56,7 +68,11 @@ func _ready() -> void:
 	hud.name = "HUD"
 	add_child(hud)
 	hud.play_pressed.connect(_start_match)
+	hud.resume_pressed.connect(_resume)
+	hud.quit_pressed.connect(_quit_to_menu)
+	hud.settings_changed.connect(_on_settings_changed)
 	hud.show_menu("GENERATING ISLAND ...")
+	_load_settings()
 
 	menu_cam = Camera3D.new()
 	menu_cam.fov = 68.0
@@ -70,13 +86,17 @@ func _ready() -> void:
 	_create_player()
 	lobby_ready = true
 	phase = "menu"
-	hud.show_menu("SEED  %d   ·   %d LOOT SPOTS   ·   %d DROPS" % [seed_value, world.loot_points.size(), MAX_BOTS + 1])
+	_show_menu()
 	hud.set_minimap(world.minimap_texture)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	if OS.get_cmdline_user_args().has("--smoke"):
 		_run_smoke()
 	elif OS.get_cmdline_user_args().has("--shot"):
 		_run_shot()
+
+
+func _show_menu() -> void:
+	hud.show_menu("SEED  %d   ·   %d LOOT SPOTS   ·   %d PLAYERS" % [seed_value, world.loot_points.size(), MAX_BOTS + 1])
 
 
 func _build_world() -> void:
@@ -103,7 +123,56 @@ func _create_player() -> void:
 	player.died.connect(_on_player_died)
 	player.notice.connect(_on_notice)
 	player.fired.connect(_on_shot_fired)
+	player.inventory_changed.connect(_on_inventory_changed)
+	player.mouse_sens = 0.0022 * mouse_sens
 	menu_cam.make_current()
+
+
+# ----------------------------------------------------------------- settings --
+func _load_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(SETTINGS_PATH) == OK:
+		mouse_sens = float(cfg.get_value("input", "sensitivity", 1.0))
+		volume = float(cfg.get_value("audio", "volume", 0.8))
+	hud.set_settings(mouse_sens, volume)
+	_apply_settings()
+
+
+func _apply_settings() -> void:
+	if player != null:
+		player.mouse_sens = 0.0022 * mouse_sens
+	AudioServer.set_bus_volume_db(0, linear_to_db(maxf(0.0001, volume)))
+
+
+func _on_settings_changed(sens: float, vol: float) -> void:
+	mouse_sens = sens
+	volume = vol
+	_apply_settings()
+	var cfg := ConfigFile.new()
+	cfg.set_value("input", "sensitivity", mouse_sens)
+	cfg.set_value("audio", "volume", volume)
+	cfg.save(SETTINGS_PATH)
+
+
+func _resume() -> void:
+	hud.show_pause(false)
+	get_tree().paused = false
+	if phase == "playing" or phase == "plane":
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+func _quit_to_menu() -> void:
+	hud.show_pause(false)
+	get_tree().paused = false
+	_cleanup_match()
+	player.process_mode = Node.PROCESS_MODE_DISABLED
+	player.alive = false
+	hud.pause_allowed = false
+	hud.set_plane_path(Vector3.ZERO, Vector3.ZERO)
+	phase = "menu"
+	menu_cam.make_current()
+	_show_menu()
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
 # -------------------------------------------------------------------- match --
@@ -113,6 +182,8 @@ func _start_match() -> void:
 	sfx.play_ui("ui_click", -6.0)
 	hud.hide_menu()
 	hud.hide_end()
+	hud.clear_killfeed()
+	hud.set_spectate("")
 	_cleanup_match()
 	player.reset_for_match()
 	player.global_position = Vector3(0, 120, 0)
@@ -127,8 +198,8 @@ func _start_match() -> void:
 	plane.name = "Plane"
 	add_child(plane)
 	plane.setup(plane_start, plane_end)
+	hud.set_plane_path(plane_start, plane_end)
 
-	# Cinematic chase camera for the drop.
 	menu_cam.make_current()
 	phase = "plane"
 	player.global_position = plane.seat_position()
@@ -137,21 +208,17 @@ func _start_match() -> void:
 	loot_pool.clear()
 	for p in world.loot_points:
 		var kind := str(p.get("kind", "weapon"))
-		var l := LootPickup.new()
 		var id := ""
-		var amount := 1
 		if kind == "weapon":
 			id = _weighted_weapon()
-		elif kind == "gear":
-			var r := randf()
-			kind = "armor" if r < 0.34 else ("med" if r < 0.68 else "ammo")
 		else:
-			kind = "weapon"
-			id = _weighted_weapon()
-		l.setup(kind, id, amount)
-		l.position = Vector3(p["pos"])
-		add_child(l)
-		loot_pool.append(l)
+			var r := randf()
+			kind = "armor" if r < 0.30 else ("med" if r < 0.62 else "ammo")
+		_spawn_loot(kind, id, Vector3(p["pos"]))
+		# A box of ammo next to many guns so the first fight is not a pistol duel.
+		if kind == "weapon" and randf() < 0.45:
+			var a := randf() * TAU
+			_spawn_loot("ammo", "", Vector3(p["pos"]) + Vector3(cos(a), 0.0, sin(a)) * 0.9)
 
 	# Bots: most drop near a weapon so the first minute has real fights.
 	var weapon_spots: Array = []
@@ -183,7 +250,7 @@ func _start_match() -> void:
 				var a := randf() * TAU
 				var r := randf_range(7.0, 24.0)
 				target = Vector3(best_spot.x + cos(a) * r, best_spot.y, best_spot.z + sin(a) * r)
-		b.setup(BOT_NAMES[i % BOT_NAMES.size()] + ("" if i < BOT_NAMES.size() else str(i)), Vector2(target.x, target.z), self, seed_value + i * 977)
+		b.setup(BOT_NAMES[i % BOT_NAMES.size()] + ("" if i < BOT_NAMES.size() else str(i)), Vector2(target.x, target.z), self, seed_value + i * 977 + randi() % 1000)
 		add_child(b)
 		b.global_position = plane.seat_position() + Vector3(randf_range(-1, 1), 0, randf_range(-1, 1))
 		b.set_meta("jump_at", clampf(jump_t + randf_range(-0.02, 0.02), 0.03, 0.93))
@@ -193,9 +260,11 @@ func _start_match() -> void:
 	# Zone.
 	zone = Zone.new()
 	zone.name = "Zone"
+	zone.terrain = terrain
 	add_child(zone)
 	zone.start(430.0)
 	zone.set_process(false)
+	zone.phase_changed.connect(_on_zone_phase)
 	zone_was_warning = false
 
 	alive = MAX_BOTS + 1
@@ -203,17 +272,33 @@ func _start_match() -> void:
 	player_kills = 0
 	damage_dealt = 0.0
 	match_time = 0.0
-	zone_delay = 16.0
+	survive_time = 0.0
 	zone_acc = 0.0
 	winner = false
 	last_hud_alive = -1
+	end_cam_target = null
+	hud.set_gameplay_visible(true)
+	hud.set_crosshair_visible(false)
+	hud.pause_allowed = true
 	hud.set_kills(0)
 	hud.set_alive(alive, total_players)
-	hud.set_zone(zone.time_left(), zone.radius, zone.phase, false)
 	hud.set_prompt("")
+	hud.set_storm(false)
 	_hud_zone()
+	_on_inventory_changed()
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	_attach_plane_audio()
+
+
+func _spawn_loot(kind: String, id: String, pos: Vector3, mag := -1, reserve := -1) -> LootPickup:
+	var l := LootPickup.new()
+	l.setup(kind, id, 1)
+	l.mag_override = mag
+	l.reserve_override = reserve
+	l.position = pos
+	add_child(l)
+	loot_pool.append(l)
+	return l
 
 
 func _cleanup_match() -> void:
@@ -225,12 +310,19 @@ func _cleanup_match() -> void:
 		if is_instance_valid(b):
 			b.queue_free()
 	bots.clear()
+	for a in airdrops:
+		if is_instance_valid(a):
+			a.queue_free()
+	airdrops.clear()
 	if plane != null and is_instance_valid(plane):
 		plane.queue_free()
 	plane = null
 	if zone != null and is_instance_valid(zone):
 		zone.queue_free()
 	zone = null
+	if _wind != null and is_instance_valid(_wind):
+		_wind.queue_free()
+	_wind = null
 	for t in tracers:
 		if is_instance_valid(t):
 			t.queue_free()
@@ -241,6 +333,7 @@ func _cleanup_match() -> void:
 	impacts.clear()
 	if player != null:
 		player.mode = Player.Mode.PLANE
+	hud.set_storm(false)
 
 
 func _weighted_weapon() -> String:
@@ -269,6 +362,15 @@ func _random_ground_point(max_r: float) -> Vector3:
 	return Vector3(0, 60, 0)
 
 
+## Ground height under a point, including houses and props.
+func ground_at(pos: Vector3) -> Vector3:
+	var q := PhysicsRayQueryParameters3D.create(pos + Vector3.UP * 1.5, pos + Vector3.DOWN * 30.0, 1)
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	if hit.is_empty():
+		return Vector3(pos.x, terrain.height_at(pos.x, pos.z), pos.z)
+	return hit["position"]
+
+
 # ------------------------------------------------------------------- update --
 func _process(delta: float) -> void:
 	match phase:
@@ -284,6 +386,7 @@ func _process(delta: float) -> void:
 			_follow_plane_cam(delta)
 			_update_airborne_bots()
 			_update_prompt()
+			_update_minimap()
 			if plane != null and plane.active and plane.progress() >= 0.985 and player.mode == Player.Mode.PLANE:
 				_player_jump(true)
 			if plane != null and not plane.active and player.mode == Player.Mode.PLANE:
@@ -291,7 +394,8 @@ func _process(delta: float) -> void:
 		"playing":
 			_update_play(delta)
 		"end":
-			pass
+			_update_end_cam(delta)
+			_update_world_sim(delta)
 	_update_mouse_capture()
 
 
@@ -318,45 +422,71 @@ func _update_airborne_bots() -> void:
 
 func _update_play(delta: float) -> void:
 	match_time += delta
+	survive_time += delta
 	if player == null or not is_instance_valid(player):
 		return
 	_update_airborne_bots()
-	if player.landed and zone != null and not zone.is_processing():
+	if zone != null and not zone.is_processing() and (player.landed or match_time > 50.0):
 		zone.set_process(true)
-
-	# Zone damage.
+	hud.set_crosshair_visible(player.mode == Player.Mode.GROUND and player.has_gun() and player.aim_blend < 0.6)
+	_update_world_sim(delta)
 	if zone != null and zone.is_processing():
-		zone_acc += delta
-		if zone_acc >= 1.0:
-			zone_acc -= 1.0
-			var dps := zone.damage_per_second()
-			if player.alive and zone.is_outside(player.global_position) and player.mode == Player.Mode.GROUND:
-				player.take_damage(dps, player.global_position, false, null)
-				hud.show_notice("OUTSIDE THE ZONE  —  MOVE TO SAFETY", 1.4)
-			for b in bots:
-				if is_instance_valid(b) and b.alive and b.state == Bot.State.GROUND and zone.is_outside(b.global_position):
-					b.take_damage(dps, b.global_position, false, null)
 		if zone.warning and not zone_was_warning:
 			zone_was_warning = true
 			sfx.play_ui("zone_warn", -8.0)
-			hud.show_notice("THE ZONE IS CLOSING", 2.0)
 		elif not zone.warning:
 			zone_was_warning = false
 		_hud_zone()
+	hud.set_storm(zone != null and player.alive and zone.is_outside(player.global_position) and player.mode == Player.Mode.GROUND)
 
 	_hud_player()
 	_update_prompt()
 	_update_minimap()
+	_update_progress()
 	hud.set_crosshair_spread(_crosshair_spread())
 
 	if alive <= 1 and player.alive and phase == "playing":
 		_win()
 
 
+## Zone damage for everyone; keeps running behind the end screen so the
+## spectated fight still plays out.
+func _update_world_sim(delta: float) -> void:
+	if zone == null or not zone.is_processing():
+		return
+	zone_acc += delta
+	if zone_acc < 1.0:
+		return
+	zone_acc -= 1.0
+	var dps := zone.damage_per_second()
+	if phase == "playing" and player.alive and zone.is_outside(player.global_position) and player.mode == Player.Mode.GROUND:
+		player.take_damage(dps, Vector3.ZERO, false, null)
+		hud.show_notice("YOU ARE IN THE STORM  —  FOLLOW THE ARROW ON THE COMPASS", 1.4)
+	for b in bots:
+		if is_instance_valid(b) and b.alive and b.state == Bot.State.GROUND and zone.is_outside(b.global_position):
+			b.take_damage(dps, b.global_position, false, null)
+
+
+func _on_zone_phase(p: int, warning: bool) -> void:
+	if phase != "playing":
+		return
+	if warning:
+		hud.show_big("THE STORM IS CLOSING", _storm_color(), 2.4)
+		sfx.play_ui("zone_warn", -6.0)
+	elif not zone.finished:
+		hud.show_notice("NEXT SAFE ZONE MARKED  —  PRESS M FOR THE MAP", 3.0)
+		if p == 1 or p == 3:
+			_spawn_airdrop()
+
+
+func _storm_color() -> Color:
+	return HUD.STORM.lightened(0.25)
+
+
 func _hud_zone() -> void:
 	if zone == null:
 		return
-	hud.set_zone(zone.time_left(), zone.radius, zone.phase, zone.warning)
+	hud.set_zone(zone.time_left(), zone.radius, zone.phase, zone.warning, zone.label())
 
 
 func _hud_player() -> void:
@@ -372,13 +502,39 @@ func _hud_player() -> void:
 func _crosshair_spread() -> float:
 	if player == null or not player.has_gun():
 		return 14.0
-	var planar := Vector2(player.velocity.x, player.velocity.z).length()
-	var s := 4.0 + planar * 0.55
-	if player.aim_blend > 0.5:
-		s *= 0.35
-	if not player.is_on_floor():
-		s += 10.0
-	return clampf(s, 2.0, 30.0)
+	return player.current_spread_px()
+
+
+func _update_progress() -> void:
+	var hp := player.heal_progress()
+	if hp >= 0.0:
+		hud.set_progress("USING MEDKIT", hp)
+		return
+	var rp := player.reload_progress()
+	if rp >= 0.0:
+		hud.set_progress("RELOADING", rp)
+		return
+	hud.set_progress("", -1.0)
+
+
+func _nearest_loot(pos: Vector3, max_d: float) -> LootPickup:
+	# Prefer what the player is looking at, then what is closest.
+	var best: LootPickup = null
+	var best_score := 1e9
+	var fwd := -player.camera.global_basis.z
+	for l in loot_pool:
+		if not is_instance_valid(l) or l.taken:
+			continue
+		var to: Vector3 = l.global_position - pos
+		var d := to.length()
+		if d > max_d:
+			continue
+		var facing := fwd.dot(to.normalized()) if d > 0.01 else 1.0
+		var score := d - facing * 1.2
+		if score < best_score:
+			best_score = score
+			best = l
+	return best
 
 
 func _update_prompt() -> void:
@@ -389,7 +545,7 @@ func _update_prompt() -> void:
 		hud.set_prompt("SPACE  —  JUMP FROM THE PLANE")
 		return
 	if player.mode == Player.Mode.FREEFALL:
-		hud.set_prompt("SPACE  —  DEPLOY PARACHUTE")
+		hud.set_prompt("W  DIVE  ·  SPACE  DEPLOY PARACHUTE")
 		return
 	if player.mode == Player.Mode.CHUTE:
 		hud.set_prompt("STEER WITH WASD  —  PICK YOUR LANDING SPOT")
@@ -397,40 +553,65 @@ func _update_prompt() -> void:
 	if player.mode != Player.Mode.GROUND:
 		hud.set_prompt("")
 		return
-	var best: LootPickup = null
-	var best_d := 3.0
-	for l in loot_pool:
-		if not is_instance_valid(l) or l.taken:
-			continue
-		var d: float = l.global_position.distance_to(player.global_position)
-		if d < best_d:
-			best_d = d
-			best = l
+	var best := _nearest_loot(player.global_position, 3.0)
 	if best != null:
-		hud.set_prompt(best.prompt_text())
-		best.label.visible = true
+		var why := best.block_reason(player)
+		hud.set_prompt(best.prompt_text() if why == "" else why)
 	else:
 		hud.set_prompt("")
-	for l in loot_pool:
-		if is_instance_valid(l) and not l.taken:
-			l.label.visible = l.global_position.distance_to(player.global_position) < 9.0
+	_loot_label_t -= get_process_delta_time()
+	if _loot_label_t <= 0.0:
+		_loot_label_t = 0.15
+		for l in loot_pool:
+			if is_instance_valid(l) and not l.taken:
+				l.label.visible = l == best or l.global_position.distance_to(player.global_position) < 9.0
 
 
 func _update_minimap() -> void:
-	var enemies: Array = []
-	for b in bots:
-		if is_instance_valid(b) and b.alive and b.global_position.distance_to(player.global_position) < 95.0:
-			enemies.append(b.global_position)
-	hud.update_minimap(player.global_position, zone.center if zone != null else Vector2.ZERO, zone.radius if zone != null else 100.0, enemies)
+	var marks: Array = []
+	for a in airdrops:
+		if is_instance_valid(a):
+			marks.append(a.global_position)
+	var zc := zone.center if zone != null else Vector2.ZERO
+	var zr := zone.radius if zone != null else 430.0
+	var nc := zone.next_center() if zone != null else zc
+	var nr := zone.next_radius() if zone != null else zr
+	hud.update_minimap(player.global_position, zc, zr, nc, nr, marks)
 
 
 func _update_mouse_capture() -> void:
-	if phase == "playing":
+	if get_tree().paused:
+		return
+	if phase == "playing" or phase == "plane":
 		if Input.mouse_mode == Input.MOUSE_MODE_VISIBLE and Input.is_action_just_pressed("fire"):
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	elif phase == "menu" or phase == "end":
 		if Input.mouse_mode != Input.MOUSE_MODE_VISIBLE:
 			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+func _update_end_cam(delta: float) -> void:
+	var focus := end_cam_spot
+	if end_cam_target != null and is_instance_valid(end_cam_target) and bool(end_cam_target.get("alive")):
+		focus = end_cam_target.global_position
+		end_cam_spot = focus
+	end_cam_angle += delta * 0.25
+	var want := focus + Vector3(cos(end_cam_angle) * 9.0, 4.5, sin(end_cam_angle) * 9.0)
+	menu_cam.global_position = menu_cam.global_position.lerp(want, clampf(delta * 2.5, 0.0, 1.0))
+	menu_cam.look_at(focus + Vector3(0, 1.2, 0), Vector3.UP)
+
+
+func _begin_end_cam(target: Node3D, spot: Vector3) -> void:
+	end_cam_target = target
+	end_cam_spot = spot
+	end_cam_angle = player.yaw + PI * 0.5
+	menu_cam.global_position = player.camera.global_position
+	menu_cam.fov = 70.0
+	menu_cam.make_current()
+	if target != null and target is Bot and (target as Bot).alive:
+		hud.set_spectate("SPECTATING  %s" % (target as Bot).bot_name)
+	else:
+		hud.set_spectate("")
 
 
 # -------------------------------------------------------------------- input --
@@ -444,8 +625,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif phase == "end":
 			_start_match()
 		return
-	if phase == "end" and event is InputEventMouseButton and event.pressed:
-		_start_match()
+	if phase == "end" and event.is_action_pressed("pause"):
+		_quit_to_menu()
 
 
 func _player_jump(auto: bool) -> void:
@@ -453,12 +634,11 @@ func _player_jump(auto: bool) -> void:
 		return
 	player.jump_from_plane()
 	player.velocity += plane.jump_velocity() if plane != null else Vector3.ZERO
+	player.yaw = plane.rotation.y if plane != null else player.yaw
 	player.camera.make_current()
 	phase = "playing"
 	if not auto:
 		sfx.play_ui("jump_whoosh", -6.0)
-	if plane != null and plane.active:
-		pass
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	_attach_wind_audio()
 
@@ -476,15 +656,21 @@ func _on_ammo_changed(mag: int, reserve: int) -> void:
 	hud.update_ammo(mag, reserve)
 
 
+func _on_inventory_changed() -> void:
+	if player != null:
+		hud.set_inventory(player.loadout, player.slot, player.meds)
+
+
 func _on_hitmarker(headshot: bool, killed: bool) -> void:
 	hud.show_hitmarker(headshot, killed)
-	sfx.play_ui("headshot" if headshot else "hitmarker", -10.0)
+	sfx.play_ui("headshot" if headshot else "hitmarker", -9.0 if headshot else -11.0)
 
 
 func _on_player_damaged(amount: float, from_dir: Vector3) -> void:
 	hud.show_damage(from_dir)
 	sfx.play_ui("hit_flesh", -8.0)
 	cam_shake = minf(1.4, cam_shake + amount * 0.02)
+	player.add_trauma(clampf(amount * 0.015, 0.05, 0.5))
 
 
 func _on_player_died(killer: String) -> void:
@@ -492,10 +678,24 @@ func _on_player_died(killer: String) -> void:
 		return
 	phase = "end"
 	player.alive = false
+	hud.pause_allowed = false
+	hud.set_storm(false)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	hud.show_death(killer, player_kills, maxi(1, alive))
+	var placement := maxi(1, alive)
+	alive = maxi(0, alive - 1)
+	hud.killfeed("%s   >   YOU" % killer, HUD.DANGER)
+	hud.show_death(killer, placement, _stats())
 	sfx.play_ui("defeat", -4.0)
 	hud.set_prompt("")
+	var k = player.last_killer
+	_begin_end_cam(k as Node3D if k != null and is_instance_valid(k) and k is Node3D else null, player.global_position)
+
+
+func _stats() -> Dictionary:
+	var acc := 0
+	if player.shots_fired > 0:
+		acc = int(round(100.0 * float(player.shots_hit) / float(player.shots_fired)))
+	return {"kills": player_kills, "damage": damage_dealt, "accuracy": acc, "time": survive_time}
 
 
 func _on_notice(text: String) -> void:
@@ -503,23 +703,54 @@ func _on_notice(text: String) -> void:
 
 
 func _on_shot_fired(_id: String, from: Vector3, to: Vector3, _hit: bool) -> void:
-	spawn_tracer(from, to)
+	spawn_tracer(from, to, true)
 
 
 func _on_bot_eliminated(victim: Bot, killer: String) -> void:
 	alive = maxi(0, alive - 1)
-	var k := killer if killer != "" else "THE ZONE"
+	var k := killer if killer != "" else "THE STORM"
+	var weapon := ""
+	var src = victim.last_killer_node
+	if src is Bot and is_instance_valid(src):
+		weapon = str(Weapons.def((src as Bot).weapon_id)["short"]) if (src as Bot).weapon_id != "" else ""
+	elif src is Player and player.has_gun():
+		weapon = str(Weapons.def(player.current_id())["short"])
 	if killer == "YOU":
 		player_kills += 1
 		hud.set_kills(player_kills)
 		sfx.play_ui("elim", -4.0)
-		hud.show_notice("ELIMINATED  " + victim.bot_name, 1.6)
+		hud.show_big("ELIMINATED  %s" % victim.bot_name, HUD.WHITE, 2.0)
+		hud.show_notice("%d KILL%s" % [player_kills, "" if player_kills == 1 else "S"], 1.6)
 	var col := HUD.ACCENT if killer == "YOU" else HUD.MUTED
-	hud.killfeed("%s   >   %s" % [k, victim.bot_name], col)
+	var mid := ("  [%s]  " % weapon) if weapon != "" else "   >   "
+	hud.killfeed("%s%s%s" % [k, mid, victim.bot_name], col)
 	hud.set_alive(alive, total_players)
 	last_hud_alive = alive
-	if alive <= 1 and player != null and player.alive:
+	_drop_bot_loot(victim)
+	if phase == "end" and end_cam_target == victim:
+		# Follow whoever got them, so the spectate cam keeps showing the fight.
+		if src is Bot and is_instance_valid(src) and (src as Bot).alive:
+			end_cam_target = src
+			hud.set_spectate("SPECTATING  %s" % (src as Bot).bot_name)
+		else:
+			hud.set_spectate("")
+	if alive <= 1 and player != null and player.alive and phase == "playing":
 		_win()
+
+
+func _drop_bot_loot(b: Bot) -> void:
+	var base := ground_at(b.global_position)
+	if b.armed and b.weapon_id != "":
+		_spawn_loot("weapon", b.weapon_id, base + Vector3(0.0, 0.08, 0.0), int(Weapons.def(b.weapon_id)["mag"]), Weapons.starting_reserve(b.weapon_id))
+	var extras := ["ammo"]
+	if b.meds > 0 or randf() < 0.5:
+		extras.append("med")
+	if b.armor > 10.0 or randf() < 0.25:
+		extras.append("armor")
+	for i in extras.size():
+		var a := TAU * float(i) / float(extras.size()) + randf() * 0.5
+		var p := ground_at(b.global_position + Vector3(cos(a), 0.0, sin(a)) * 1.1)
+		_spawn_loot(extras[i], "", p + Vector3(0, 0.08, 0))
 
 
 func _win() -> void:
@@ -527,16 +758,19 @@ func _win() -> void:
 		return
 	phase = "end"
 	winner = true
+	hud.pause_allowed = false
+	hud.set_storm(false)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	hud.show_victory(player_kills, int(damage_dealt))
+	hud.show_victory(_stats())
 	sfx.play_ui("victory", -3.0)
 	hud.set_prompt("")
+	_begin_end_cam(player, player.global_position)
 
 
 func on_player_landed() -> void:
 	sfx.play_ui("land_thud", -6.0)
 	hud.show_notice("FIND A WEAPON  —  LOOK FOR THE GLOW", 3.0)
-	zone_delay = 14.0
+	player.add_trauma(0.35)
 
 
 func on_bot_landed(_bot: Bot) -> void:
@@ -547,32 +781,95 @@ func on_player_damaged(_amount: float, _from: Vector3) -> void:
 	pass
 
 
+func on_player_hit(pos: Vector3, dmg: float, headshot: bool) -> void:
+	damage_dealt += dmg
+	spawn_damage_number(pos, dmg, headshot)
+
+
+## Every gunshot: nearby bots hear it, distant ones show on the map.
+func on_gunshot(pos: Vector3, shooter: Node) -> void:
+	for b in bots:
+		if is_instance_valid(b) and b != shooter and b.alive and b.global_position.distance_to(pos) < HEAR_RANGE:
+			b.hear_shot(pos, shooter)
+	if shooter != player and player != null:
+		var d := pos.distance_to(player.global_position)
+		if d < PING_RANGE and d > 8.0 and randf() < 0.35:
+			hud.add_ping(pos)
+
+
 # --------------------------------------------------------------------- loot --
 func try_pickup(p: Player) -> void:
 	if p == null or p.mode != Player.Mode.GROUND:
 		return
-	var best: LootPickup = null
-	var best_d := 3.2
-	for l in loot_pool:
-		if not is_instance_valid(l) or l.taken:
-			continue
-		var d: float = l.global_position.distance_to(p.global_position)
-		if d < best_d:
-			best_d = d
-			best = l
+	var best := _nearest_loot(p.global_position, 3.2)
 	if best == null:
 		return
-	if not best.can_pickup(p):
-		p.notice.emit("NEED A WEAPON FIRST")
+	var why := best.block_reason(p)
+	if why != "":
+		p.notice.emit(why)
 		return
+	var kind := best.kind
 	if best.pickup(p):
-		sfx.play_at("pickup", best.global_position, -4.0)
+		var snd := "pickup"
+		if kind == "ammo":
+			snd = "ammo_pickup"
+		elif kind == "armor":
+			snd = "armor_pickup"
+		sfx.play_at(snd, best.global_position, -4.0)
 		loot_pool.erase(best)
 		hud.set_prompt("")
 
 
+func drop_weapon(id: String, mag: int, reserve: int, pos: Vector3) -> void:
+	if id == "":
+		return
+	var g := ground_at(pos)
+	_spawn_loot("weapon", id, g + Vector3(0, 0.08, 0), mag, reserve).dropped = true
+
+
+func _spawn_airdrop() -> void:
+	if zone == null:
+		return
+	var c := zone.next_center()
+	var r := zone.next_radius() * 0.7
+	for i in 12:
+		var a := randf() * TAU
+		var p := c + Vector2(cos(a), sin(a)) * sqrt(randf()) * r
+		var h := terrain.height_at(p.x, p.y)
+		if h > Terrain.WATER_LEVEL + 1.0 and terrain.slope_at(p.x, p.y) < 0.4:
+			var drop := Airdrop.new()
+			drop.setup(self, p, ground_at(Vector3(p.x, h + 20.0, p.y)).y)
+			add_child(drop)
+			airdrops.append(drop)
+			hud.show_big("SUPPLY DROP INCOMING", Color(1.0, 0.45, 0.3), 2.6)
+			hud.show_notice("HIGH-TIER LOOT  —  MARKED ON THE MAP", 3.0)
+			sfx.play_ui("zone_warn", -10.0)
+			return
+
+
+func on_airdrop_landed(drop: Airdrop) -> void:
+	var base := drop.global_position
+	var gun: String = AIRDROP_WEAPONS[randi() % AIRDROP_WEAPONS.size()]
+	_spawn_loot("weapon", gun, base + Vector3(1.6, 0.08, 0.0), -1, int(Weapons.def(gun)["mag"]) * 3)
+	_spawn_loot("armor", "", base + Vector3(-1.6, 0.08, 0.0))
+	_spawn_loot("med", "", base + Vector3(0.0, 0.08, 1.6))
+	_spawn_loot("ammo", "", base + Vector3(0.0, 0.08, -1.6))
+	# Armed bots nearby want it too.
+	for b in bots:
+		if is_instance_valid(b) and b.alive and b.armed and b.global_position.distance_to(base) < 140.0 and randf() < 0.6:
+			b.roam_point = Vector2(base.x, base.z)
+
+
 # ------------------------------------------------------------------- effects --
 func spawn_impact(pos: Vector3, normal: Vector3, _col: Object) -> void:
+	_puff(pos + normal * 0.04, Color(0.62, 0.58, 0.50, 0.8), 0.6, 1.9)
+
+
+func spawn_blood(pos: Vector3) -> void:
+	_puff(pos, Color(0.75, 0.08, 0.06, 0.9), 0.9, 2.6)
+
+
+func _puff(pos: Vector3, col: Color, s0: float, s1: float) -> void:
 	var mi := MeshInstance3D.new()
 	var sm := SphereMesh.new()
 	sm.radius = 0.06
@@ -583,15 +880,15 @@ func spawn_impact(pos: Vector3, normal: Vector3, _col: Object) -> void:
 	var m := StandardMaterial3D.new()
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	m.albedo_color = Color(0.62, 0.58, 0.50, 0.75)
+	m.albedo_color = col
 	mi.material_override = m
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mi)
-	mi.global_position = pos + normal * 0.04
-	mi.scale = Vector3.ONE * 0.6
+	mi.global_position = pos
+	mi.scale = Vector3.ONE * s0
 	var tw := mi.create_tween()
 	tw.set_parallel(true)
-	tw.tween_property(mi, "scale", Vector3.ONE * 1.9, 0.22)
+	tw.tween_property(mi, "scale", Vector3.ONE * s1, 0.22)
 	tw.tween_property(mi, "transparency", 1.0, 0.22)
 	tw.chain().tween_callback(mi.queue_free)
 	impacts.append(mi)
@@ -599,28 +896,49 @@ func spawn_impact(pos: Vector3, normal: Vector3, _col: Object) -> void:
 		impacts.pop_front()
 
 
-func spawn_tracer(from: Vector3, to: Vector3) -> void:
+func spawn_damage_number(pos: Vector3, dmg: float, headshot: bool) -> void:
+	var l := Label3D.new()
+	l.text = "%d" % int(round(dmg))
+	l.font = load("res://assets/fonts/ui_bold.ttf")
+	l.font_size = 48
+	l.outline_size = 10
+	l.outline_modulate = Color(0, 0, 0, 0.85)
+	l.modulate = Color(1.0, 0.82, 0.3) if headshot else Color(1, 1, 1)
+	l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	l.no_depth_test = true
+	l.fixed_size = true
+	l.pixel_size = 0.0009
+	add_child(l)
+	l.global_position = pos + Vector3(randf_range(-0.3, 0.3), 0.4, randf_range(-0.3, 0.3))
+	var tw := l.create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(l, "global_position", l.global_position + Vector3(0, 0.9, 0), 0.7).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+	tw.tween_property(l, "modulate:a", 0.0, 0.7).set_delay(0.25)
+	tw.chain().tween_callback(l.queue_free)
+
+
+func spawn_tracer(from: Vector3, to: Vector3, mine := false) -> void:
 	var dist := from.distance_to(to)
 	if dist < 1.0:
 		return
 	var mi := MeshInstance3D.new()
 	var bm := BoxMesh.new()
-	bm.size = Vector3(0.028, 0.028, dist)
+	var w := 0.022 if mine else 0.03
+	bm.size = Vector3(w, w, dist)
 	mi.mesh = bm
 	var m := StandardMaterial3D.new()
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	m.albedo_color = Color(1.0, 0.86, 0.52, 0.75)
+	m.albedo_color = Color(1.0, 0.86, 0.52, 0.65) if mine else Color(1.0, 0.55, 0.35, 0.8)
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mi.material_override = m
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mi)
 	mi.global_position = (from + to) * 0.5
-	if from.distance_to(to) > 0.01:
-		mi.look_at(to, Vector3.UP)
+	mi.look_at(to, Vector3.UP if absf((to - from).normalized().y) < 0.99 else Vector3.RIGHT)
 	var tw := mi.create_tween()
-	tw.tween_property(mi, "transparency", 1.0, 0.07)
+	tw.tween_property(mi, "transparency", 1.0, 0.08)
 	tw.tween_callback(mi.queue_free)
 	tracers.append(mi)
 	if tracers.size() > 60:
@@ -631,6 +949,13 @@ func spawn_tracer(from: Vector3, to: Vector3) -> void:
 
 func bot_shot_fired(from: Vector3, to: Vector3) -> void:
 	spawn_tracer(from, to)
+	# Near-miss crack: a shot that passes close to the player is audible.
+	if player != null and player.alive and phase == "playing":
+		var seg := to - from
+		var t := clampf((player.global_position + Vector3(0, 1.4, 0) - from).dot(seg) / maxf(0.001, seg.length_squared()), 0.0, 1.0)
+		var closest := from + seg * t
+		if closest.distance_to(player.global_position + Vector3(0, 1.4, 0)) < 2.0:
+			sfx.play_at("bolt", closest, -10.0, 0.25)
 
 
 func shake(amt: float) -> void:
@@ -663,7 +988,6 @@ func respawn_player() -> void:
 	var p := _random_ground_point(300.0)
 	player.global_position = p + Vector3(0, 3, 0)
 	player.velocity = Vector3.ZERO
-	player.take_damage(15.0, p, false, null)
 
 
 # -------------------------------------------------------------------- audio --
@@ -673,18 +997,21 @@ func _attach_plane_audio() -> void:
 	var p := _loop_player("plane_loop", -10.0)
 	if p != null:
 		plane.add_child(p)
-		p.global_position = plane.global_position
+		p.position = Vector3.ZERO
 		p.play()
 
 
 func _attach_wind_audio() -> void:
-	var p := _loop_player("wind_loop", -16.0)
+	var p := _loop_player("wind_loop", -14.0)
 	if p != null:
-		add_child(p)
-		p.global_position = player.global_position
+		player.add_child(p)
+		p.position = Vector3(0, 1.6, 0)
 		p.play()
+		_wind = p
 		var tw := p.create_tween()
-		tw.tween_property(p, "volume_db", -26.0, 6.0)
+		tw.tween_interval(4.0)
+		tw.tween_property(p, "volume_db", -40.0, 6.0)
+		tw.tween_callback(p.queue_free)
 
 
 func _loop_player(name: String, db: float) -> AudioStreamPlayer3D:
@@ -743,10 +1070,27 @@ func _run_shot() -> void:
 	p.pitch = -0.16
 	p.camera.make_current()
 	phase = "playing"
-	hud.root.visible = false
+	var args := OS.get_cmdline_user_args()
+	for a in args:
+		if a.begins_with("--gun="):
+			p.give_weapon(a.substr(6))
+	if args.has("--hud"):
+		p.landed = true
+		hud.set_crosshair_visible(true)
+	else:
+		hud.root.visible = false
+	if args.has("--map"):
+		hud.toggle_map()
+	if args.has("--aim"):
+		p.aim_blend = 1.0
+		Input.action_press("aim")
 	hud.set_prompt("")
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	for i in 10:
+	var wait := 10
+	for a in args:
+		if a.begins_with("--wait="):
+			wait = int(a.substr(7))
+	for i in wait:
 		await get_tree().process_frame
 	print("[shot] frames waited")
 	await RenderingServer.frame_post_draw

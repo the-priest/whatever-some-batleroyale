@@ -1,12 +1,41 @@
 shader_type spatial;
-render_mode unshaded, cull_disabled, blend_add, depth_draw_never, shadows_disabled;
+render_mode unshaded, cull_disabled, blend_mix, depth_draw_never, shadows_disabled, fog_disabled;
 
-uniform vec4 tint : source_color = vec4(0.34, 0.62, 1.0, 1.0);
-uniform float opacity : hint_range(0.0, 1.0) = 0.26;
-uniform float scan_speed = 2.2;
+// Storm wall. Soft rolling noise instead of a fine stripe pattern, which used to
+// shimmer (moire) at a distance.
+
+uniform vec4 tint : source_color = vec4(0.52, 0.34, 0.95, 1.0);
+uniform vec4 edge : source_color = vec4(0.86, 0.72, 1.0, 1.0);
+uniform float opacity : hint_range(0.0, 1.0) = 0.42;
+uniform float radius = 430.0;
 
 varying float v_h;
 varying vec3 v_world;
+
+float hash(vec2 p) {
+	p = fract(p * vec2(123.34, 456.21));
+	p += dot(p, p + 45.32);
+	return fract(p.x * p.y);
+}
+
+float noise(vec2 p) {
+	vec2 i = floor(p);
+	vec2 f = fract(p);
+	f = f * f * (3.0 - 2.0 * f);
+	return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
+			mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+
+float fbm(vec2 p) {
+	float v = 0.0;
+	float a = 0.5;
+	for (int i = 0; i < 4; i++) {
+		v += a * noise(p);
+		p *= 2.03;
+		a *= 0.5;
+	}
+	return v;
+}
 
 void vertex() {
 	v_h = UV.y;
@@ -14,10 +43,21 @@ void vertex() {
 }
 
 void fragment() {
-	float h = clamp(v_h, 0.0, 1.0);
-	float base = smoothstep(0.0, 0.10, h) * (1.0 - smoothstep(0.72, 1.0, h) * 0.65);
-	float scan = 0.68 + 0.32 * sin(v_world.y * 0.42 + TIME * scan_speed);
-	float grid = 0.85 + 0.15 * sin(atan(v_world.z, v_world.x) * 420.0);
-	ALBEDO = tint.rgb * (0.75 + scan * 0.55);
-	ALPHA = opacity * base * scan * grid;
+	float around = UV.x * radius * 6.2831;
+	vec2 p = vec2(around * 0.025, v_world.y * 0.03);
+	float t = TIME * 0.12;
+	float n = fbm(p + vec2(t, -t * 1.6));
+	n = mix(n, fbm(p * 2.3 - vec2(t * 1.3, t * 0.7)), 0.4);
+
+	// Fade out toward the top so the storm does not read as a hard tube.
+	float h = clamp(1.0 - v_h, 0.0, 1.0);
+	float vertical = smoothstep(0.0, 0.08, h) * (1.0 - smoothstep(0.55, 1.0, h) * 0.85);
+
+	// Do not paint a solid sheet right in front of the camera.
+	float d = length(v_world - CAMERA_POSITION_WORLD);
+	float near = smoothstep(2.0, 18.0, d);
+
+	vec3 col = mix(tint.rgb, edge.rgb, smoothstep(0.55, 0.85, n));
+	ALBEDO = col;
+	ALPHA = opacity * vertical * near * (0.45 + 0.75 * n);
 }

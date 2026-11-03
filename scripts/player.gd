@@ -9,6 +9,11 @@ signal died(killer: String)
 signal damaged(amount: float, from_dir: Vector3)
 signal notice(text: String)
 signal fired(id: String, from: Vector3, to: Vector3, hit: bool)
+signal inventory_changed
+
+const MAX_MEDS := 3
+const HEAL_TIME := 2.6
+const HEAL_AMOUNT := 50.0
 
 enum Mode { PLANE, FREEFALL, CHUTE, GROUND }
 
@@ -72,6 +77,32 @@ var _gun_scale := 1.0
 var _step_dist := 0.0
 var _damage_flash := 0.0
 var _coyote := 0.0
+var trauma := 0.0
+var land_dip := 0.0
+var sprinting := false
+var sprint_blend := 0.0
+var equip_t := 1.0
+var bloom := 0.0
+var bolt_t := -1.0
+var kick := Vector3.ZERO
+var kick_vel := Vector3.ZERO
+var kick_rot := Vector3.ZERO
+var kick_rot_vel := Vector3.ZERO
+var _cam_roll := 0.0
+var _bolt_sound := false
+var _reload_dur := 1.0
+var _reload_need := 1
+var _reload_was_empty := false
+var _reload_events: Dictionary = {}
+var _mag_node: MeshInstance3D = null
+var _mag_rest := Vector3.ZERO
+var _was_on_floor := true
+var _fall_speed := 0.0
+var _sprint_lock := 0.0
+var meds := 0
+var heal_timer := 0.0
+var healing := false
+var in_water := false
 
 
 func _ready() -> void:
@@ -154,11 +185,19 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		var mm: InputEventMouseMotion = event
 		look_delta += mm.relative
-		yaw -= mm.relative.x * mouse_sens * (0.55 if aiming else 1.0)
-		pitch -= mm.relative.y * mouse_sens * (0.55 if aiming else 1.0)
+		var k := mouse_sens * _ads_sens_scale()
+		yaw -= mm.relative.x * k
+		pitch -= mm.relative.y * k
 		pitch = clampf(pitch, deg_to_rad(-89.0), deg_to_rad(89.0))
 		sway += mm.relative * 0.00012
 		sway = sway.clamp(Vector2(-0.06, -0.06), Vector2(0.06, 0.06))
+
+
+func _ads_sens_scale() -> float:
+	if not aiming or not has_gun():
+		return 1.0
+	var zoom := float(Weapons.def(current_id()).get("zoom", 1.0))
+	return clampf(0.75 / zoom, 0.16, 0.7)
 
 
 func _physics_process(delta: float) -> void:
@@ -232,34 +271,51 @@ func _chute(delta: float) -> void:
 func _ground(delta: float) -> void:
 	var input := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
 	var crouch := Input.is_action_pressed("crouch")
-	var speed := CROUCH if crouch else (SPRINT if Input.is_action_pressed("sprint") else WALK)
+	_sprint_lock = maxf(0.0, _sprint_lock - delta)
+	sprinting = Input.is_action_pressed("sprint") and input.y < -0.3 and not crouch and not aiming and not healing and _sprint_lock <= 0.0 and is_on_floor()
+	var speed := CROUCH if crouch else (SPRINT if sprinting else WALK)
 	if aiming:
 		speed *= 0.62
 	if reloading:
 		speed *= 0.92
+	if healing:
+		speed *= 0.45
+	if in_water:
+		speed *= 0.6
 	var basis_yaw := Basis(Vector3.UP, yaw)
 	var wish := basis_yaw * Vector3(input.x, 0.0, input.y)
 	var target := wish * speed * (0.55 if not is_on_floor() else 1.0)
 	var accel := ACCEL if is_on_floor() else AIR_ACCEL
 	velocity.x = move_toward(velocity.x, target.x, accel * delta)
 	velocity.z = move_toward(velocity.z, target.z, accel * delta)
-	if not is_on_floor():
-		velocity.y -= GRAVITY * delta
+	if is_on_floor():
 		_coyote = 0.12
 	else:
+		velocity.y -= GRAVITY * delta
 		_coyote = maxf(0.0, _coyote - delta)
-		if Input.is_action_just_pressed("jump"):
-			velocity.y = JUMP
-			_coyote = 0.0
-		elif _coyote > 0.0 and Input.is_action_just_pressed("jump"):
-			velocity.y = JUMP
+	if Input.is_action_just_pressed("jump") and _coyote > 0.0 and not in_water:
+		velocity.y = JUMP
+		_coyote = 0.0
 	velocity = velocity.limit_length(60.0)
+	if not is_on_floor():
+		_fall_speed = minf(_fall_speed, velocity.y)
 	move_and_slide()
+	if is_on_floor() and not _was_on_floor:
+		var impact := clampf(-_fall_speed / 12.0, 0.0, 1.0)
+		if impact > 0.15:
+			land_dip = impact
+			add_trauma(impact * 0.25)
+			if impact > 0.4:
+				_sfx("land_thud", -10.0)
+		_fall_speed = 0.0
+	_was_on_floor = is_on_floor()
 	# Terrain mesh vs bilinear height can differ by up to a metre on a slope, and a
 	# one-sided trimesh lets a buried capsule fall straight through the island.
+	in_water = false
 	if game != null and game.terrain != null:
 		var gy: float = float(game.terrain.height_at(global_position.x, global_position.z))
 		if bool(game.terrain.is_water(global_position.x, global_position.z)):
+			in_water = global_position.y < Terrain.WATER_LEVEL + 0.6
 			var surface: float = Terrain.WATER_LEVEL + 0.15
 			if global_position.y < surface:
 				global_position.y = surface
@@ -276,7 +332,7 @@ func _ground(delta: float) -> void:
 	if is_on_floor() and planar > 1.2:
 		bob += delta * planar * 1.5
 		_step_dist += planar * delta
-		if _step_dist > (2.4 if Input.is_action_pressed("sprint") else 3.1):
+		if _step_dist > (2.6 if sprinting else 2.1 if Input.is_action_pressed("crouch") else 3.0):
 			_step_dist = 0.0
 			_footstep()
 	if Input.is_action_just_pressed("reload"):
@@ -289,19 +345,33 @@ func _ground(delta: float) -> void:
 		select_slot(1)
 	if Input.is_action_just_pressed("interact"):
 		_try_pickup()
-	aiming = Input.is_action_pressed("aim") and not reloading
+	if Input.is_action_just_pressed("heal"):
+		start_heal()
+	aiming = Input.is_action_pressed("aim") and not reloading and not healing
 	fire_timer = maxf(0.0, fire_timer - delta)
 	if reloading:
 		reload_timer -= delta
 		if reload_timer <= 0.0:
 			_finish_reload()
-	if Input.is_action_pressed("fire") and fire_timer <= 0.0 and not reloading:
-		if has_gun():
-			if aiming or true:
-				_try_fire()
-		else:
-			if Input.is_action_just_pressed("fire"):
-				notice.emit("NO WEAPON  —  PRESS E TO PICK ONE UP")
+	if healing:
+		heal_timer -= delta
+		if heal_timer <= 0.0:
+			_finish_heal()
+	var want_fire := false
+	if has_gun():
+		var auto := bool(Weapons.def(current_id()).get("auto", false))
+		want_fire = Input.is_action_pressed("fire") if auto else Input.is_action_just_pressed("fire")
+	if want_fire and healing:
+		cancel_heal()
+	if want_fire and sprinting:
+		# Firing breaks a sprint; the gun needs a moment to come up.
+		_sprint_lock = 0.4
+		sprinting = false
+		fire_timer = maxf(fire_timer, 0.12 * sprint_blend)
+	if want_fire and fire_timer <= 0.0 and not reloading and equip_t > 0.75 and bolt_t < 0.0:
+		_try_fire()
+	elif not has_gun() and Input.is_action_just_pressed("fire"):
+		notice.emit("NO WEAPON  —  PRESS E TO PICK ONE UP")
 
 
 func _check_ground_contact() -> void:
@@ -347,12 +417,21 @@ func open_chute() -> void:
 
 
 func _update_camera(delta: float) -> void:
-	# Recoil decay.
-	recoil_pitch = lerpf(recoil_pitch, 0.0, clampf(delta * 7.0, 0.0, 1.0))
-	recoil_yaw = lerpf(recoil_yaw, 0.0, clampf(delta * 7.0, 0.0, 1.0))
-	camera.rotation.x = pitch + recoil_pitch
-	camera.rotation.y = yaw + recoil_yaw
-	camera.rotation.z = clampf(-Vector2(velocity.x, velocity.z).length() * 0.0, -0.02, 0.02)
+	# Recoil: the visual kick recovers, a fraction of it stays as muzzle climb.
+	recoil_pitch = lerpf(recoil_pitch, 0.0, clampf(delta * 9.0, 0.0, 1.0))
+	recoil_yaw = lerpf(recoil_yaw, 0.0, clampf(delta * 9.0, 0.0, 1.0))
+	trauma = maxf(0.0, trauma - delta * 1.8)
+	var t := Time.get_ticks_msec() * 0.001
+	var shake_amt := trauma * trauma
+	var sx := (sin(t * 37.0) + sin(t * 23.0 + 1.3)) * 0.5 * shake_amt * 0.035
+	var sy := (sin(t * 31.0 + 0.7) + sin(t * 19.0)) * 0.5 * shake_amt * 0.035
+	var sz := sin(t * 27.0 + 2.1) * shake_amt * 0.03
+	camera.rotation.x = pitch + recoil_pitch + sx
+	camera.rotation.y = yaw + recoil_yaw + sy
+	# Lean slightly into strafes.
+	var side_speed := (Basis(Vector3.UP, yaw).inverse() * velocity).x if mode == Mode.GROUND else 0.0
+	_cam_roll = lerpf(_cam_roll, -side_speed * 0.0035, clampf(delta * 8.0, 0.0, 1.0))
+	camera.rotation.z = _cam_roll + sz
 
 	if mode == Mode.FREEFALL or mode == Mode.CHUTE:
 		var fall_tilt := 0.0
@@ -363,9 +442,11 @@ func _update_camera(delta: float) -> void:
 		cam_base = Vector3(0, EYE - 0.30, 0.0)
 	else:
 		var target_fov := 82.0
-		if aiming and has_gun():
-			target_fov = 82.0 / float(Weapons.def(loadout[slot]).get("zoom", 1.0))
-		camera.fov = lerpf(camera.fov, target_fov, delta * 11.0)
+		if has_gun():
+			var zoom := float(Weapons.def(current_id()).get("zoom", 1.0))
+			target_fov = lerpf(82.0, 82.0 / zoom, aim_blend)
+		target_fov += sprint_blend * 6.0
+		camera.fov = lerpf(camera.fov, target_fov, clampf(delta * 14.0, 0.0, 1.0))
 
 	# Smooth crouch + land dip + foot bob.
 	var crouching := Input.is_action_pressed("crouch") and mode == Mode.GROUND
@@ -373,49 +454,204 @@ func _update_camera(delta: float) -> void:
 	if mode == Mode.FREEFALL or mode == Mode.CHUTE:
 		target_y = cam_base.y
 	cam_base.y = lerpf(cam_base.y, target_y, delta * 12.0)
+	land_dip = lerpf(land_dip, 0.0, clampf(delta * 7.0, 0.0, 1.0))
 	var bob_y := 0.0
 	var bob_x := 0.0
 	if mode == Mode.GROUND:
 		var planar := Vector2(velocity.x, velocity.z).length()
-		var amt := clampf(planar / SPRINT, 0.0, 1.0) * (0.4 if aiming else 1.0)
-		bob_y = sin(bob * 2.0) * 0.022 * amt
+		var amt := clampf(planar / SPRINT, 0.0, 1.0) * lerpf(1.0, 0.25, aim_blend)
+		bob_y = sin(bob * 2.0) * 0.024 * amt
 		bob_x = cos(bob) * 0.020 * amt
-	camera.position = camera.position.lerp(Vector3(bob_x, cam_base.y + bob_y, 0.0), clampf(delta * 18.0, 0.0, 1.0))
+	camera.position = camera.position.lerp(Vector3(bob_x, cam_base.y + bob_y - land_dip * 0.12, 0.0), clampf(delta * 18.0, 0.0, 1.0))
 	_damage_flash = maxf(0.0, _damage_flash - delta)
 
-	# Head hit feedback is a HUD concern; nothing 3D here.
+
+func add_trauma(amount: float) -> void:
+	trauma = clampf(trauma + amount, 0.0, 1.0)
+
+
+## Current cone of fire in degrees, the same number the shot code uses.
+func current_spread_deg() -> float:
+	if not has_gun():
+		return 3.0
+	var d: Dictionary = Weapons.def(current_id())
+	var s := lerpf(float(d["spread"]), float(d["ads_spread"]), aim_blend)
+	var planar := Vector2(velocity.x, velocity.z).length()
+	s *= 1.0 + clampf(planar / WALK, 0.0, 1.6) * 0.55 * (1.0 - aim_blend * 0.7)
+	if Input.is_action_pressed("crouch") and is_on_floor():
+		s *= 0.8
+	if not is_on_floor():
+		s = s * 2.2 + 1.0
+	s += bloom * float(d["spread"]) * (1.0 - aim_blend * 0.55)
+	return s
+
+
+func current_spread_px() -> float:
+	var s := current_spread_deg()
+	var h := get_viewport().get_visible_rect().size.y
+	return tan(deg_to_rad(s)) / tan(deg_to_rad(camera.fov * 0.5)) * h * 0.5
+
+
+static func _seg(t: float, a: float, b: float) -> float:
+	return smoothstep(a, b, t)
+
+
+static func _bump(t: float, a: float, b: float) -> float:
+	return sin(clampf((t - a) / (b - a), 0.0, 1.0) * PI)
 
 
 func _update_weapon(delta: float) -> void:
-	if not has_gun():
+	if not has_gun() or mode != Mode.GROUND or not alive:
 		gun_holder.visible = false
+		if game != null and game.hud != null:
+			game.hud.set_scope(false)
 		return
-	gun_holder.visible = true
-	var d: Dictionary = Weapons.def(loadout[slot])
-	var want_ads := 1.0 if (aiming and not reloading) else 0.0
-	aim_blend = lerpf(aim_blend, want_ads, clampf(delta * 13.0, 0.0, 1.0))
+	var id := current_id()
+	var d: Dictionary = Weapons.def(id)
+	var want_ads := 1.0 if (aiming and not reloading and equip_t > 0.6) else 0.0
+	aim_blend = move_toward(aim_blend, want_ads, delta * (1.0 / maxf(0.08, float(d.get("ads_time", 0.18)))))
+	var ads_e := aim_blend * aim_blend * (3.0 - 2.0 * aim_blend)
+	var planar := Vector2(velocity.x, velocity.z).length()
+	sprint_blend = lerpf(sprint_blend, 1.0 if sprinting else 0.0, clampf(delta * 10.0, 0.0, 1.0))
+	equip_t = minf(1.0, equip_t + delta / 0.38)
+	bloom = maxf(0.0, bloom - delta * float(d.get("bloom_recover", 3.2)))
+
 	var hip: Vector3 = d["hip"]
 	var ads: Vector3 = d["ads"]
-	var target: Vector3 = hip.lerp(ads, aim_blend)
-	# Sway + movement bob on the viewmodel.
-	var planar := Vector2(velocity.x, velocity.z).length()
-	var idle := sin(Time.get_ticks_msec() * 0.0016) * 0.0035
-	target += Vector3(-sway.x * 0.55 + cos(bob) * 0.010 * clampf(planar / SPRINT, 0, 1), idle + sin(bob * 2.0) * 0.008 * clampf(planar / SPRINT, 0, 1) - sway.y * 0.4, 0.0)
+	var pos: Vector3 = hip.lerp(ads, ads_e)
+	var rot := Vector3.ZERO
+
+	# Idle breathing, walk bob and mouse sway, all damped while aiming.
+	var move_k := clampf(planar / SPRINT, 0.0, 1.0) * (1.0 - ads_e * 0.85)
+	var tt := Time.get_ticks_msec() * 0.001
+	var breathe := (1.0 - ads_e * 0.8)
+	pos.y += sin(tt * 1.6) * 0.0035 * breathe
+	pos.x += cos(bob) * 0.012 * move_k
+	pos.y += -absf(sin(bob)) * 0.014 * move_k
+	rot.z += cos(bob) * 0.02 * move_k
+	pos.x += -sway.x * 0.55 * (1.0 - ads_e * 0.7)
+	pos.y += -sway.y * 0.40 * (1.0 - ads_e * 0.7)
+	rot.y += -sway.x * 1.2 * (1.0 - ads_e * 0.7)
+	rot.x += -sway.y * 0.8 * (1.0 - ads_e * 0.7)
+	sway = sway.lerp(Vector2.ZERO, clampf(delta * 7.0, 0.0, 1.0))
+
+	# Sprint: gun swings down and across.
+	var sb := sprint_blend * (1.0 - ads_e)
+	pos += Vector3(-0.05, -0.06, 0.04) * sb
+	rot += Vector3(-0.30, 0.65, 0.30) * sb
+	pos.y += sin(bob * 2.0) * 0.012 * sb
+
+	# Equip: raise from below.
+	var e := equip_t * equip_t * (3.0 - 2.0 * equip_t)
+	pos.y -= (1.0 - e) * 0.28
+	rot.x -= (1.0 - e) * 0.9
+	rot.z += (1.0 - e) * 0.4
+
+	# Landing dip.
+	pos.y -= land_dip * 0.05
+	rot.x -= land_dip * 0.15
+
+	# Reload choreography.
 	if reloading:
-		var t := 1.0 - clampf(reload_timer / maxf(0.01, float(d["reload"])), 0.0, 1.0)
-		var dip := sin(t * PI)
-		target += Vector3(0.02, -0.16 * dip, -0.02)
-		target.z += 0.03 * dip
-		gun_holder.rotation.x = -0.55 * dip
-		gun_holder.rotation.z = 0.25 * dip
-	else:
-		gun_holder.rotation.x = lerpf(gun_holder.rotation.x, -recoil_pitch * 1.4, delta * 16.0)
-		gun_holder.rotation.z = lerpf(gun_holder.rotation.z, 0.0, delta * 12.0)
-	gun_holder.position = gun_holder.position.lerp(target, clampf(delta * 17.0, 0.0, 1.0))
-	sway = sway.lerp(Vector2.ZERO, clampf(delta * 6.0, 0.0, 1.0))
-	# Muzzle world position for tracers.
-	if muzzle != null:
-		muzzle.global_position = gun_holder.global_position + gun_holder.global_basis * Vector3(0.0, 0.0, -0.52 * _gun_scale)
+		var rt := 1.0 - clampf(reload_timer / maxf(0.01, _reload_dur), 0.0, 1.0)
+		var pose := _reload_pose(rt, id)
+		pos += pose[0]
+		rot += pose[1]
+	elif _mag_node != null:
+		_mag_node.position = _mag_rest
+		_mag_node.rotation = Vector3.ZERO
+
+	# Bolt-action cycle after each sniper shot.
+	if bolt_t >= 0.0:
+		bolt_t += delta / 0.95
+		var b := _bump(bolt_t, 0.2, 0.85)
+		pos += Vector3(0.015, -0.035, 0.035) * b
+		rot += Vector3(0.12, 0.0, 0.42) * b
+		if not _bolt_sound and bolt_t > 0.32:
+			_bolt_sound = true
+			_sfx("bolt", -1.0)
+		if bolt_t >= 1.0:
+			bolt_t = -1.0
+
+	# Recoil springs.
+	var k := 210.0
+	var damp := 2.0 * sqrt(k) * 0.62
+	kick_vel += (-kick * k - kick_vel * damp) * delta
+	kick += kick_vel * delta
+	kick_rot_vel += (-kick_rot * k - kick_rot_vel * damp) * delta
+	kick_rot += kick_rot_vel * delta
+	pos += kick * (1.0 - ads_e * 0.45)
+	rot += kick_rot * (1.0 - ads_e * 0.5)
+
+	gun_holder.position = pos
+	gun_holder.rotation = rot
+
+	# Sniper scope: hide the gun and let the HUD draw the scope.
+	var scoped := id == "sniper" and aim_blend > 0.92
+	gun_holder.visible = not scoped
+	if game != null and game.hud != null:
+		game.hud.set_scope(scoped)
+
+
+## Offsets (position, rotation) for a reload at normalised time t.
+## Also drives the magazine prop and the timed reload sounds.
+func _reload_pose(t: float, id: String) -> Array:
+	var pos := Vector3.ZERO
+	var rot := Vector3.ZERO
+	var tilt := _seg(t, 0.0, 0.14) * (1.0 - _seg(t, 0.84, 1.0))
+	if id == "shotgun":
+		# Roll the gun over, feed shells one by one, then rack the pump.
+		pos += Vector3(-0.02, -0.035, 0.02) * tilt
+		rot += Vector3(0.22, 0.10, -0.55) * tilt
+		var shells := clampi(_reload_need, 1, 8)
+		var span := 0.62 / float(shells)
+		for i in shells:
+			var a := 0.14 + span * float(i)
+			pos.y += _bump(t, a, a + span * 0.8) * 0.018
+			rot.x -= _bump(t, a, a + span * 0.8) * 0.05
+			_reload_event("shell%d" % i, t >= a + span * 0.5, "reload_in", -6.0)
+		var pump := _bump(t, 0.80, 0.94)
+		pos.z += pump * 0.05
+		rot.x += pump * 0.05
+		_reload_event("pump", t >= 0.84, "bolt", 0.0)
+		return [pos, rot]
+
+	# Magazine weapons: tilt, mag out, new mag in, slap, charge.
+	pos += Vector3(-0.025, -0.045, 0.02) * tilt
+	rot += Vector3(0.16, 0.08, 0.50) * tilt
+	if _mag_node != null:
+		var out := _seg(t, 0.16, 0.30)
+		var back_in := _seg(t, 0.40, 0.58)
+		var drop := out * (1.0 - back_in)
+		_mag_node.position = _mag_rest + Vector3(0.0, -0.42 * drop, 0.05 * drop)
+		_mag_node.rotation.x = 0.4 * drop
+	_reload_event("out", t >= 0.18, "reload_out", -2.0)
+	# Hand reaching for the new mag: the gun dips a touch.
+	pos.y -= _bump(t, 0.30, 0.50) * 0.012
+	# Slap it home.
+	var slap := _bump(t, 0.56, 0.66)
+	pos.y += slap * 0.022
+	rot.x += slap * 0.06
+	_reload_event("in", t >= 0.58, "reload_in", 0.0)
+	# Charging handle when the gun ran dry.
+	if _reload_was_empty:
+		var rack := _bump(t, 0.68, 0.84)
+		pos.z += rack * 0.035
+		rot.z -= rack * 0.30
+		rot.y += rack * 0.12
+		_reload_event("rack", t >= 0.74, "bolt", -3.0)
+	return [pos, rot]
+
+
+func _reload_event(key: String, cond: bool, sound: String, db: float) -> void:
+	if cond and not _reload_events.has(key):
+		_reload_events[key] = true
+		_sfx(sound, db)
+
+
+func _sfx(name: String, db: float) -> void:
+	if game != null and game.has_method("play_sfx_at"):
+		game.play_sfx_at(name, global_position + Vector3(0, 1.4, 0), db)
 
 
 func has_gun() -> bool:
@@ -448,33 +684,51 @@ func _try_fire() -> void:
 	var d: Dictionary = Weapons.def(id)
 	if current_mag() <= 0:
 		fire_timer = 0.35
-		notice.emit("EMPTY  —  R TO RELOAD")
 		if game != null and game.has_method("play_sfx_at"):
 			game.play_sfx_at("empty_click", global_position)
+		if current_reserve() > 0:
+			start_reload()
+		else:
+			notice.emit("OUT OF AMMO  —  FIND AMMO OR SWAP (Q)")
 		return
-	if current_mag() == 1 and current_reserve() <= 0:
-		pass
 	mags[id] = current_mag() - 1
 	fire_timer = 60.0 / float(d["rpm"])
-	recoil_pitch += deg_to_rad(float(d["recoil"]) * 0.55 * (0.6 if aim_blend > 0.5 else 1.0))
-	recoil_yaw += deg_to_rad(randf_range(-1.0, 1.0) * float(d["recoil"]) * 0.22)
-	flash_time = 0.045
+	# Spread is measured before this shot adds its own bloom.
+	var spread_deg := current_spread_deg()
+	var rec := float(d["recoil"]) * (0.62 if aim_blend > 0.5 else 1.0)
+	if Input.is_action_pressed("crouch"):
+		rec *= 0.85
+	var kick_up := deg_to_rad(rec * 0.55)
+	recoil_pitch += kick_up * 0.65
+	pitch = clampf(pitch + kick_up * 0.35, deg_to_rad(-89.0), deg_to_rad(89.0))
+	var side := randf_range(-1.0, 1.0) * rec * 0.22 + rec * 0.06
+	recoil_yaw += deg_to_rad(side) * 0.6
+	yaw -= deg_to_rad(side) * 0.15
+	bloom = minf(float(d.get("bloom_max", 1.4)), bloom + float(d.get("bloom", 0.22)))
+	var kick_amt := float(d["kick"])
+	kick_vel += Vector3(randf_range(-0.6, 0.6) * kick_amt, kick_amt * 3.0, kick_amt * 26.0)
+	kick_rot_vel += Vector3(kick_amt * 34.0, randf_range(-1.0, 1.0) * kick_amt * 6.0, randf_range(-1.0, 1.0) * kick_amt * 10.0)
+	flash_time = 0.05
 	flash.visible = true
-	flash.position = gun_holder.position + Vector3(0.0, 0.0, -0.50 * _gun_scale)
+	flash.position = gun_holder.position + gun_holder.basis * Vector3(0.0, 0.01, -0.52 * _gun_scale)
 	flash.rotation.z = randf() * TAU
+	flash.scale = Vector3.ONE * randf_range(0.8, 1.3) * (1.6 if id == "shotgun" or id == "sniper" else 1.0)
 	flash_light.position = flash.position
 	flash_light.light_energy = 4.5
-	gun_holder.position.z += float(d["kick"]) * 0.9
-	shake(0.0)
+	add_trauma(clampf(kick_amt * 2.2, 0.02, 0.3))
 	shots_fired += 1
+	if id == "sniper":
+		bolt_t = 0.0
+		_bolt_sound = false
 
 	var from := camera.global_position
 	var dir := -camera.global_basis.z
-	var spread_deg := float(d["ads_spread"]) if aim_blend > 0.6 else float(d["spread"])
-	spread_deg *= 1.0 + (2.0 if not is_on_floor() else 0.0)
 	var pellets := int(d["pellets"])
 	var hit_any := false
 	var killed_any := false
+	var head_any := false
+	var total_dmg := 0.0
+	var hit_pos := Vector3.ZERO
 	var last_to := from + dir * 30.0
 	for p in range(pellets):
 		var s := spread_deg
@@ -502,22 +756,29 @@ func _try_fire() -> void:
 			var dmg := float(d["damage"]) * falloff
 			if headshot:
 				dmg *= float(d["head"])
-			if col != null and col.has_method("take_damage"):
+			if col != null and col.has_method("take_damage") and bool(col.get("alive")):
 				var res = col.call("take_damage", dmg, pos, headshot, self)
 				hit_any = true
-				shots_hit += 1
+				head_any = head_any or headshot
+				total_dmg += dmg
+				hit_pos = pos
 				if res is bool and res:
 					killed_any = true
-			elif col != null and col.has_method("impact"):
-				col.call("impact", pos, shot_dir)
-			spawn_impact(pos, hit.get("normal", Vector3.UP), col)
-	fired.emit(id, from, last_to, hit_any)
+				if game != null and game.has_method("spawn_blood"):
+					game.spawn_blood(pos)
+			else:
+				spawn_impact(pos, hit.get("normal", Vector3.UP), col)
+	var tracer_from := muzzle.global_position if muzzle != null else from
+	fired.emit(id, tracer_from, last_to, hit_any)
 	if hit_any:
-		hitmarker.emit(false, killed_any)
+		shots_hit += 1
+		hitmarker.emit(head_any, killed_any)
+		if game != null and game.has_method("on_player_hit"):
+			game.on_player_hit(hit_pos, total_dmg, head_any)
+	if game != null and game.has_method("on_gunshot"):
+		game.on_gunshot(from, self)
 	if game != null and game.has_method("play_sfx_at"):
-		game.play_sfx_at(str(d["sound"]), from, 1.0)
-	if game != null and game.has_method("shake"):
-		game.shake(float(d["kick"]) * 20.0)
+		game.play_sfx_at("shot_" + str(d["sound"]), from, 1.0)
 	_emit_ammo()
 
 
@@ -535,10 +796,17 @@ func start_reload() -> void:
 		if current_reserve() <= 0:
 			notice.emit("NO AMMO")
 		return
+	cancel_heal()
 	reloading = true
-	reload_timer = float(d["reload"])
-	if game != null and game.has_method("play_sfx_at"):
-		game.play_sfx_at("reload_out", global_position, 0.6)
+	_reload_was_empty = current_mag() == 0
+	_reload_need = int(d["mag"]) - current_mag()
+	_reload_dur = float(d["reload"]) * (1.0 if _reload_was_empty else 0.82)
+	if id == "shotgun":
+		_reload_need = mini(_reload_need, current_reserve())
+		_reload_dur = float(d["reload"]) * clampf(float(_reload_need) / float(d["mag"]), 0.35, 1.0)
+	reload_timer = _reload_dur
+	_reload_events.clear()
+	bolt_t = -1.0
 
 
 func _finish_reload() -> void:
@@ -549,8 +817,7 @@ func _finish_reload() -> void:
 	var take := mini(need, current_reserve())
 	mags[id] = current_mag() + take
 	reserves[id] = current_reserve() - take
-	if game != null and game.has_method("play_sfx_at"):
-		game.play_sfx_at("reload_in", global_position, 0.8)
+	bloom = 0.0
 	_emit_ammo()
 
 
@@ -568,30 +835,48 @@ func select_slot(i: int) -> void:
 	slot = i
 	reloading = false
 	reload_timer = 0.0
+	cancel_heal()
 	fire_timer = 0.25
 	_rebuild_viewmodel()
 	_emit_weapon()
+	inventory_changed.emit()
+	if game != null and game.has_method("play_sfx_at"):
+		game.play_sfx_at("equip", global_position, -6.0)
 
 
-func give_weapon(id: String, start_mag: int = -1) -> bool:
+func give_weapon(id: String, start_mag: int = -1, start_reserve: int = -1) -> bool:
 	if not Weapons.DEFS.has(id):
 		return false
-	if loadout.has(id):
-		var d: Dictionary = Weapons.def(id)
-		reserves[id] = mini(int(d["reserve"]), current_reserve() + int(d["mag"]))
-		_emit_ammo()
-		return false
 	var d: Dictionary = Weapons.def(id)
-	mags[id] = int(d["mag"]) if start_mag < 0 else start_mag
-	reserves[id] = int(d["reserve"])
-	if loadout.size() < 2:
+	if loadout.has(id):
+		# Duplicate gun: strip it for ammo instead.
+		var extra := maxi(0, start_mag if start_mag >= 0 else int(d["mag"]))
+		extra += maxi(0, start_reserve if start_reserve >= 0 else 0)
+		reserves[id] = mini(int(d["reserve"]), int(reserves.get(id, 0)) + maxi(extra, int(d["mag"]) / 2))
+		notice.emit("+%d  %s AMMO" % [maxi(extra, int(d["mag"]) / 2), str(d["short"])])
+		_emit_ammo()
+		return true
+	if loadout.size() >= 2:
+		# Full: the gun in hand goes on the floor.
+		var old := current_id()
+		if game != null and game.has_method("drop_weapon"):
+			game.drop_weapon(old, current_mag(), current_reserve(), global_position + Basis(Vector3.UP, yaw) * Vector3(0.0, 0.0, -1.2))
+		mags.erase(old)
+		reserves.erase(old)
+		loadout[slot] = id
+	else:
 		loadout.append(id)
 		slot = loadout.size() - 1
-	else:
-		# Replace the current slot.
-		loadout[slot] = id
+	mags[id] = int(d["mag"]) if start_mag < 0 else start_mag
+	reserves[id] = Weapons.starting_reserve(id) if start_reserve < 0 else start_reserve
+	reloading = false
+	cancel_heal()
+	fire_timer = 0.3
 	_rebuild_viewmodel()
 	_emit_weapon()
+	inventory_changed.emit()
+	if game != null and game.has_method("play_sfx_at"):
+		game.play_sfx_at("equip", global_position, -2.0)
 	return true
 
 
@@ -601,6 +886,63 @@ func add_ammo(id: String, amount: int) -> void:
 	var d: Dictionary = Weapons.def(id)
 	reserves[id] = mini(int(d["reserve"]), int(reserves.get(id, 0)) + amount)
 	_emit_ammo()
+
+
+## Ammo box: tops up every gun carried, scaled to its magazine.
+func add_ammo_box() -> void:
+	for id in loadout:
+		var d: Dictionary = Weapons.def(id)
+		add_ammo(id, maxi(5, int(round(float(d["mag"]) * 1.5))))
+	_emit_ammo()
+
+
+func add_med() -> bool:
+	if meds >= MAX_MEDS:
+		return false
+	meds += 1
+	inventory_changed.emit()
+	return true
+
+
+func start_heal() -> void:
+	if healing or meds <= 0:
+		if meds <= 0:
+			notice.emit("NO MEDKITS")
+		return
+	if hp >= 100.0:
+		notice.emit("ALREADY AT FULL HEALTH")
+		return
+	reloading = false
+	healing = true
+	heal_timer = HEAL_TIME
+	if game != null and game.has_method("play_sfx_at"):
+		game.play_sfx_at("heal", global_position, -2.0)
+
+
+func cancel_heal() -> void:
+	healing = false
+	heal_timer = 0.0
+
+
+func _finish_heal() -> void:
+	healing = false
+	if meds <= 0:
+		return
+	meds -= 1
+	heal(HEAL_AMOUNT)
+	inventory_changed.emit()
+
+
+func heal_progress() -> float:
+	if not healing:
+		return -1.0
+	return 1.0 - clampf(heal_timer / HEAL_TIME, 0.0, 1.0)
+
+
+func reload_progress() -> float:
+	if not reloading or not has_gun():
+		return -1.0
+	return 1.0 - clampf(reload_timer / maxf(0.01, _reload_dur), 0.0, 1.0)
 
 
 func add_armor(amount: float) -> void:
@@ -623,6 +965,8 @@ func take_damage(amount: float, from_pos: Vector3 = Vector3.ZERO, headshot: bool
 		dmg -= absorbed
 	hp -= dmg
 	_damage_flash = 1.0
+	if source != null and source != self:
+		cancel_heal()
 	var dir := (from_pos - global_position).normalized() if from_pos != Vector3.ZERO else Vector3.FORWARD
 	damaged.emit(dmg, dir)
 	if game != null and game.has_method("on_player_damaged"):
@@ -630,11 +974,19 @@ func take_damage(amount: float, from_pos: Vector3 = Vector3.ZERO, headshot: bool
 	_emit_health()
 	if hp <= 0.0:
 		alive = false
+		cancel_heal()
+		reloading = false
+		flash.visible = false
+		gun_holder.visible = false
 		var killer := "THE ZONE"
 		if source != null and source.has_method("display_name"):
 			killer = source.call("display_name")
+		last_killer = source
 		died.emit(killer)
 	return true
+
+
+var last_killer: Node = null
 
 
 func force_respawn() -> void:
@@ -650,7 +1002,9 @@ func _try_pickup() -> void:
 # ------------------------------------------------------------------ helpers --
 func _rebuild_viewmodel() -> void:
 	for c in gun_holder.get_children():
+		gun_holder.remove_child(c)
 		c.queue_free()
+	_mag_node = null
 	if not has_gun():
 		return
 	var id := current_id()
@@ -658,10 +1012,19 @@ func _rebuild_viewmodel() -> void:
 	gun_holder.add_child(node)
 	_gun_scale = float(Weapons.def(id)["scale"])
 	node.scale = Vector3.ONE * _gun_scale
-	gun_holder.position = Weapons.def(id)["hip"]
 	muzzle = Node3D.new()
 	gun_holder.add_child(muzzle)
 	muzzle.position = Vector3(0, 0, -0.5 * _gun_scale)
+	# Detachable magazine prop, animated during reloads.
+	_mag_node = null
+	if id != "shotgun":
+		_mag_node = Weapons.build_magazine(id)
+		_mag_rest = _mag_node.position
+		node.add_child(_mag_node)
+	equip_t = 0.0
+	aim_blend = 0.0
+	bolt_t = -1.0
+	bloom = 0.0
 
 
 func _emit_health() -> void:
@@ -706,8 +1069,15 @@ func reset_for_match() -> void:
 	reload_timer = 0.0
 	fire_timer = 0.0
 	chute_open = false
+	chute_mesh.visible = false
 	landed = false
 	spawn_protect = 0.0
+	meds = 0
+	healing = false
+	heal_timer = 0.0
+	shots_fired = 0
+	shots_hit = 0
+	last_killer = null
 	velocity = Vector3.ZERO
 	freefall_speed = 0.0
 	mode = Mode.PLANE
@@ -715,6 +1085,7 @@ func reset_for_match() -> void:
 	_emit_health()
 	_rebuild_viewmodel()
 	_emit_weapon()
+	inventory_changed.emit()
 
 
 func set_plane_mode() -> void:
