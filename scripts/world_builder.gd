@@ -194,7 +194,7 @@ func _chunk_mesh(cx: int, cz: int) -> ArrayMesh:
 			var i01 := i00 + row
 			var i11 := i01 + 1
 			_add_tri(st, verts, normals, colors, [i00, i10, i01])
-			_add_tri(st, verts, normals, colors, [i00, i11, i01])
+			_add_tri(st, verts, normals, colors, [i10, i11, i01])
 	st.index()
 	return st.commit()
 

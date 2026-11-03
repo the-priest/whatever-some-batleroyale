@@ -741,6 +741,7 @@ func _run_shot() -> void:
 	p.velocity = Vector3.ZERO
 	p.yaw = ang
 	p.pitch = -0.16
+	p.camera.make_current()
 	phase = "playing"
 	hud.root.visible = false
 	hud.set_prompt("")
