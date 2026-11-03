@@ -1117,8 +1117,6 @@ func on_airdrop_landed(drop: Airdrop) -> void:
 # ------------------------------------------------------------------- effects --
 func spawn_impact(pos: Vector3, normal: Vector3, _col: Object, big := false) -> void:
 	_puff(pos + normal * 0.04, Color(0.62, 0.58, 0.50, 0.8), 0.9 if big else 0.6, 4.0 if big else 2.2)
-	if player != null and pos.distance_to(player.global_position) < 40.0:
-		sfx.play_at("bullet_impact", pos, -12.0, 0.2)
 
 
 func spawn_explosion(pos: Vector3) -> void:
@@ -1140,6 +1138,35 @@ func spawn_explosion(pos: Vector3) -> void:
 			player.add_trauma(clampf(1.0 - d / 30.0, 0.0, 1.0) * 0.9)
 	# Bots nearby flinch toward the blast.
 	on_gunshot(pos, null)
+
+
+var _smoke_tex: Texture2D
+var _smokes := 0
+
+
+## Wisp of gun smoke drifting up from a muzzle.
+func spawn_smoke(pos: Vector3, amount := 1.0) -> void:
+	if _smokes > 24:
+		return
+	if _smoke_tex == null:
+		_smoke_tex = world._cloud_texture()
+	var s := Sprite3D.new()
+	s.texture = _smoke_tex
+	s.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	s.shaded = false
+	s.transparent = true
+	s.pixel_size = 0.004
+	s.modulate = Color(0.78, 0.78, 0.76, 0.22 * amount)
+	s.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(s)
+	s.global_position = pos
+	_smokes += 1
+	var tw := s.create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(s, "global_position", pos + Vector3(randf_range(-0.15, 0.15), 0.5, randf_range(-0.15, 0.15)), 1.1)
+	tw.tween_property(s, "scale", Vector3.ONE * 3.0, 1.1)
+	tw.tween_property(s, "modulate:a", 0.0, 1.1)
+	tw.chain().tween_callback(func(): _smokes -= 1; s.queue_free())
 
 
 func spawn_blood(pos: Vector3) -> void:
@@ -1513,8 +1540,11 @@ func _run_shot() -> void:
 	if args.has("--fire"):
 		# One volley right before capture so tracers are in flight in the frame.
 		get_tree().paused = false
-		p.fire_timer = 0.0
-		p._try_fire()
+		for k in 4:
+			p.fire_timer = 0.0
+			p._try_fire()
+			for f in 3:
+				await get_tree().process_frame
 		for k in 4:
 			var side := Basis(Vector3.UP, p.yaw) * Vector3(-40.0 + k * 3.0, 2.0 + k, -90.0)
 			var tgt := Basis(Vector3.UP, p.yaw) * Vector3(30.0, 1.0 + k * 0.5, -40.0)
@@ -1814,6 +1844,15 @@ func _run_sim() -> void:
 	_check("rifle zero 300 (%d)" % player.cur_zero(), player.cur_zero() == 300)
 	_check("zero angle sane", Weapons.zero_angle("rifle", 300.0) > 0.0005 and Weapons.zero_angle("rifle", 300.0) < 0.02)
 	_check("ammo pools: 5.56=%d 7.62=%d" % [player.ammo_of("5.56"), player.ammo_of("7.62")], player.ammo_of("5.56") > 0 and player.ammo_of("7.62") > 0)
+	# Firing feel: brass ejects and the muzzle smokes.
+	player.select_slot(player.loadout.find("rifle"))
+	for i in 30:
+		await get_tree().physics_frame
+	player.mags["rifle"] = 10
+	player.fire_timer = 0.0
+	player._try_fire()
+	await get_tree().physics_frame
+	_check("casing ejected (%d) and smoke (%d)" % [player._casings.size(), _smokes], player._casings.size() > 0 and _smokes > 0)
 	# Auto pickup: ammo for a carried gun is taken just by walking over it.
 	player.global_position = spot + Vector3(0, 1.0, 0)
 	player.ammo["7.62"] = 0

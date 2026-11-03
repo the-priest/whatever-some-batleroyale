@@ -610,6 +610,8 @@ func _shoot_logic(delta: float) -> void:
 	_muzzle_flash.rotation.z = randf() * TAU
 	if body != null:
 		_muzzle_flash.global_position = body.muzzle_position()
+		if game != null and game.player != null and game.player.global_position.distance_to(global_position) < 60.0:
+			game.spawn_smoke(_muzzle_flash.global_position, 0.6)
 	var from := _shot_origin()
 	# Aim error: skill, range, target movement and the first shots of a burst.
 	var tvel := Vector3.ZERO

@@ -201,11 +201,29 @@ func _resolve_hit(b: Dictionary, hit: Dictionary) -> void:
 			dmg *= float(d["head"])
 		elif col is Node3D and pos.y - (col as Node3D).global_position.y < 0.8:
 			dmg *= 0.8  # legs
+		# What the round hit decides the sound: helmet ping, plate, or flesh.
+		var snd := "hit_body"
+		if headshot and int(col.get("helmet_level")) > 0:
+			snd = "hit_helmet"
+		elif not headshot and int(col.get("vest_level")) > 0:
+			snd = "hit_armor"
 		var killed = col.call("take_damage", dmg, pos, headshot, shooter if is_instance_valid(shooter) else null)
 		if game != null:
 			game.spawn_blood(pos)
+			game.play_sfx_at(snd, pos, 2.0 if snd != "hit_body" else 0.0)
 		if shooter != null and is_instance_valid(shooter) and shooter.has_method("on_bullet_hit"):
 			shooter.on_bullet_hit(int(b["shot"]), pos, dmg, headshot, killed is bool and killed)
 	else:
 		if game != null:
 			game.spawn_impact(pos, hit.get("normal", Vector3.UP), col, Weapons.cls(b["id"]) == "sniper")
+			var surf := "bullet_impact"
+			if col is Node:
+				var nm := String((col as Node).name)
+				if nm.begins_with("Village") or nm.begins_with("Tree"):
+					surf = "impact_wood"
+				elif nm.begins_with("Rock"):
+					surf = "impact_stone"
+			if game.player != null and pos.distance_to(game.player.global_position) < 60.0:
+				game.play_sfx_at(surf, pos, -4.0)
+				if surf == "impact_stone" and randf() < 0.35:
+					game.play_sfx_at("ricochet", pos, -6.0)

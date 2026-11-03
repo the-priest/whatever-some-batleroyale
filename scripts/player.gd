@@ -238,6 +238,7 @@ func _physics_process(delta: float) -> void:
 
 	_update_camera(delta)
 	_update_weapon(delta)
+	_update_casings(delta)
 
 
 func _passenger(_delta: float) -> void:
@@ -628,6 +629,7 @@ func _update_weapon(delta: float) -> void:
 		if not _bolt_sound and bolt_t > 0.32:
 			_bolt_sound = true
 			_sfx("bolt", -1.0)
+			_eject_casing(false)
 		if bolt_t >= 1.0:
 			bolt_t = -1.0
 
@@ -797,6 +799,10 @@ func _try_fire() -> void:
 	flash_light.light_energy = 2.2
 	add_trauma(clampf(kick_amt * 2.2, 0.02, 0.3))
 	shots_fired += 1
+	if not bool(d.get("bolt", false)):
+		_eject_casing(Weapons.cls(id) == "shotgun")
+	if game != null and game.has_method("spawn_smoke") and muzzle != null:
+		game.spawn_smoke(muzzle.global_position, 1.4 if Weapons.cls(id) in ["shotgun", "sniper"] else 0.8)
 	if bool(d.get("bolt", false)):
 		bolt_t = 0.0
 		_bolt_sound = false
@@ -1512,6 +1518,68 @@ func _update_breath(delta: float) -> void:
 	var want := Vector2(sin(t * 0.83) + 0.35 * sin(t * 2.1), 0.6 * sin(t * 1.27 + 0.6) + 0.25 * sin(t * 2.9)) * amp
 	_scope_sway = _scope_sway.lerp(want, clampf(delta * 4.0, 0.0, 1.0))
 
+
+
+# ---------------------------------------------------------------- casings --
+var _casings: Array = []
+static var _brass_mat: StandardMaterial3D
+static var _hull_mat: StandardMaterial3D
+
+
+## Spent brass flies out of the ejection port, spins, drops and tinkles.
+func _eject_casing(shell: bool) -> void:
+	if _brass_mat == null:
+		_brass_mat = StandardMaterial3D.new()
+		_brass_mat.albedo_color = Color(0.86, 0.66, 0.28)
+		_brass_mat.metallic = 0.7
+		_brass_mat.roughness = 0.28
+		_brass_mat.emission_enabled = true
+		_brass_mat.emission = Color(0.25, 0.18, 0.06)
+		_hull_mat = StandardMaterial3D.new()
+		_hull_mat.albedo_color = Color(0.7, 0.12, 0.1)
+		_hull_mat.roughness = 0.5
+	var mi := MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = 0.0065 if shell else 0.0032
+	cm.bottom_radius = cm.top_radius
+	cm.height = 0.055 if shell else 0.026
+	cm.radial_segments = 8
+	cm.rings = 1
+	mi.mesh = cm
+	mi.material_override = _hull_mat if shell else _brass_mat
+	mi.layers = 2
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	view.add_child(mi)
+	mi.position = gun_holder.position + gun_holder.basis * Vector3(0.025, 0.035, -0.02 * _gun_scale)
+	mi.rotation = Vector3(randf() * TAU, 0, PI * 0.5)
+	var vel := Vector3(randf_range(1.3, 1.9), randf_range(1.1, 1.7), randf_range(0.1, 0.5))
+	_casings.append({"node": mi, "vel": vel, "spin": Vector3(randf_range(-30, 30), randf_range(-30, 30), randf_range(10, 25)), "t": 0.0})
+	if _casings.size() > 14:
+		var old: Dictionary = _casings.pop_front()
+		if is_instance_valid(old["node"]):
+			old["node"].queue_free()
+	# The tinkle when it lands at your feet.
+	if game != null and game.sfx != null and randf() < 0.7:
+		var tw := create_tween()
+		tw.tween_interval(randf_range(0.35, 0.6))
+		tw.tween_callback(func(): if game != null: game.sfx.play_2d("shell_hull" if shell else "casing_%d" % (randi() % 3 + 1), -15.0, 0.12))
+
+
+func _update_casings(delta: float) -> void:
+	for c in _casings.duplicate():
+		var n: MeshInstance3D = c["node"]
+		if not is_instance_valid(n):
+			_casings.erase(c)
+			continue
+		c["t"] = float(c["t"]) + delta
+		var v: Vector3 = c["vel"]
+		v.y -= 9.8 * delta
+		c["vel"] = v
+		n.position += v * delta
+		n.rotation += Vector3(c["spin"]) * delta
+		if float(c["t"]) > 0.5:
+			n.queue_free()
+			_casings.erase(c)
 
 
 func refresh_viewmodel() -> void:
