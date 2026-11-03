@@ -211,7 +211,14 @@ func _button(text: String, primary: bool) -> Button:
 	var sbp := sb.duplicate()
 	sbp.bg_color = ACCENT.darkened(0.18) if primary else Color(1, 1, 1, 0.22)
 	b.add_theme_stylebox_override("pressed", sbp)
+	b.mouse_entered.connect(_hover_sound)
 	return b
+
+
+func _hover_sound() -> void:
+	var g = get_parent()
+	if g != null and g.get("sfx") != null:
+		g.sfx.play_2d("ui_hover", -14.0, 0.05)
 
 
 func _bar(height: float, color: Color) -> ColorRect:

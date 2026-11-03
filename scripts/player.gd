@@ -262,6 +262,8 @@ func _freefall(delta: float) -> void:
 	if game != null and game.has_method("clamp_airborne"):
 		velocity = game.clamp_airborne(global_position, velocity, delta)
 	move_and_slide()
+	# Wind buffet that builds with fall speed.
+	trauma = maxf(trauma, clampf(-velocity.y / 62.0, 0.0, 1.0) * 0.42)
 	if Input.is_action_just_pressed("jump"):
 		open_chute()
 	# Auto-deploy as a safety net so a first-time player does not splat while sightseeing.
@@ -459,6 +461,12 @@ func open_chute() -> void:
 	mode = Mode.CHUTE
 	chute_open = true
 	chute_mesh.visible = true
+	# The canopy snaps open: hard jolt, the view punches in, then settles.
+	add_trauma(0.7)
+	camera.fov -= 10.0
+	pitch = clampf(pitch + 0.12, deg_to_rad(-89.0), deg_to_rad(89.0))
+	if game != null and game.sfx != null:
+		game.sfx.play_2d("chute_snap", -2.0, 0.05)
 	notice.emit("PARACHUTE DEPLOYED")
 
 
@@ -1422,6 +1430,7 @@ func set_plane_mode() -> void:
 
 
 func jump_from_plane() -> void:
+	add_trauma(0.35)
 	mode = Mode.FREEFALL
 	freefall_speed = -8.0
 	velocity = Vector3(0, -8, 0)
@@ -1479,7 +1488,10 @@ func _update_lean(delta: float) -> void:
 ## Scoped aim drifts with breathing; hold Shift to steady it for a few seconds.
 func _update_breath(delta: float) -> void:
 	var scoped := aiming and cur_zoom() >= 1.9 and aim_blend > 0.7
+	var was_holding := holding_breath
 	holding_breath = scoped and Input.is_action_pressed("sprint") and breath > 0.0
+	if holding_breath != was_holding and game != null and game.sfx != null:
+		game.sfx.play_2d("breath_in" if holding_breath else "breath_out", -10.0, 0.05)
 	if holding_breath:
 		breath = maxf(0.0, breath - delta * 22.0)
 	else:

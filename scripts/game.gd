@@ -81,6 +81,7 @@ func _ready() -> void:
 	seed_value = 100000 + int(Time.get_unix_time_from_system()) % 899999
 	sfx = Sfx.new()
 	sfx.name = "Sfx"
+	sfx.process_mode = Node.PROCESS_MODE_ALWAYS
 	add_child(sfx)
 	ballistics = Ballistics.new()
 	ballistics.name = "Ballistics"
@@ -413,11 +414,12 @@ func _cleanup_match() -> void:
 	if _wind != null and is_instance_valid(_wind):
 		_wind.queue_free()
 	_wind = null
-	for n in [_cabin, _wind2d]:
+	for n in [_cabin, _wind2d, _storm]:
 		if n != null and is_instance_valid(n):
 			n.queue_free()
 	_cabin = null
 	_wind2d = null
+	_storm = null
 	for t in tracers:
 		if is_instance_valid(t):
 			t.queue_free()
@@ -536,6 +538,76 @@ func _process(delta: float) -> void:
 	_update_mouse_capture()
 
 
+var _plane_bump_t := 3.0
+var _plane_bump := 0.0
+var _auto_t := 0.0
+var _beat_t := 0.0
+var _storm: AudioStreamPlayer = null
+
+
+## Walking over ammo for a gun you carry, or an attachment for an empty slot,
+## picks it up without pressing anything.
+func _auto_pickup(delta: float) -> void:
+	_auto_t -= delta
+	if _auto_t > 0.0 or player == null or not player.alive or player.mode != Player.Mode.GROUND:
+		return
+	_auto_t = 0.15
+	var pp := player.global_position
+	var cals := {}
+	for id in player.loadout:
+		cals[Weapons.caliber(id)] = true
+	for l in loot_pool.duplicate():
+		if not is_instance_valid(l) or l.taken:
+			continue
+		var d: Vector3 = l.global_position - pp
+		if Vector2(d.x, d.z).length() > 1.8 or absf(d.y) > 1.6:
+			continue
+		var want := false
+		match l.kind:
+			"ammo":
+				var cal: String = l.item_id if l.item_id != "" else (Weapons.caliber(player.current_id()) if player.has_gun() else "")
+				want = cals.has(cal)
+			"extmag", "comp":
+				want = player.loadout.size() > 0
+			"scope":
+				for s in player.loadout.size():
+					if str(player.attachments[s].get("scope", "")) == "" and Weapons.builtin_scope(player.loadout[s]) == "" and Weapons.scope_fits(player.loadout[s], l.item_id):
+						want = true
+		if not want or l.block_reason(player) != "":
+			continue
+		var kind: String = l.kind
+		if l.pickup(player):
+			sfx.play_at("ammo_pickup" if kind == "ammo" else "pickup", l.global_position, -6.0)
+			loot_pool.erase(l)
+
+
+## Heartbeat when hurt, storm rumble when outside the zone.
+func _update_ambience(delta: float) -> void:
+	if player == null:
+		return
+	if player.alive and player.hp < 30.0 and player.mode == Player.Mode.GROUND:
+		_beat_t -= delta
+		if _beat_t <= 0.0:
+			var k := clampf(player.hp / 30.0, 0.0, 1.0)
+			_beat_t = lerpf(0.5, 0.85, k)
+			sfx.play_2d("heartbeat", lerpf(-2.0, -10.0, k), 0.0)
+	var outside := zone != null and player.alive and zone.is_outside(player.global_position) and player.mode == Player.Mode.GROUND
+	if outside and _storm == null:
+		var s := sfx.stream("storm_loop")
+		if s != null:
+			_make_loop(s)
+			_storm = AudioStreamPlayer.new()
+			_storm.stream = s
+			_storm.volume_db = -40.0
+			add_child(_storm)
+			_storm.play()
+	if _storm != null:
+		_storm.volume_db = lerpf(_storm.volume_db, -8.0 if outside else -60.0, clampf(delta * 2.0, 0.0, 1.0))
+		if not outside and _storm.volume_db < -55.0:
+			_storm.queue_free()
+			_storm = null
+
+
 func _follow_plane_cam(delta: float) -> void:
 	if plane == null:
 		return
@@ -545,6 +617,18 @@ func _follow_plane_cam(delta: float) -> void:
 	var want := focus + orbit * Vector3(0, 0, 34.0)
 	menu_cam.global_position = menu_cam.global_position.lerp(want, clampf(delta * 6.0, 0.0, 1.0))
 	menu_cam.look_at(focus, Vector3.UP)
+	# Riding along: engine vibration, slow turbulence, and the odd jolt.
+	_plane_bump_t -= delta
+	if _plane_bump_t <= 0.0:
+		_plane_bump_t = randf_range(3.5, 8.0)
+		_plane_bump = randf_range(0.6, 1.0)
+		sfx.play_2d("plane_bump", -8.0, 0.15)
+	_plane_bump = maxf(0.0, _plane_bump - delta * 1.8)
+	var t := Time.get_ticks_msec() * 0.001
+	var vib := 0.0025 + _plane_bump * _plane_bump * 0.03
+	menu_cam.rotate_object_local(Vector3.RIGHT, (sin(t * 47.0) + sin(t * 31.0 + 1.1)) * vib + sin(t * 0.6) * 0.006 + _plane_bump * sin(t * 18.0) * 0.02)
+	menu_cam.rotate_object_local(Vector3.UP, (sin(t * 39.0 + 2.0) + sin(t * 23.0)) * vib * 0.8)
+	menu_cam.rotate_object_local(Vector3.FORWARD, sin(t * 0.45) * 0.02 + _plane_bump * sin(t * 13.0) * 0.03)
 	menu_cam.fov = lerpf(menu_cam.fov, 62.0, delta * 2.0)
 
 
@@ -563,6 +647,8 @@ func _update_play(delta: float) -> void:
 	match_time += delta
 	survive_time += delta
 	_update_wind(delta)
+	_update_ambience(delta)
+	_auto_pickup(delta)
 	if player == null or not is_instance_valid(player):
 		return
 	_update_airborne_bots()
@@ -1728,6 +1814,15 @@ func _run_sim() -> void:
 	_check("rifle zero 300 (%d)" % player.cur_zero(), player.cur_zero() == 300)
 	_check("zero angle sane", Weapons.zero_angle("rifle", 300.0) > 0.0005 and Weapons.zero_angle("rifle", 300.0) < 0.02)
 	_check("ammo pools: 5.56=%d 7.62=%d" % [player.ammo_of("5.56"), player.ammo_of("7.62")], player.ammo_of("5.56") > 0 and player.ammo_of("7.62") > 0)
+	# Auto pickup: ammo for a carried gun is taken just by walking over it.
+	player.global_position = spot + Vector3(0, 1.0, 0)
+	player.ammo["7.62"] = 0
+	var box := _spawn_loot("ammo", "7.62", ground_at(player.global_position) + Vector3(0, 0.08, 0))
+	var stray := _spawn_loot("ammo", "12ga", ground_at(player.global_position) + Vector3(0.4, 0.08, 0))
+	for i in 30:
+		await get_tree().physics_frame
+	_check("auto pickup 7.62 (%d)" % player.ammo_of("7.62"), player.ammo_of("7.62") > 0 and (not is_instance_valid(box) or box.taken))
+	_check("no auto pickup for 12ga (no shotgun)", is_instance_valid(stray) and not stray.taken)
 	# Grenade.
 	player.global_position = spot + Vector3(0, 1.0, 0)
 	var g_before := player.grenades
