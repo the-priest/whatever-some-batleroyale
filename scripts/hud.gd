@@ -4,7 +4,8 @@ extends CanvasLayer
 signal play_pressed
 signal resume_pressed
 signal quit_pressed
-signal settings_changed(sensitivity: float, volume: float)
+signal settings_changed(sensitivity: float, volume: float, fov: float)
+signal loadout_changed(primary: String, secondary: String, optic: String, enabled: bool)
 
 # All HUD is constructed in code so the project stays scene-file free and the
 # layout can respond to the viewport at runtime.
@@ -75,6 +76,17 @@ var end_stats: Label
 var end_hint: Label
 var zone_panel: Control
 var pause_panel: Control
+var menu_card: VBoxContainer
+var menu_preview: GunPreview
+var menu_loadout: Label
+var menu_loadout_sub: Label
+var loadout_screen: LoadoutScreen
+var settings_from_menu := false
+var _pause_resume: Button
+var _pause_leave: Button
+var _pause_title: Label
+var fov_slider: HSlider
+var lbl_fov: Label
 var sens_slider: HSlider
 var vol_slider: HSlider
 var lbl_sens: Label
@@ -354,7 +366,11 @@ func _draw_scope() -> void:
 	# Bullet-drop holdover marks: where the round lands at 100 m steps,
 	# for this zoom and a typical rifle round.
 	var zoom := float(Weapons.SCOPE_ZOOM.get(scope_name, 4.0))
-	var fov := deg_to_rad(82.0 / zoom)
+	var base_fov := 82.0
+	var pf = get_parent().get("player")
+	if pf != null:
+		base_fov = float(pf.base_fov)
+	var fov := deg_to_rad(base_fov / zoom)
 	var px_per_rad := (sz.y * 0.5) / tan(fov * 0.5)
 	var zero := 100.0
 	var pl = get_parent().get("player")
@@ -614,64 +630,122 @@ func _build_menu() -> void:
 	menu.mouse_filter = Control.MOUSE_FILTER_STOP
 	root.add_child(menu)
 
-	var bg := ColorRect.new()
-	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	bg.color = Color(0.02, 0.024, 0.028, 0.45)
-	menu.add_child(bg)
-
-	var side := ColorRect.new()
-	side.set_anchors_preset(Control.PRESET_LEFT_WIDE)
-	side.offset_right = 760
-	side.color = Color(0.02, 0.024, 0.028, 0.45)
-	side.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	menu.add_child(side)
+	# Darken toward the left so the text reads over the flyover.
+	var grad := TextureRect.new()
+	grad.set_anchors_preset(Control.PRESET_FULL_RECT)
+	grad.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var g := Gradient.new()
+	g.set_color(0, Color(0.02, 0.024, 0.03, 0.92))
+	g.set_color(1, Color(0.02, 0.024, 0.03, 0.15))
+	g.add_point(0.45, Color(0.02, 0.024, 0.03, 0.7))
+	var gt := GradientTexture2D.new()
+	gt.gradient = g
+	gt.fill_from = Vector2(0, 0)
+	gt.fill_to = Vector2(1, 0)
+	grad.texture = gt
+	grad.stretch_mode = TextureRect.STRETCH_SCALE
+	menu.add_child(grad)
 
 	var col := VBoxContainer.new()
 	col.set_anchors_preset(Control.PRESET_CENTER_LEFT)
 	col.offset_left = 96
-	col.offset_right = 860
-	col.offset_top = -250
-	col.offset_bottom = 260
+	col.offset_right = 760
+	col.offset_top = -300
+	col.offset_bottom = 300
 	col.add_theme_constant_override("separation", 10)
 	col.alignment = BoxContainer.ALIGNMENT_CENTER
 	menu.add_child(col)
 
-	var kicker := _lv("I S L A N D   D R O P   ·   2 0   P L A Y E R S", 12, ACCENT)
-	col.add_child(kicker)
-
-	var title := _lv("BLOCK ROYALE", 92, WHITE)
+	col.add_child(_lv("I S L A N D   D R O P   ·   2 0   P L A Y E R S   ·   S O L O", 12, ACCENT))
+	var title := _lv("BLOCK ROYALE", 96, WHITE)
 	title.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.55))
+	title.add_theme_constant_override("shadow_offset_y", 4)
 	col.add_child(title)
-
-	var sub := _lv("JUMP  ·  LOOT  ·  SURVIVE", 18, MUTED, false)
-	col.add_child(sub)
-	col.add_child(_spacer(26))
+	col.add_child(_lv("DROP  ·  LOOT  ·  OUTLAST", 18, MUTED, false))
+	col.add_child(_spacer(30))
 
 	play_button = _button("P L A Y", true)
+	play_button.custom_minimum_size = Vector2(340, 64)
 	play_button.pressed.connect(func(): play_pressed.emit())
 	col.add_child(play_button)
-	col.add_child(_spacer(18))
-
-	var grid := GridContainer.new()
-	grid.columns = 3
-	grid.add_theme_constant_override("h_separation", 26)
-	grid.add_theme_constant_override("v_separation", 4)
-	for t in ["WASD  MOVE", "SHIFT  SPRINT", "C / CTRL  CROUCH", "LMB  FIRE", "RMB  AIM", "R  RELOAD",
-			"F  PICK UP", "1 2 / WHEEL  WEAPONS", "Q / E  LEAN", "B  FIRE MODE", "PGUP/DN  ZEROING", "SHIFT (SCOPED)  HOLD BREATH",
-			"H  HEAL  (4 5 6)", "G  GRENADE", "M  MAP", "ESC  PAUSE"]:
-		var l := _lv(t, 12, MUTED, false)
-		grid.add_child(l)
-	col.add_child(grid)
-
+	for item in [["LOADOUT", "_open_loadout"], ["SETTINGS", "_open_settings"], ["QUIT", "_quit"]]:
+		var b := _button(item[0], false)
+		b.custom_minimum_size = Vector2(340, 48)
+		b.pressed.connect(Callable(self, item[1]))
+		col.add_child(b)
+	col.add_child(_spacer(20))
 	menu_seed = _lv("", 11, DIM, false)
 	col.add_child(menu_seed)
 
-	var foot := _lv("SQUAD OF ONE  ·  NO FRIENDS  ·  NO MERCY", 11, DIM, false)
-	foot.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	# Loadout card on the right: the gun you will drop with.
+	menu_card = VBoxContainer.new()
+	menu_card.set_anchors_preset(Control.PRESET_CENTER_RIGHT)
+	menu_card.offset_left = -720
+	menu_card.offset_right = -70
+	menu_card.offset_top = -230
+	menu_card.offset_bottom = 230
+	menu_card.add_theme_constant_override("separation", 6)
+	menu_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	menu.add_child(menu_card)
+	menu_card.add_child(_lv("YOUR LOADOUT", 12, ACCENT))
+	menu_preview = GunPreview.new()
+	menu_preview.custom_minimum_size = Vector2(650, 300)
+	menu_card.add_child(menu_preview)
+	menu_loadout = _lv("", 22, WHITE)
+	menu_card.add_child(menu_loadout)
+	menu_loadout_sub = _lv("", 13, MUTED, false)
+	menu_card.add_child(menu_loadout_sub)
+
+	var foot := _lv("WASD MOVE · SHIFT SPRINT · C CROUCH · RMB AIM · R RELOAD · F PICK UP · Q/E LEAN · B FIRE MODE · G GRENADE · H HEAL · M MAP", 11, DIM, false)
+	foot.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
 	foot.offset_left = 96
-	foot.offset_top = -52
-	foot.offset_bottom = -28
+	foot.offset_top = -48
+	foot.offset_bottom = -26
 	menu.add_child(foot)
+
+	loadout_screen = LoadoutScreen.new()
+	loadout_screen.setup(self)
+	loadout_screen.visible = false
+	loadout_screen.z_index = 20
+	loadout_screen.changed.connect(func(p, s, o, e): loadout_changed.emit(p, s, o, e); _update_card(p, s, o, e))
+	loadout_screen.closed.connect(func(): sfx_click(); loadout_screen.visible = false)
+	root.add_child(loadout_screen)
+	loadout_screen.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+
+
+func set_loadout(p: String, s: String, o: String, e: bool) -> void:
+	loadout_screen.set_values(p, s, o, e)
+	_update_card(p, s, o, e)
+
+
+func _update_card(p: String, s: String, o: String, e: bool) -> void:
+	menu_preview.show_gun(p)
+	menu_loadout.text = "%s   +   %s" % [str(Weapons.def(p)["name"]), str(Weapons.def(s)["name"])]
+	var optic := ("  ·  " + ("RED DOT" if o == "reddot" else o.to_upper())) if o != "" else ""
+	menu_loadout_sub.text = ("DROPPING IN WITH THIS KIT" if e else "LOADOUT OFF  —  LOOT EVERYTHING") + optic
+
+
+func _open_loadout() -> void:
+	sfx_click()
+	loadout_screen.visible = true
+
+
+func _open_settings() -> void:
+	sfx_click()
+	settings_from_menu = true
+	_pause_leave.visible = false
+	_pause_resume.text = "BACK"
+	show_pause(true)
+
+
+func _quit() -> void:
+	get_tree().quit()
+
+
+func sfx_click() -> void:
+	var g = get_parent()
+	if g != null and g.get("sfx") != null:
+		g.sfx.play_ui("ui_click", -8.0)
 
 
 func _build_end() -> void:
@@ -719,6 +793,7 @@ func _build_pause() -> void:
 	pause_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
 	pause_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	pause_panel.visible = false
+	pause_panel.z_index = 30
 	root.add_child(pause_panel)
 	var bg := ColorRect.new()
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -735,7 +810,8 @@ func _build_pause() -> void:
 	col.add_theme_constant_override("separation", 10)
 	pause_panel.add_child(col)
 
-	col.add_child(_lv("PAUSED", 44, WHITE))
+	_pause_title = _lv("PAUSED", 44, WHITE)
+	col.add_child(_pause_title)
 	col.add_child(_spacer(8))
 
 	lbl_sens = _lv("MOUSE SENSITIVITY", 12, MUTED)
@@ -759,30 +835,59 @@ func _build_pause() -> void:
 	vol_slider.custom_minimum_size = Vector2(300, 22)
 	vol_slider.value_changed.connect(func(_v): _settings_changed())
 	col.add_child(vol_slider)
+
+	lbl_fov = _lv("FIELD OF VIEW", 12, MUTED)
+	col.add_child(lbl_fov)
+	fov_slider = HSlider.new()
+	fov_slider.min_value = 70.0
+	fov_slider.max_value = 100.0
+	fov_slider.step = 1.0
+	fov_slider.value = 82.0
+	fov_slider.custom_minimum_size = Vector2(300, 22)
+	fov_slider.value_changed.connect(func(_v): _settings_changed())
+	col.add_child(fov_slider)
 	col.add_child(_spacer(12))
 
 	var resume := _button("RESUME", true)
-	resume.pressed.connect(func(): resume_pressed.emit())
+	resume.pressed.connect(_on_resume_button)
 	col.add_child(resume)
+	_pause_resume = resume
 	var quit := _button("LEAVE MATCH", false)
 	quit.pressed.connect(func(): quit_pressed.emit())
 	col.add_child(quit)
+	_pause_leave = quit
 	var exit := _button("QUIT GAME", false)
 	exit.pressed.connect(func(): get_tree().quit())
 	col.add_child(exit)
 
 
+func _on_resume_button() -> void:
+	if settings_from_menu:
+		sfx_click()
+		settings_from_menu = false
+		show_pause(false)
+		_pause_leave.visible = true
+		_pause_resume.text = "RESUME"
+		return
+	resume_pressed.emit()
+
+
 func _settings_changed() -> void:
+	_settings_labels()
+	settings_changed.emit(sens_slider.value, vol_slider.value, fov_slider.value)
+
+
+func _settings_labels() -> void:
 	lbl_sens.text = "MOUSE SENSITIVITY   %.2f" % sens_slider.value
 	lbl_vol.text = "VOLUME   %d%%" % int(vol_slider.value * 100.0)
-	settings_changed.emit(sens_slider.value, vol_slider.value)
+	lbl_fov.text = "FIELD OF VIEW   %d°" % int(fov_slider.value)
 
 
-func set_settings(sens: float, vol: float) -> void:
+func set_settings(sens: float, vol: float, fov: float = 82.0) -> void:
 	sens_slider.set_value_no_signal(sens)
 	vol_slider.set_value_no_signal(vol)
-	lbl_sens.text = "MOUSE SENSITIVITY   %.2f" % sens
-	lbl_vol.text = "VOLUME   %d%%" % int(vol * 100.0)
+	fov_slider.set_value_no_signal(fov)
+	_settings_labels()
 
 
 # --------------------------------------------------------------------- api --
@@ -803,6 +908,8 @@ func set_crosshair_visible(v: bool) -> void:
 
 func show_pause(v: bool) -> void:
 	pause_panel.visible = v
+	if _pause_title != null:
+		_pause_title.text = "SETTINGS" if settings_from_menu else "PAUSED"
 	if v:
 		big_map.visible = false
 
@@ -843,9 +950,9 @@ func update_weapon(id: String, mag: int, reserve: int) -> void:
 	var p = get_parent().get("player")
 	var tags := ""
 	if p != null and p.has_gun() and p.current_id() == id:
-		if bool(d.get("auto", false)) and id != "lmg":
+		if bool(d.get("auto", false)) and Weapons.cls(id) != "lmg":
 			tags += "   " + ("SINGLE" if not p.is_auto() else "AUTO")
-		if int(Weapons.ZERO_MAX.get(id, 100)) > 100:
+		if Weapons.zero_max(id) > 100:
 			tags += "   %dM" % p.cur_zero()
 	lbl_weapon.text = str(d["name"]) + tags
 	lbl_cal.text = Weapons.caliber(id).to_upper()
@@ -1077,6 +1184,10 @@ func show_menu(seed_text: String) -> void:
 
 func hide_menu() -> void:
 	menu.visible = false
+	loadout_screen.visible = false
+	settings_from_menu = false
+	_pause_leave.visible = true
+	_pause_resume.text = "RESUME"
 
 
 func show_death(killer: String, placement: int, stats: Dictionary) -> void:

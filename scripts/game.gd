@@ -10,10 +10,11 @@ const BOT_NAMES := [
 	"THORN", "VOID", "WREN", "ZERO", "ASH", "BRICK", "COBRA", "DUSK",
 ]
 const WEAPON_DROP_WEIGHTS := {
-	"pistol": 22, "smg": 24, "rifle": 22, "shotgun": 14, "dmr": 8, "lmg": 6, "sniper": 4,
+	"pistol": 12, "m1911": 9, "smg": 14, "grease": 10, "shotgun": 11, "autoshotgun": 4,
+	"rifle": 13, "carbine": 12, "bullpup": 6, "lmg": 3, "dmr": 5, "m24": 4, "axmc": 1,
 }
-const AIRDROP_WEAPONS := ["sniper", "lmg", "dmr", "sniper"]
-const HI_WEAPONS := ["dmr", "sniper", "rifle", "lmg", "dmr"]
+const AIRDROP_WEAPONS := ["sniper", "sniper", "axmc", "lmg"]
+const HI_WEAPONS := ["dmr", "m24", "carbine", "bullpup", "rifle", "lmg", "axmc"]
 const HI_GEAR := [["scope", "4x"], ["scope", "8x"], ["armor", "2"], ["helmet", "2"], ["armor", "3"], ["med", ""], ["scope", "2x"], ["ammo", "7.62"], ["ammo", "5.56"]]
 ## Floor loot table for non-weapon spots: [kind, id, weight].
 const GEAR_TABLE := [
@@ -65,6 +66,11 @@ var end_cam_spot := Vector3.ZERO
 var end_cam_angle := 0.0
 var mouse_sens := 1.0
 var volume := 0.8
+var fov := 82.0
+var loadout_primary := "carbine"
+var loadout_secondary := "pistol"
+var loadout_optic := "reddot"
+var loadout_enabled := true
 var _loot_label_t := 0.0
 var _last_best: LootPickup = null
 var _wind: AudioStreamPlayer3D = null
@@ -87,6 +93,7 @@ func _ready() -> void:
 	hud.resume_pressed.connect(_resume)
 	hud.quit_pressed.connect(_quit_to_menu)
 	hud.settings_changed.connect(_on_settings_changed)
+	hud.loadout_changed.connect(_on_loadout_changed)
 	hud.show_menu("GENERATING ISLAND ...")
 	_load_settings()
 
@@ -160,24 +167,72 @@ func _load_settings() -> void:
 	if cfg.load(SETTINGS_PATH) == OK:
 		mouse_sens = float(cfg.get_value("input", "sensitivity", 1.0))
 		volume = float(cfg.get_value("audio", "volume", 0.8))
-	hud.set_settings(mouse_sens, volume)
+		fov = float(cfg.get_value("video", "fov", 82.0))
+		loadout_primary = str(cfg.get_value("loadout", "primary", loadout_primary))
+		loadout_secondary = str(cfg.get_value("loadout", "secondary", loadout_secondary))
+		loadout_optic = str(cfg.get_value("loadout", "optic", loadout_optic))
+		loadout_enabled = bool(cfg.get_value("loadout", "enabled", loadout_enabled))
+	if not Weapons.DEFS.has(loadout_primary):
+		loadout_primary = "carbine"
+	if not Weapons.DEFS.has(loadout_secondary):
+		loadout_secondary = "pistol"
+	hud.set_settings(mouse_sens, volume, fov)
+	hud.set_loadout(loadout_primary, loadout_secondary, loadout_optic, loadout_enabled)
 	_apply_settings()
 
 
 func _apply_settings() -> void:
 	if player != null:
 		player.mouse_sens = 0.0022 * mouse_sens
+		player.base_fov = fov
 	AudioServer.set_bus_volume_db(0, linear_to_db(maxf(0.0001, volume)))
 
 
-func _on_settings_changed(sens: float, vol: float) -> void:
+func _on_settings_changed(sens: float, vol: float, p_fov: float) -> void:
 	mouse_sens = sens
 	volume = vol
+	fov = p_fov
 	_apply_settings()
+	_save_settings()
+
+
+func _on_loadout_changed(p: String, s: String, o: String, e: bool) -> void:
+	loadout_primary = p
+	loadout_secondary = s
+	loadout_optic = o
+	loadout_enabled = e
+	_save_settings()
+
+
+func _save_settings() -> void:
 	var cfg := ConfigFile.new()
 	cfg.set_value("input", "sensitivity", mouse_sens)
 	cfg.set_value("audio", "volume", volume)
+	cfg.set_value("video", "fov", fov)
+	cfg.set_value("loadout", "primary", loadout_primary)
+	cfg.set_value("loadout", "secondary", loadout_secondary)
+	cfg.set_value("loadout", "optic", loadout_optic)
+	cfg.set_value("loadout", "enabled", loadout_enabled)
 	cfg.save(SETTINGS_PATH)
+
+
+## Drop-in kit: your chosen guns, a few boxes of their ammo, the optic.
+func _give_loadout() -> void:
+	if not loadout_enabled or player == null:
+		return
+	player.give_weapon(loadout_primary)
+	player.give_weapon(loadout_secondary)
+	var prim_slot := player.loadout.find(loadout_primary)
+	for i in 3:
+		player.add_ammo_cal(Weapons.caliber(loadout_primary), int(Weapons.AMMO_BOX.get(Weapons.caliber(loadout_primary), 30)))
+	for i in 2:
+		player.add_ammo_cal(Weapons.caliber(loadout_secondary), int(Weapons.AMMO_BOX.get(Weapons.caliber(loadout_secondary), 30)))
+	if loadout_optic != "" and prim_slot >= 0 and Weapons.scope_fits(loadout_primary, loadout_optic):
+		player.attachments[prim_slot]["scope"] = loadout_optic
+	if prim_slot >= 0:
+		player.select_slot(prim_slot)
+	player.refresh_viewmodel()
+	player.inventory_changed.emit()
 
 
 func _resume() -> void:
@@ -416,6 +471,28 @@ func _random_ground_point(max_r: float) -> Vector3:
 	return Vector3(0, 60, 0)
 
 
+## What the ground under a point is made of, for footsteps.
+func surface_at(pos: Vector3) -> String:
+	if terrain == null:
+		return "grass"
+	if terrain.is_water(pos.x, pos.z) and pos.y < Terrain.WATER_LEVEL + 0.8:
+		return "water"
+	var q := PhysicsRayQueryParameters3D.create(pos + Vector3.UP * 0.4, pos + Vector3.DOWN * 1.2, 1)
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	if not hit.is_empty():
+		var col: Object = hit["collider"]
+		if col is Node:
+			var n := (col as Node).name
+			if n.begins_with("Village"):
+				return "wood"
+			if n.begins_with("Rock"):
+				return "stone"
+	var h := terrain.height_at(pos.x, pos.z)
+	if h < 3.6 or terrain.slope_at(pos.x, pos.z) > 0.35:
+		return "stone"
+	return "grass"
+
+
 ## Ground height under a point, including houses and props.
 func ground_at(pos: Vector3) -> Vector3:
 	var q := PhysicsRayQueryParameters3D.create(pos + Vector3.UP * 1.5, pos + Vector3.DOWN * 30.0, 1)
@@ -626,8 +703,8 @@ func _update_prompt() -> void:
 				# Only the item you are about to take gets a name tag; light shafts
 				# fade out up close so a pile of loot does not become a wall of light.
 				l.label.visible = l == best
-				l.beacon.visible = dd > 7.0
-				l.ring.visible = dd < 60.0
+				l.beacon.visible = false
+				l.ring.visible = dd < 14.0
 
 
 func _update_minimap() -> void:
@@ -837,21 +914,27 @@ func _win() -> void:
 func on_player_landed() -> void:
 	sfx.play_ui("land_thud", -6.0)
 	hud.set_plane_path(Vector3.ZERO, Vector3.ZERO)
-	hud.show_notice("FIND A WEAPON  —  LOOK FOR THE GLOW", 3.0)
+	if loadout_enabled:
+		_give_loadout()
+		hud.show_notice("LOADOUT READY  —  FIND ARMOR AND MEDS", 3.0)
+	else:
+		hud.show_notice("FIND A WEAPON  —  CHECK THE HOUSES", 3.0)
 	player.add_trauma(0.35)
 
 
-func on_bot_landed(_bot: Bot) -> void:
-	pass
+func on_bot_landed(bot: Bot) -> void:
+	# With loadouts on, bots get a kit too so nobody lands defenceless.
+	if loadout_enabled and not bot.armed:
+		bot.arm_weapon(_weighted_weapon())
 
 
 func on_player_damaged(_amount: float, _from: Vector3) -> void:
 	pass
 
 
-func on_player_hit(pos: Vector3, dmg: float, headshot: bool) -> void:
+func on_player_hit(_pos: Vector3, dmg: float, _headshot: bool) -> void:
+	# No floating numbers: the hitmarker and sound are the feedback.
 	damage_dealt += dmg
-	spawn_damage_number(pos, dmg, headshot)
 
 
 ## Every gunshot: nearby bots hear it, distant ones show on the map.
@@ -922,7 +1005,7 @@ func _spawn_airdrop() -> void:
 func on_airdrop_landed(drop: Airdrop) -> void:
 	var base := drop.global_position
 	var gun: String = AIRDROP_WEAPONS[randi() % AIRDROP_WEAPONS.size()]
-	var items: Array = [["weapon", gun], ["armor", "3"], ["helmet", "3"], ["med", ""], ["scope", "8x" if gun == "sniper" or gun == "dmr" else "4x"], ["ammo", Weapons.caliber(gun)], ["ammo", Weapons.caliber(gun)]]
+	var items: Array = [["weapon", gun], ["armor", "3"], ["helmet", "3"], ["med", ""], ["scope", "8x" if Weapons.cls(gun) in ["sniper", "dmr"] else "4x"], ["ammo", Weapons.caliber(gun)], ["ammo", Weapons.caliber(gun)]]
 	for i in items.size():
 		var a := TAU * float(i) / float(items.size())
 		var p := ground_at(base + Vector3(cos(a), 0.0, sin(a)) * 1.9) + Vector3(0, 0.08, 0)
@@ -1138,6 +1221,8 @@ func _run_shot() -> void:
 		elif a.begins_with("--yaw="):
 			ang = float(a.substr(6))
 	if OS.get_cmdline_user_args().has("--menu"):
+		if OS.get_cmdline_user_args().has("--loadout"):
+			hud._open_loadout()
 		for i in 30:
 			await get_tree().process_frame
 		await RenderingServer.frame_post_draw
@@ -1185,6 +1270,10 @@ func _run_shot() -> void:
 	for a in args:
 		if a.begins_with("--gun="):
 			p.give_weapon(a.substr(6))
+	for a in args:
+		if a.begins_with("--optic="):
+			p.attachments[p.slot]["scope"] = a.substr(8)
+			p.refresh_viewmodel()
 	if args.has("--hud"):
 		p.landed = true
 		hud.set_crosshair_visible(true)
@@ -1448,7 +1537,7 @@ func _run_sim() -> void:
 		await get_tree().physics_frame
 	# Loot of every kind.
 	var kinds := [["weapon", "rifle"], ["ammo", "5.56"], ["armor", "2"], ["helmet", "1"], ["bandage", ""], ["med", ""],
-		["energy", ""], ["scope", "4x"], ["extmag", ""], ["comp", ""], ["grenade", ""], ["weapon", "sniper"], ["armor", "3"], ["ammo", "7.62"]]
+		["energy", ""], ["scope", "4x"], ["extmag", ""], ["comp", ""], ["grenade", ""], ["weapon", "sniper"], ["armor", "3"], ["ammo", "7.62"], ["ammo", "7.62"], ["ammo", "7.62"]]
 	for k in kinds:
 		var l := _spawn_loot(k[0], k[1], player.global_position)
 		await get_tree().process_frame
@@ -1509,7 +1598,7 @@ func _run_sim() -> void:
 	var eye := player.global_position + Vector3(0, Player.EYE, 0)
 	var aim := target.global_position + Vector3(0, 1.0, 0)
 	var dist := eye.distance_to(aim)
-	var tof := dist / 720.0
+	var tof := dist / float(Weapons.def("sniper")["velocity"])
 	var hold := aim + Vector3(0, 0.5 * Ballistics.GRAVITY * tof * tof, 0)
 	var hp_before := target.hp
 	# Drop check: a level shot into open sky, sampled after ~0.35 s of flight.

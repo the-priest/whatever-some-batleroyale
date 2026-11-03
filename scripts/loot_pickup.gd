@@ -71,18 +71,22 @@ func accent_color() -> Color:
 
 func _ready() -> void:
 	var accent := accent_color()
+	# Loot rests on the ground like a real object: no floating, no spinning.
 	spin = Node3D.new()
-	spin.position.y = 0.55
+	spin.rotation.y = randf() * TAU
 	add_child(spin)
 
 	if kind == "weapon":
 		var gun := Weapons.make_drop_node(item_id)
-		gun.scale = Vector3.ONE * 0.62
-		gun.rotation.y = PI * 0.5
-		gun.rotation.z = 0.25
+		var length := float(Weapons.def(item_id).get("len", 0.8))
+		gun.scale = Vector3.ONE * length
+		# Lying on its side.
+		gun.rotation.z = PI * 0.5
+		gun.position.y = 0.035
 		spin.add_child(gun)
 	else:
 		_build_item_model(accent)
+		_settle_item()
 
 	# Glow ring on the ground.
 	ring = MeshInstance3D.new()
@@ -97,9 +101,12 @@ func _ready() -> void:
 	rm.albedo_color = Color(accent.r, accent.g, accent.b, 0.85)
 	rm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	ring.material_override = rm
-	ring.position.y = 0.03
-	ring.scale = Vector3.ONE * (0.9 if kind == "weapon" else 0.7)
+	ring.position.y = 0.02
+	ring.scale = Vector3(1.0, 0.25, 1.0) * (0.9 if kind == "weapon" else 0.6)
 	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# A faint ground marker only shows when you are close (see game.gd).
+	rm.albedo_color.a = 0.35
+	ring.visible = false
 	add_child(ring)
 
 	# Light shaft: taller for better loot.
@@ -111,6 +118,7 @@ func _ready() -> void:
 	cyl.radial_segments = 6
 	cyl.rings = 1
 	beacon.mesh = cyl
+	beacon.visible = false
 	var bmm := StandardMaterial3D.new()
 	bmm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	bmm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -134,7 +142,7 @@ func _ready() -> void:
 	label.outline_modulate = Color(0, 0, 0, 0.85)
 	label.outline_size = 10
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	label.position.y = 1.15
+	label.position.y = 0.55
 	label.visible = false
 	add_child(label)
 
@@ -295,10 +303,11 @@ func _pop() -> void:
 	tw.chain().tween_callback(queue_free)
 
 
-func _process(delta: float) -> void:
-	if taken:
-		return
-	var t := Time.get_ticks_msec() * 0.001
-	spin.position.y = 0.62 + sin(t * 2.2 + bob_phase) * 0.07
-	spin.rotation.y += delta * (1.05 if kind == "weapon" else 0.7)
-	ring.scale = Vector3.ONE * ((0.9 if kind == "weapon" else 0.7) + sin(t * 3.0 + bob_phase) * 0.08)
+func _settle_item() -> void:
+	# Items are modelled centred on the origin; drop them so they sit on the floor.
+	var lowest := 0.0
+	for c in spin.get_children():
+		if c is MeshInstance3D and (c as MeshInstance3D).mesh != null:
+			var a: AABB = (c as MeshInstance3D).transform * (c as MeshInstance3D).mesh.get_aabb()
+			lowest = minf(lowest, a.position.y)
+	spin.position.y = -lowest + 0.005

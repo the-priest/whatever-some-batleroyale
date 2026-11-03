@@ -79,7 +79,7 @@ func fire(shooter: Node, from: Vector3, dir: Vector3, weapon_id: String, visual_
 	var speed := float(d.get("velocity", 500.0))
 	var mi := _take_mesh()
 	var mine: bool = shooter != null and shooter is Player
-	mi.material_override = _mat_sniper if weapon_id == "sniper" or weapon_id == "dmr" else (_mat_mine if mine else _mat_enemy)
+	mi.material_override = _mat_sniper if Weapons.cls(weapon_id) in ["sniper", "dmr"] else (_mat_mine if mine else _mat_enemy)
 	var b := {
 		"pos": from,
 		"vel": dir.normalized() * speed,
@@ -158,7 +158,7 @@ func _place_tracer(b: Dictionary, cam: Camera3D = null) -> void:
 	if cam != null:
 		# Keep a few pixels wide however far away it is.
 		width = maxf(width, head.distance_to(cam.global_position) * 0.0032)
-	if b["id"] == "sniper":
+	if Weapons.cls(b["id"]) == "sniper":
 		width *= 1.5
 	var center := head - dir * length * 0.5
 	var up := Vector3.UP if absf(dir.y) < 0.98 else Vector3.RIGHT
@@ -191,7 +191,11 @@ func _resolve_hit(b: Dictionary, hit: Dictionary) -> void:
 		var headshot := false
 		if col.has_method("head_y"):
 			headshot = pos.y >= float(col.call("head_y"))
-		var falloff := clampf(1.0 - (float(b["dist"]) / maxf(1.0, float(b["range"]))) * 0.45, 0.4, 1.0)
+		# Rifle rounds keep most of their punch; buckshot falls off hard.
+		var shot_cls := Weapons.cls(b["id"])
+		var slope := 0.55 if shot_cls == "shotgun" else 0.25
+		var floor_k := 0.3 if shot_cls == "shotgun" else 0.75
+		var falloff := clampf(1.0 - (float(b["dist"]) / maxf(1.0, float(b["range"]))) * slope, floor_k, 1.0)
 		var dmg := float(d["damage"]) * falloff * float(b["mult"])
 		if headshot:
 			dmg *= float(d["head"])
@@ -204,4 +208,4 @@ func _resolve_hit(b: Dictionary, hit: Dictionary) -> void:
 			shooter.on_bullet_hit(int(b["shot"]), pos, dmg, headshot, killed is bool and killed)
 	else:
 		if game != null:
-			game.spawn_impact(pos, hit.get("normal", Vector3.UP), col, b["id"] == "sniper")
+			game.spawn_impact(pos, hit.get("normal", Vector3.UP), col, Weapons.cls(b["id"]) == "sniper")

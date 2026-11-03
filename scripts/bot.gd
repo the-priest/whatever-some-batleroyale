@@ -448,8 +448,8 @@ func _animate_ground() -> void:
 		_step += planar * get_physics_process_delta_time()
 		if _step > 2.9:
 			_step = 0.0
-			if game != null and game.player != null and game.player.global_position.distance_to(global_position) < 32.0:
-				game.play_sfx_at("footstep_%d" % (randi() % 4 + 1), global_position, -3.0)
+			if game != null and game.player != null and game.player.global_position.distance_to(global_position) < 42.0:
+				game.play_sfx_at("step_%s_%d" % [game.surface_at(global_position), randi() % 4 + 1], global_position, 1.0 if planar > 5.5 else -3.0)
 	if is_on_floor() and planar > 0.4:
 		var want := "Sprint" if planar > 5.6 else "Jog_Fwd"
 		if want != speed_anim:
@@ -563,7 +563,7 @@ func arm_weapon(id: String) -> void:
 		for c in gun_node.get_children():
 			c.queue_free()
 		var gun := Weapons.make_drop_node(id)
-		gun.scale = Vector3.ONE * float(d["scale"]) * 0.9
+		gun.scale = Vector3.ONE * float(d.get("len", 0.8))
 		gun.rotation.y = PI
 		gun_node.add_child(gun)
 		gun_node.visible = true
@@ -635,7 +635,7 @@ func _shoot_logic(delta: float) -> void:
 	var aim_pt := enemy.global_position + Vector3(0, aim_h, 0) + tvel * tof * comp
 	aim_pt.y += 0.5 * Ballistics.GRAVITY * tof * tof * comp
 	var base_dir := (aim_pt - from).normalized()
-	var mult := 0.75 if enemy is Player else 0.42
+	var mult := 0.62 if enemy is Player else 0.27
 	var pellets := int(d["pellets"])
 	_shot_seq += 1
 	for i in pellets:

@@ -42,6 +42,7 @@ var alive := true
 var kills := 0
 
 var mouse_sens := 0.0022
+var base_fov := 82.0
 var yaw := 0.0
 var pitch := 0.0
 var recoil_pitch := 0.0
@@ -108,6 +109,7 @@ var _mag_rest := Vector3.ZERO
 var _was_on_floor := true
 var _fall_speed := 0.0
 var _sprint_lock := 0.0
+var _optic_id := ""
 var _shot_seq := 0
 var _pending_hits: Dictionary = {}
 var meds := 0
@@ -144,7 +146,7 @@ func _ready() -> void:
 
 	camera = Camera3D.new()
 	camera.name = "Camera"
-	camera.fov = 82.0
+	camera.fov = base_fov
 	camera.near = 0.08
 	camera.far = 1200.0
 	camera.position = cam_base
@@ -328,6 +330,8 @@ func _ground(delta: float) -> void:
 	if Input.is_action_just_pressed("jump") and _coyote > 0.0 and not in_water:
 		velocity.y = JUMP
 		_coyote = 0.0
+		if game != null and game.sfx != null:
+			game.sfx.play_2d("jump", -12.0, 0.08)
 	velocity = velocity.limit_length(60.0)
 	if not is_on_floor():
 		_fall_speed = minf(_fall_speed, velocity.y)
@@ -339,6 +343,8 @@ func _ground(delta: float) -> void:
 			add_trauma(impact * 0.25)
 			if impact > 0.4:
 				_sfx("land_thud", -10.0)
+			elif game != null and game.sfx != null:
+				game.sfx.play_2d("step_%s_%d" % [game.surface_at(global_position), randi() % 4 + 1], -6.0, 0.05)
 		_fall_speed = 0.0
 	_was_on_floor = is_on_floor()
 	# Terrain mesh vs bilinear height can differ by up to a metre on a slope, and a
@@ -493,12 +499,12 @@ func _update_camera(delta: float) -> void:
 		camera.fov = lerpf(camera.fov, 96.0 if mode == Mode.FREEFALL else 80.0, delta * 4.0)
 		cam_base = Vector3(0, EYE - 0.30, 0.0)
 	else:
-		var target_fov := 82.0
+		var target_fov := base_fov
 		if has_gun():
 			var zoom := cur_zoom()
 			# Optics snap in at the end of the raise instead of zooming smoothly.
 			var k := aim_blend if zoom < 1.9 else smoothstep(0.75, 1.0, aim_blend)
-			target_fov = lerpf(82.0, 82.0 / zoom, k)
+			target_fov = lerpf(base_fov, base_fov / zoom, k)
 		target_fov += sprint_blend * 6.0
 		camera.fov = lerpf(camera.fov, target_fov, clampf(delta * 14.0, 0.0, 1.0))
 
@@ -572,8 +578,8 @@ func _update_weapon(delta: float) -> void:
 	equip_t = minf(1.0, equip_t + delta / 0.38)
 	bloom = maxf(0.0, bloom - delta * float(d.get("bloom_recover", 3.2)))
 
-	var hip: Vector3 = d["hip"]
-	var ads: Vector3 = d["ads"]
+	var hip: Vector3 = Weapons.hip_pos(id)
+	var ads: Vector3 = Weapons.ads_pos(id, _optic_id)
 	var pos: Vector3 = hip.lerp(ads, ads_e)
 	var rot := Vector3.ZERO
 
@@ -647,8 +653,8 @@ func _update_weapon(delta: float) -> void:
 	gun_holder.visible = not scoped
 	if game != null and game.hud != null:
 		game.hud.set_scope(scoped, cur_scope(), float(d.get("velocity", 700.0)))
-		var ads_on := not scoped and aim_blend > 0.85
-		game.hud.set_reddot(ads_on and cur_scope() == "reddot", ads_on and cur_scope() == "")
+		# Red dot and iron sights are real 3D sights now: nothing drawn on the HUD.
+		game.hud.set_reddot(false, false)
 
 
 ## Offsets (position, rotation) for a reload at normalised time t.
@@ -657,7 +663,7 @@ func _reload_pose(t: float, id: String) -> Array:
 	var pos := Vector3.ZERO
 	var rot := Vector3.ZERO
 	var tilt := _seg(t, 0.0, 0.14) * (1.0 - _seg(t, 0.84, 1.0))
-	if id == "shotgun":
+	if Weapons.cls(id) == "shotgun":
 		# Roll the gun over, feed shells one by one, then rack the pump.
 		pos += Vector3(-0.02, -0.035, 0.02) * tilt
 		rot += Vector3(0.22, 0.10, -0.55) * tilt
@@ -790,12 +796,12 @@ func _try_fire() -> void:
 	flash.visible = true
 	flash.position = gun_holder.position + gun_holder.basis * Vector3(0.0, 0.01, -0.52 * _gun_scale)
 	flash.rotation.z = randf() * TAU
-	flash.scale = Vector3.ONE * randf_range(0.8, 1.3) * (1.6 if id == "shotgun" or id == "sniper" else 1.0)
+	flash.scale = Vector3.ONE * randf_range(0.8, 1.3) * (1.6 if Weapons.cls(id) in ["shotgun", "sniper"] else 1.0)
 	flash_light.position = flash.position
 	flash_light.light_energy = 2.2
 	add_trauma(clampf(kick_amt * 2.2, 0.02, 0.3))
 	shots_fired += 1
-	if id == "sniper":
+	if bool(d.get("bolt", false)):
 		bolt_t = 0.0
 		_bolt_sound = false
 
@@ -859,7 +865,7 @@ func start_reload() -> void:
 	_reload_was_empty = current_mag() == 0
 	_reload_need = mag_size() - current_mag()
 	_reload_dur = float(d["reload"]) * (1.0 if _reload_was_empty else 0.82)
-	if id == "shotgun":
+	if Weapons.cls(id) == "shotgun":
 		_reload_need = mini(_reload_need, current_reserve())
 		_reload_dur = float(d["reload"]) * clampf(float(_reload_need) / float(d["mag"]), 0.35, 1.0)
 	reload_timer = _reload_dur
@@ -1024,6 +1030,8 @@ func take_loot(l: LootPickup) -> bool:
 				if old != "" and game != null and game.has_method("drop_item"):
 					game.drop_item("scope", old, global_position + Basis(Vector3.UP, yaw) * Vector3(0.6, 0, -1.0))
 				att["scope"] = l.item_id
+				if s == slot:
+					_rebuild_viewmodel()
 			else:
 				att[l.kind] = true
 				if l.kind == "extmag" and s < loadout.size():
@@ -1092,7 +1100,7 @@ func cur_zoom() -> float:
 	if not has_gun():
 		return 1.0
 	var z := float(Weapons.def(current_id()).get("zoom", 1.0))
-	var sc := str(cur_att().get("scope", ""))
+	var sc := cur_scope()
 	if sc != "":
 		z = maxf(z, float(Weapons.SCOPE_ZOOM.get(sc, 1.0)))
 	return z
@@ -1102,8 +1110,8 @@ func cur_scope() -> String:
 	if not has_gun():
 		return ""
 	var sc := str(cur_att().get("scope", ""))
-	if sc == "" and current_id() == "sniper":
-		return "4x"
+	if sc == "":
+		return Weapons.builtin_scope(current_id())
 	return sc
 
 
@@ -1315,17 +1323,23 @@ func _rebuild_viewmodel() -> void:
 	var id := current_id()
 	var node := Weapons.build_view_model(id)
 	gun_holder.add_child(node)
-	_gun_scale = float(Weapons.def(id)["scale"])
+	_gun_scale = Weapons.view_scale(id)
 	node.scale = Vector3.ONE * _gun_scale
 	muzzle = Node3D.new()
 	gun_holder.add_child(muzzle)
-	muzzle.position = Vector3(0, 0, -0.5 * _gun_scale)
-	# Detachable magazine prop, animated during reloads.
-	_mag_node = null
-	if id != "shotgun":
-		_mag_node = Weapons.build_magazine(id)
+	muzzle.position = Vector3(0, 0.01, -0.5 * _gun_scale)
+	# The gun's own magazine, cut from the model, animated during reloads.
+	_mag_node = node.get_node_or_null("Mag") as MeshInstance3D
+	if _mag_node != null:
 		_mag_rest = _mag_node.position
-		node.add_child(_mag_node)
+	# Mounted optic, built in metres and placed on the top rail.
+	_optic_id = str(cur_att().get("scope", ""))
+	if _optic_id != "" and Weapons.optic_kind(_optic_id) != "":
+		var oy := Weapons.optic_center_y(id, _optic_id)
+		var top := float(Weapons.model(id).get("sight_y", 0.08)) * _gun_scale
+		var optic := Weapons.build_optic(_optic_id, oy - top)
+		optic.position = Vector3(0.0, oy, -0.02 if Weapons.cls(id) != "pistol" else 0.01)
+		gun_holder.add_child(optic)
 	equip_t = 0.0
 	aim_blend = 0.0
 	bolt_t = -1.0
@@ -1349,8 +1363,17 @@ func _emit_ammo() -> void:
 
 
 func _footstep() -> void:
-	if game != null and game.has_method("play_sfx_at"):
-		game.play_sfx_at("footstep_%d" % (randi() % 4 + 1), global_position, 0.22)
+	if game == null or game.sfx == null:
+		return
+	var surf: String = game.surface_at(global_position)
+	var db := -9.0
+	if sprinting:
+		db = -5.0
+	elif Input.is_action_pressed("crouch"):
+		db = -18.0
+	game.sfx.play_2d("step_%s_%d" % [surf, randi() % 4 + 1], db, 0.07)
+	if sprinting and randf() < 0.45:
+		game.sfx.play_2d("gear_rattle", db - 9.0, 0.1)
 
 
 func shake(_amt: float) -> void:
@@ -1422,7 +1445,7 @@ func toggle_fire_mode() -> void:
 	if not has_gun():
 		return
 	var id := current_id()
-	if not bool(Weapons.def(id).get("auto", false)) or id == "lmg":
+	if not bool(Weapons.def(id).get("auto", false)) or Weapons.cls(id) == "lmg":
 		notice.emit("%s HAS ONE FIRE MODE" % str(Weapons.def(id)["short"]))
 		return
 	fire_single[id] = not bool(fire_single.get(id, false))
@@ -1435,7 +1458,7 @@ func adjust_zero(step: int) -> void:
 	if not has_gun():
 		return
 	var id := current_id()
-	var mx := int(Weapons.ZERO_MAX.get(id, 100))
+	var mx := Weapons.zero_max(id)
 	if mx <= 100:
 		notice.emit("NO ZEROING ON THIS WEAPON")
 		return
@@ -1488,3 +1511,8 @@ func _update_breath(delta: float) -> void:
 		amp *= 0.12
 	var want := Vector2(sin(t * 0.83) + 0.35 * sin(t * 2.1), 0.6 * sin(t * 1.27 + 0.6) + 0.25 * sin(t * 2.9)) * amp
 	_scope_sway = _scope_sway.lerp(want, clampf(delta * 4.0, 0.0, 1.0))
+
+
+
+func refresh_viewmodel() -> void:
+	_rebuild_viewmodel()
