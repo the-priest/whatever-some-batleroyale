@@ -110,9 +110,9 @@ func _build_lighting() -> void:
 	env.fog_enabled = true
 	env.fog_light_color = Color(0.68, 0.78, 0.88)
 	env.fog_light_energy = 1.0
-	env.fog_density = 0.0016
+	env.fog_density = 0.0011
 	env.fog_sky_affect = 0.22
-	env.fog_aerial_perspective = 0.6
+	env.fog_aerial_perspective = 0.35
 
 	env.adjustment_enabled = true
 	env.adjustment_contrast = 1.05
@@ -518,6 +518,30 @@ func _scatter_rocks() -> void:
 			"pos": Vector3(x, h - 0.05, z), "rot": rng.randf_range(0.0, TAU),
 			"scale": rng.randf_range(base * 0.65, base * 1.5),
 		})
+	# Boulders: big enough to hide behind, scattered through the open fields
+	# where cover is otherwise scarce.
+	for i in 900:
+		if groups["Rock_Medium_1"].size() + groups["Rock_Medium_2"].size() > 420:
+			break
+		var x := rng.randf_range(-Terrain.HALF + 20.0, Terrain.HALF - 20.0)
+		var z := rng.randf_range(-Terrain.HALF + 20.0, Terrain.HALF - 20.0)
+		var h := terrain.height_at(x, z)
+		if h < Terrain.WATER_LEVEL + 1.0 or terrain.slope_at(x, z) > 0.35:
+			continue
+		if terrain.forest_density(x, z) > 0.55 or rng.randf() > 0.35:
+			continue
+		if _near_village(x, z, 16.0):
+			continue
+		# Boulders come in small clusters.
+		var n := rng.randi_range(1, 3)
+		for j in n:
+			var ox := x + rng.randf_range(-3.5, 3.5) * float(j)
+			var oz := z + rng.randf_range(-3.5, 3.5) * float(j)
+			var kk: String = kinds[0] if rng.randf() < 0.5 else kinds[1]
+			groups[kk].append({
+				"pos": Vector3(ox, terrain.height_at(ox, oz) - 0.25, oz), "rot": rng.randf_range(0.0, TAU),
+				"scale": rng.randf_range(1.6, 3.0),
+			})
 
 	for k in kinds:
 		var list: Array = groups[k]
@@ -538,9 +562,30 @@ func _scatter_rocks() -> void:
 		mmi.name = "R_" + k
 		mmi.multimesh = mm
 		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-		mmi.visibility_range_end = 220.0
+		mmi.visibility_range_end = 380.0
 		add_child(mmi)
 		stats.rocks += list.size()
+		# Rocks stop bullets and bodies. Pebbles do not.
+		if k == "Pebble_Round_1":
+			continue
+		var body := StaticBody3D.new()
+		body.name = "RockCollision_" + k
+		body.collision_layer = 1
+		body.collision_mask = 0
+		add_child(body)
+		var aabb: AABB = data.aabb
+		for it in list:
+			var sc: float = it.scale
+			if sc < 0.6:
+				continue
+			var cs := CollisionShape3D.new()
+			var box := BoxShape3D.new()
+			box.size = aabb.size * sc * Vector3(0.82, 0.92, 0.82)
+			cs.shape = box
+			var b := Basis(Vector3.UP, it.rot)
+			cs.transform = Transform3D(b, Vector3(it.pos) + b * (aabb.get_center() * sc))
+			body.add_child(cs)
+			stats.colliders += 1
 
 
 func _build_wild_loot() -> void:
@@ -586,6 +631,11 @@ func _near_village(x: float, z: float, radius: float) -> bool:
 	for v in villages.village_pads:
 		var c: Vector2 = v.center
 		if Vector2(x, z).distance_to(c) < radius:
+			return true
+	# Towers and ruins keep a clear yard of their own.
+	for p in villages.poi_pads:
+		var c: Vector2 = p.center
+		if Vector2(x, z).distance_to(c) < float(p.radius) + minf(radius, 6.0):
 			return true
 	return false
 

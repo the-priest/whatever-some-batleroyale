@@ -22,19 +22,30 @@ var _mat_sniper: StandardMaterial3D
 func _ready() -> void:
 	_mesh = BoxMesh.new()
 	_mesh.size = Vector3(1.0, 1.0, 1.0)
-	_mat_mine = _tracer_mat(Color(1.0, 0.82, 0.45, 0.85))
-	_mat_enemy = _tracer_mat(Color(1.0, 0.42, 0.28, 0.9))
-	_mat_sniper = _tracer_mat(Color(1.0, 0.95, 0.75, 0.95))
+	_mat_mine = _tracer_mat(Color(1.0, 0.78, 0.25))
+	_mat_enemy = _tracer_mat(Color(1.0, 0.32, 0.16))
+	_mat_sniper = _tracer_mat(Color(1.0, 0.92, 0.55))
 
 
 func _tracer_mat(c: Color) -> StandardMaterial3D:
+	# Solid core with a soft halo as a second pass: reads against both sky and
+	# grass, where a pale additive line all but vanished.
 	var m := StandardMaterial3D.new()
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
 	m.albedo_color = c
 	m.disable_receive_shadows = true
+	m.disable_fog = true
+	var glow := StandardMaterial3D.new()
+	glow.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	glow.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	glow.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	glow.cull_mode = BaseMaterial3D.CULL_DISABLED
+	glow.albedo_color = Color(c.r, c.g * 0.7, c.b * 0.4, 0.45)
+	glow.disable_fog = true
+	glow.grow = true
+	glow.grow_amount = 0.6
+	m.next_pass = glow
 	return m
 
 
@@ -143,10 +154,10 @@ func _place_tracer(b: Dictionary, cam: Camera3D = null) -> void:
 	var k := clampf(1.0 - float(b["dist"]) / 18.0, 0.0, 1.0)
 	var head: Vector3 = b["pos"] + Vector3(b["off"]) * k
 	var length := minf(float(b["speed"]) * 0.028, maxf(0.4, float(b["trail"])))
-	var width := 0.026
+	var width := 0.022
 	if cam != null:
-		# Stay at least ~1.5 px wide so a tracer is readable far away.
-		width = maxf(width, head.distance_to(cam.global_position) * 0.0016)
+		# Keep a few pixels wide however far away it is.
+		width = maxf(width, head.distance_to(cam.global_position) * 0.0032)
 	if b["id"] == "sniper":
 		width *= 1.5
 	var center := head - dir * length * 0.5
@@ -184,6 +195,8 @@ func _resolve_hit(b: Dictionary, hit: Dictionary) -> void:
 		var dmg := float(d["damage"]) * falloff * float(b["mult"])
 		if headshot:
 			dmg *= float(d["head"])
+		elif col is Node3D and pos.y - (col as Node3D).global_position.y < 0.8:
+			dmg *= 0.8  # legs
 		var killed = col.call("take_damage", dmg, pos, headshot, shooter if is_instance_valid(shooter) else null)
 		if game != null:
 			game.spawn_blood(pos)

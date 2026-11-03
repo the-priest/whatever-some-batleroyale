@@ -29,11 +29,13 @@ var sites: Array[Vector2] = [
 var houses: Array[Dictionary] = []
 var village_pads: Array[Dictionary] = []
 var loot_points: Array[Dictionary] = []
+var towers: Array[Dictionary] = []
+var poi_pads: Array[Dictionary] = []
 
 var _cache: Dictionary = {}
 var _batches: Dictionary = {}
 var _colliders: Array[Dictionary] = []
-var _stat := {"houses": 0, "pieces": 0, "village_count": 0}
+var _stat := {"houses": 0, "pieces": 0, "village_count": 0, "towers": 0, "ruins": 0}
 
 
 func build(p_terrain: Terrain, p_seed: int) -> void:
@@ -44,10 +46,12 @@ func build(p_terrain: Terrain, p_seed: int) -> void:
 	for h in houses:
 		_build_house(h)
 	_build_village_extras()
+	_plan_towers()
+	_plan_ruins()
 	_commit_batches()
 	_commit_colliders()
-	print("[villages] %d villages, %d houses, %d pieces, %d loot points, %d colliders" % [
-		_stat.village_count, _stat.houses, _stat.pieces, loot_points.size(), _colliders.size()
+	print("[villages] %d villages, %d houses, %d towers, %d ruins, %d pieces, %d loot points, %d colliders" % [
+		_stat.village_count, _stat.houses, _stat.towers, _stat.ruins, _stat.pieces, loot_points.size(), _colliders.size()
 	])
 
 
@@ -242,13 +246,16 @@ func _build_village_extras() -> void:
 			_add_wall_collider(p, ang, false)
 
 
-func _place(key: String, bottom_center: Vector3, yaw: float, _align := true) -> void:
+func _place(key: String, bottom_center: Vector3, yaw: float, _align := true, pivot := Vector3.INF) -> void:
 	var data := _model(key)
 	if data.is_empty():
 		return
 	var aabb: AABB = data.aabb
 	var basis := Basis(Vector3.UP, yaw)
 	var offset := Vector3(-aabb.get_center().x, -aabb.position.y, -aabb.get_center().z)
+	if pivot != Vector3.INF:
+		# Use the mesh's own origin, nudged by `pivot`, instead of re-centring it.
+		offset = pivot
 	var xform := Transform3D(basis, bottom_center + basis * offset)
 	if not _batches.has(key):
 		_batches[key] = []
@@ -358,3 +365,212 @@ func _commit_colliders() -> void:
 		shape.shape = box
 		shape.transform = c.xform
 		body.add_child(shape)
+
+
+# ------------------------------------------------------------ lookout towers --
+## Two-storey stone towers on high ground: interior stair, windows on every
+## side of the upper floor, the best loot up top. Places worth fighting over.
+func _plan_towers() -> void:
+	var cands: Array = []
+	var rng2 := RandomNumberGenerator.new()
+	rng2.seed = rng.seed + 31
+	for i in 500:
+		var a := rng2.randf() * TAU
+		var r := sqrt(rng2.randf()) * 360.0
+		var c := Vector2(cos(a), sin(a)) * r
+		var h := terrain.height_at(c.x, c.y)
+		if h < 8.0 or terrain.slope_at(c.x, c.y) > 0.32 or terrain.roughness(c.x, c.y, 5.0) > 3.5:
+			continue
+		cands.append([h + rng2.randf() * 4.0, c])
+	cands.sort_custom(func(a, b): return a[0] > b[0])
+	for e in cands:
+		if towers.size() >= 5:
+			break
+		var c: Vector2 = e[1]
+		if _too_close(c, 75.0, 150.0):
+			continue
+		var pad := terrain.flatten_circle(c.x, c.y, 5.5, 9.0)
+		towers.append({"center": c, "pad": pad})
+		poi_pads.append({"center": c, "radius": 9.0, "type": "tower"})
+	for t in towers:
+		_build_tower(t)
+
+
+func _too_close(c: Vector2, from_villages: float, from_pois: float) -> bool:
+	for v in village_pads:
+		if c.distance_to(v.center) < from_villages:
+			return true
+	for p in poi_pads:
+		if c.distance_to(p.center) < from_pois:
+			return true
+	return false
+
+
+func _build_tower(t: Dictionary) -> void:
+	var c: Vector2 = t.center
+	var pad: float = t.pad
+	var yaw := float(rng.randi_range(0, 3)) * PI * 0.5
+	var b := Basis(Vector3.UP, yaw)
+	var origin := Vector3(c.x, pad, c.y)
+	var half := 3.0
+	var door_side := rng.randi_range(0, 3)
+	# Never put the door behind the stair (side 1 is +x, where the stair runs).
+	if door_side == 1:
+		door_side = 3
+	for level in 2:
+		var y0 := WALL_HEIGHT * float(level)
+		for side in 4:
+			for i in 3:
+				var along := -2.0 + float(i) * 2.0
+				var local := Vector3.ZERO
+				var wall_yaw := 0.0
+				match side:
+					0:
+						local = Vector3(along, y0, half)
+						wall_yaw = 0.0
+					1:
+						local = Vector3(half, y0, along)
+						wall_yaw = PI * 0.5
+					2:
+						local = Vector3(-along, y0, -half)
+						wall_yaw = PI
+					3:
+						local = Vector3(-half, y0, -along)
+						wall_yaw = -PI * 0.5
+				var pos: Vector3 = origin + b * local
+				var key := "Wall_UnevenBrick_Straight"
+				var hole := ""
+				if level == 0 and side == door_side and i == 1:
+					key = "Wall_UnevenBrick_Door_Round"
+					hole = "door"
+				elif level == 1 and i == 1:
+					key = "Wall_UnevenBrick_Window_Wide_Round"
+					hole = "window"
+				elif level == 0 and i != 1 and rng.randf() < 0.3:
+					key = "Wall_UnevenBrick_Window_Thin_Round"
+				_place(key, pos, yaw + wall_yaw)
+				if hole == "window":
+					_add_window_collider(pos, yaw + wall_yaw)
+				else:
+					_add_wall_collider(pos, yaw + wall_yaw, hole == "door")
+	# Floors: brick downstairs, timber upstairs with a hole for the stair.
+	for fx in [-2.0, 0.0, 2.0]:
+		for fz in [-2.0, 0.0, 2.0]:
+			_place("Floor_Brick", origin + b * Vector3(fx, 0.012, fz), yaw)
+			if not (fx == 2.0 and fz > -1.0):
+				_place("Floor_WoodDark", origin + b * Vector3(fx, WALL_HEIGHT + 0.012, fz), yaw)
+	_add_box_collider(origin + b * Vector3(-1.0, WALL_HEIGHT - 0.1, 0.0), Vector3(4.0, 0.2, 6.0), yaw)
+	_add_box_collider(origin + b * Vector3(2.0, WALL_HEIGHT - 0.1, -2.0), Vector3(2.0, 0.2, 2.0), yaw)
+	# Stair along the +x wall, climbing toward -z.
+	_place("Stair_Interior_Simple", origin + b * Vector3(1.9, 0.0, 2.3), yaw, false, Vector3.ZERO)
+	var run := 4.58
+	var rise := WALL_HEIGHT
+	var ang := atan2(rise, run)
+	var ramp_center := origin + b * Vector3(1.9, rise * 0.5 - 0.12, 0.01)
+	_colliders.append({
+		"xform": Transform3D(b * Basis(Vector3.RIGHT, ang), ramp_center),
+		"size": Vector3(1.6, 0.2, sqrt(run * run + rise * rise) + 0.2),
+	})
+	# Roof with eaves over the upper walls.
+	_place("Roof_RoundTiles_6x6", origin + Vector3(0, WALL_HEIGHT * 2.0 - 0.62, 0), yaw)
+	# Loot: the good stuff is upstairs.
+	for i in 3:
+		var lp := origin + b * Vector3(rng.randf_range(-2.2, 0.6), WALL_HEIGHT + 0.08, rng.randf_range(-2.2, 2.2))
+		loot_points.append({"pos": lp, "kind": "weapon" if i == 0 else "gear", "village": true, "tier": "hi"})
+	loot_points.append({"pos": origin + b * Vector3(-1.5, 0.08, rng.randf_range(-1.5, 1.5)), "kind": "gear", "village": true})
+	_stat.towers += 1
+
+
+func _add_window_collider(pos: Vector3, yaw: float) -> void:
+	# Solid below the sill and above the lintel, open in between to shoot through.
+	var basis := Basis(Vector3.UP, yaw)
+	var sill := 1.05
+	var top := 2.35
+	_colliders.append({"xform": Transform3D(basis, pos + Vector3(0, sill * 0.5, 0)), "size": Vector3(1.98, sill, 0.42)})
+	_colliders.append({"xform": Transform3D(basis, pos + Vector3(0, (top + WALL_HEIGHT) * 0.5, 0)), "size": Vector3(1.98, WALL_HEIGHT - top, 0.42)})
+	for sx in [-1.0, 1.0]:
+		_colliders.append({"xform": Transform3D(basis, pos + basis * Vector3(sx * 0.85, (sill + top) * 0.5, 0)), "size": Vector3(0.28, top - sill, 0.42)})
+
+
+# ------------------------------------------------------------------- ruins --
+## Broken walls, arches and crates out in the open fields: cover between
+## towns, with a little loot to make the detour worth it.
+func _plan_ruins() -> void:
+	var rng2 := RandomNumberGenerator.new()
+	rng2.seed = rng.seed + 57
+	var placed := 0
+	for i in 400:
+		if placed >= 9:
+			break
+		var a := rng2.randf() * TAU
+		var r := sqrt(rng2.randf()) * 380.0
+		var c := Vector2(cos(a), sin(a)) * r
+		if terrain.height_at(c.x, c.y) < 3.0 or terrain.slope_at(c.x, c.y) > 0.22:
+			continue
+		if terrain.roughness(c.x, c.y, 8.0) > 3.0:
+			continue
+		if _too_close(c, 60.0, 70.0):
+			continue
+		var pad := terrain.flatten_circle(c.x, c.y, 8.0, 10.0)
+		poi_pads.append({"center": c, "radius": 11.0, "type": "ruin"})
+		_build_ruin(c, pad)
+		placed += 1
+
+
+func _build_ruin(c: Vector2, pad: float) -> void:
+	var yaw := rng.randf() * TAU
+	var b := Basis(Vector3.UP, yaw)
+	var origin := Vector3(c.x, pad, c.y)
+	var w := 4 if rng.randf() < 0.5 else 3
+	var d := 3
+	# Perimeter of a ruined building: some modules standing, some gone.
+	for side in 4:
+		var cells := w if side % 2 == 0 else d
+		for i in cells:
+			if rng.randf() < 0.4:
+				continue
+			var along := -float(cells - 1) + float(i) * 2.0
+			var local := Vector3.ZERO
+			var wall_yaw := 0.0
+			match side:
+				0:
+					local = Vector3(along, 0, float(d))
+				1:
+					local = Vector3(float(w), 0, along)
+					wall_yaw = PI * 0.5
+				2:
+					local = Vector3(-along, 0, -float(d))
+					wall_yaw = PI
+				3:
+					local = Vector3(-float(w), 0, -along)
+					wall_yaw = -PI * 0.5
+			var pos: Vector3 = origin + b * local
+			var roll := rng.randf()
+			if roll < 0.2:
+				_place("Wall_Arch", pos, yaw + wall_yaw)
+				_add_arch_collider(pos, yaw + wall_yaw)
+			elif roll < 0.45:
+				_place("Wall_UnevenBrick_Window_Wide_Round", pos, yaw + wall_yaw)
+				_add_window_collider(pos, yaw + wall_yaw)
+			else:
+				_place("Wall_UnevenBrick_Straight", pos, yaw + wall_yaw)
+				_add_wall_collider(pos, yaw + wall_yaw, false)
+	# Rubble and crates for low cover.
+	for i in rng.randi_range(2, 4):
+		var p := origin + b * Vector3(rng.randf_range(-w, w), 0, rng.randf_range(-d - 3.0, d + 3.0))
+		if rng.randf() < 0.6:
+			_place("Prop_Crate", p, rng.randf() * TAU)
+			_add_box_collider(p + Vector3(0, 0.53, 0), Vector3(1.06, 1.06, 1.06), 0.0)
+		else:
+			_place("Prop_Brick%d" % rng.randi_range(1, 4), p, rng.randf() * TAU)
+	for i in rng.randi_range(2, 4):
+		var lp := origin + b * Vector3(rng.randf_range(-w + 1.0, w - 1.0), 0.08, rng.randf_range(-d + 1.0, d - 1.0))
+		loot_points.append({"pos": lp, "kind": "weapon" if i == 0 else "gear", "village": false})
+	_stat.ruins += 1
+
+
+func _add_arch_collider(pos: Vector3, yaw: float) -> void:
+	var basis := Basis(Vector3.UP, yaw)
+	for sx in [-1.0, 1.0]:
+		_colliders.append({"xform": Transform3D(basis, pos + basis * Vector3(sx * 0.82, 1.5, 0.03)), "size": Vector3(0.36, 3.0, 0.3)})
+	_colliders.append({"xform": Transform3D(basis, pos + basis * Vector3(0, 2.75, 0.03)), "size": Vector3(2.0, 0.5, 0.3)})

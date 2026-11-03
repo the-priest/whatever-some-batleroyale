@@ -53,7 +53,15 @@ var look_delta := Vector2.ZERO
 var loadout: Array[String] = []
 var slot := 0
 var mags: Dictionary = {}      # id -> rounds in mag
-var reserves: Dictionary = {}  # id -> reserve
+var ammo: Dictionary = {}      # calibre -> rounds carried
+var fire_single: Dictionary = {}  # id -> true when switched to single fire
+var zeroing: Dictionary = {}   # id -> metres
+var breath := 100.0
+var holding_breath := false
+var lean := 0.0
+var _spray_n := 0
+var _since_shot := 9.0
+var _scope_sway := Vector2.ZERO
 var fire_timer := 0.0
 var reload_timer := 0.0
 var reloading := false
@@ -152,12 +160,14 @@ func _ready() -> void:
 
 	flash = MeshInstance3D.new()
 	var q := QuadMesh.new()
-	q.size = Vector2(0.30, 0.30)
+	q.size = Vector2(0.22, 0.22)
 	flash.mesh = q
 	var fm := StandardMaterial3D.new()
 	fm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	fm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	fm.albedo_color = Color(1.0, 0.82, 0.42, 0.95)
+	fm.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	fm.albedo_color = Color(1.0, 0.85, 0.55, 1.0)
+	fm.albedo_texture = Weapons.flash_texture()
 	fm.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 	fm.no_depth_test = true
 	fm.cull_mode = BaseMaterial3D.CULL_DISABLED
@@ -172,6 +182,8 @@ func _ready() -> void:
 	flash_light.light_energy = 0.0
 	flash_light.omni_range = 3.2
 	flash_light.shadow_enabled = false
+	# Light the world, not our own gun (it sits 30 cm from the bulb).
+	flash_light.light_cull_mask = 0xFFFFF & ~2
 	view.add_child(flash_light)
 
 	chute_mesh = MeshInstance3D.new()
@@ -221,7 +233,7 @@ func _physics_process(delta: float) -> void:
 		return
 	flash_time = maxf(0.0, flash_time - delta)
 	flash.visible = flash_time > 0.0
-	flash_light.light_energy = 3.6 if flash_time > 0.0 else 0.0
+	flash_light.light_energy = 2.2 if flash_time > 0.0 else 0.0
 	spawn_protect = maxf(0.0, spawn_protect - delta)
 
 	match mode:
@@ -288,7 +300,7 @@ func _ground(delta: float) -> void:
 	var input := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
 	var crouch := Input.is_action_pressed("crouch")
 	_sprint_lock = maxf(0.0, _sprint_lock - delta)
-	sprinting = Input.is_action_pressed("sprint") and input.y < -0.3 and not crouch and not aiming and not healing and _sprint_lock <= 0.0 and is_on_floor()
+	sprinting = Input.is_action_pressed("sprint") and input.y < -0.3 and not crouch and not aiming and not healing and _sprint_lock <= 0.0 and is_on_floor() and absf(lean) < 0.2
 	var speed := CROUCH if crouch else (SPRINT if sprinting else WALK)
 	if aiming:
 		speed *= 0.62
@@ -296,6 +308,8 @@ func _ground(delta: float) -> void:
 		speed *= 0.92
 	if healing:
 		speed *= 0.45
+	if absf(lean) > 0.2:
+		speed *= 0.75
 	if in_water:
 		speed *= 0.6
 	if boost > 50.0:
@@ -357,6 +371,14 @@ func _ground(delta: float) -> void:
 		start_reload()
 	if Input.is_action_just_pressed("swap_weapon"):
 		cycle_weapon()
+	if Input.is_action_just_pressed("fire_mode"):
+		toggle_fire_mode()
+	if Input.is_action_just_pressed("zero_up"):
+		adjust_zero(100)
+	if Input.is_action_just_pressed("zero_down"):
+		adjust_zero(-100)
+	_update_lean(delta)
+	_update_breath(delta)
 	if Input.is_action_just_pressed("slot_1"):
 		select_slot(0)
 	if Input.is_action_just_pressed("slot_2"):
@@ -386,9 +408,11 @@ func _ground(delta: float) -> void:
 		if heal_timer <= 0.0:
 			_finish_heal()
 	var want_fire := false
+	_since_shot += delta
+	if _since_shot > 0.32:
+		_spray_n = 0
 	if has_gun():
-		var auto := bool(Weapons.def(current_id()).get("auto", false))
-		want_fire = Input.is_action_pressed("fire") if auto else Input.is_action_just_pressed("fire")
+		want_fire = Input.is_action_pressed("fire") if is_auto() else Input.is_action_just_pressed("fire")
 	if want_fire and healing:
 		cancel_heal()
 	if want_fire and sprinting:
@@ -399,7 +423,7 @@ func _ground(delta: float) -> void:
 	if want_fire and fire_timer <= 0.0 and not reloading and equip_t > 0.75 and bolt_t < 0.0:
 		_try_fire()
 	elif not has_gun() and Input.is_action_just_pressed("fire"):
-		notice.emit("NO WEAPON  —  PRESS E TO PICK ONE UP")
+		notice.emit("NO WEAPON  —  PRESS F TO PICK ONE UP")
 
 
 func _check_ground_contact() -> void:
@@ -430,7 +454,7 @@ func _land() -> void:
 	landed = true
 	velocity.y = 0.0
 	spawn_protect = 1.0
-	notice.emit("LOOT A WEAPON  —  E")
+	notice.emit("LOOT A WEAPON  —  F")
 	if game != null and game.has_method("on_player_landed"):
 		game.on_player_landed()
 
@@ -454,12 +478,12 @@ func _update_camera(delta: float) -> void:
 	var sx := (sin(t * 37.0) + sin(t * 23.0 + 1.3)) * 0.5 * shake_amt * 0.035
 	var sy := (sin(t * 31.0 + 0.7) + sin(t * 19.0)) * 0.5 * shake_amt * 0.035
 	var sz := sin(t * 27.0 + 2.1) * shake_amt * 0.03
-	camera.rotation.x = pitch + recoil_pitch + sx
-	camera.rotation.y = yaw + recoil_yaw + sy
+	camera.rotation.x = pitch + recoil_pitch + sx + _scope_sway.y
+	camera.rotation.y = yaw + recoil_yaw + sy + _scope_sway.x
 	# Lean slightly into strafes.
 	var side_speed := (Basis(Vector3.UP, yaw).inverse() * velocity).x if mode == Mode.GROUND else 0.0
 	_cam_roll = lerpf(_cam_roll, -side_speed * 0.0035, clampf(delta * 8.0, 0.0, 1.0))
-	camera.rotation.z = _cam_roll + sz
+	camera.rotation.z = _cam_roll + sz - lean * 0.22
 
 	if mode == Mode.FREEFALL or mode == Mode.CHUTE:
 		var fall_tilt := 0.0
@@ -492,7 +516,8 @@ func _update_camera(delta: float) -> void:
 		var amt := clampf(planar / SPRINT, 0.0, 1.0) * lerpf(1.0, 0.25, aim_blend)
 		bob_y = sin(bob * 2.0) * 0.024 * amt
 		bob_x = cos(bob) * 0.020 * amt
-	camera.position = camera.position.lerp(Vector3(bob_x, cam_base.y + bob_y - land_dip * 0.12, 0.0), clampf(delta * 18.0, 0.0, 1.0))
+	var lean_off := Basis(Vector3.UP, yaw) * Vector3(lean * 0.45, -absf(lean) * 0.06, 0.0)
+	camera.position = camera.position.lerp(Vector3(bob_x, cam_base.y + bob_y - land_dip * 0.12, 0.0) + lean_off, clampf(delta * 18.0, 0.0, 1.0))
 	_damage_flash = maxf(0.0, _damage_flash - delta)
 
 
@@ -535,7 +560,7 @@ func _update_weapon(delta: float) -> void:
 		gun_holder.visible = false
 		if game != null and game.hud != null:
 			game.hud.set_scope(false)
-			game.hud.set_reddot(false)
+			game.hud.set_reddot(false, false)
 		return
 	var id := current_id()
 	var d: Dictionary = Weapons.def(id)
@@ -622,7 +647,8 @@ func _update_weapon(delta: float) -> void:
 	gun_holder.visible = not scoped
 	if game != null and game.hud != null:
 		game.hud.set_scope(scoped, cur_scope(), float(d.get("velocity", 700.0)))
-		game.hud.set_reddot(not scoped and aim_blend > 0.85 and cur_scope() == "reddot")
+		var ads_on := not scoped and aim_blend > 0.85
+		game.hud.set_reddot(ads_on and cur_scope() == "reddot", ads_on and cur_scope() == "")
 
 
 ## Offsets (position, rotation) for a reload at normalised time t.
@@ -705,7 +731,23 @@ func current_mag() -> int:
 func current_reserve() -> int:
 	if not has_gun():
 		return 0
-	return int(reserves.get(current_id(), 0))
+	return int(ammo.get(Weapons.caliber(current_id()), 0))
+
+
+func ammo_of(cal: String) -> int:
+	return int(ammo.get(cal, 0))
+
+
+func is_auto() -> bool:
+	if not has_gun():
+		return false
+	return bool(Weapons.def(current_id()).get("auto", false)) and not bool(fire_single.get(current_id(), false))
+
+
+func cur_zero() -> int:
+	if not has_gun():
+		return 100
+	return int(zeroing.get(current_id(), 100))
 
 
 # ------------------------------------------------------------------ combat --
@@ -733,9 +775,13 @@ func _try_fire() -> void:
 	var kick_up := deg_to_rad(rec * 0.55)
 	recoil_pitch += kick_up * 0.65
 	pitch = clampf(pitch + kick_up * 0.35, deg_to_rad(-89.0), deg_to_rad(89.0))
-	var side := randf_range(-1.0, 1.0) * rec * 0.22 + rec * 0.06
-	recoil_yaw += deg_to_rad(side) * 0.6
-	yaw -= deg_to_rad(side) * 0.15
+	var step := Weapons.recoil_step(id, _spray_n)
+	kick_up *= step.y * randf_range(0.92, 1.08)
+	var side := (step.x + randf_range(-0.08, 0.08)) * rec
+	recoil_yaw -= deg_to_rad(side) * 0.35
+	yaw -= deg_to_rad(side) * 0.65
+	_spray_n += 1
+	_since_shot = 0.0
 	bloom = minf(float(d.get("bloom_max", 1.4)), bloom + float(d.get("bloom", 0.22)))
 	var kick_amt := float(d["kick"]) * (0.8 if recoil_mult() < 1.0 else 1.0)
 	kick_vel += Vector3(randf_range(-0.6, 0.6) * kick_amt, kick_amt * 3.0, kick_amt * 26.0)
@@ -746,7 +792,7 @@ func _try_fire() -> void:
 	flash.rotation.z = randf() * TAU
 	flash.scale = Vector3.ONE * randf_range(0.8, 1.3) * (1.6 if id == "shotgun" or id == "sniper" else 1.0)
 	flash_light.position = flash.position
-	flash_light.light_energy = 4.5
+	flash_light.light_energy = 2.2
 	add_trauma(clampf(kick_amt * 2.2, 0.02, 0.3))
 	shots_fired += 1
 	if id == "sniper":
@@ -755,6 +801,8 @@ func _try_fire() -> void:
 
 	var from := camera.global_position
 	var dir := -camera.global_basis.z
+	var zero_k := Weapons.zero_angle(id, float(cur_zero()))
+	dir = dir.rotated(camera.global_basis.x, zero_k).normalized()
 	var pellets := int(d["pellets"])
 	_shot_seq += 1
 	var muzzle_pos := muzzle.global_position if muzzle != null else from
@@ -826,7 +874,7 @@ func _finish_reload() -> void:
 	var need := mag_size() - current_mag()
 	var take := mini(need, current_reserve())
 	mags[id] = current_mag() + take
-	reserves[id] = current_reserve() - take
+	ammo[Weapons.caliber(id)] = current_reserve() - take
 	bloom = 0.0
 	_emit_ammo()
 
@@ -859,12 +907,10 @@ func give_weapon(id: String, start_mag: int = -1, start_reserve: int = -1) -> bo
 		return false
 	var d: Dictionary = Weapons.def(id)
 	if loadout.has(id):
-		# Duplicate gun: strip it for ammo instead.
-		var extra := maxi(0, start_mag if start_mag >= 0 else int(d["mag"]))
-		extra += maxi(0, start_reserve if start_reserve >= 0 else 0)
-		reserves[id] = mini(int(d["reserve"]), int(reserves.get(id, 0)) + maxi(extra, int(d["mag"]) / 2))
-		notice.emit("+%d  %s AMMO" % [maxi(extra, int(d["mag"]) / 2), str(d["short"])])
-		_emit_ammo()
+		# Duplicate gun: strip the magazine for ammo instead.
+		var extra := maxi(1, start_mag if start_mag >= 0 else int(d["mag"]))
+		add_ammo_cal(Weapons.caliber(id), extra)
+		notice.emit("+%d  %s" % [extra, Weapons.caliber(id).to_upper()])
 		return true
 	if loadout.size() >= 2:
 		# Full: the gun in hand goes on the floor.
@@ -872,14 +918,14 @@ func give_weapon(id: String, start_mag: int = -1, start_reserve: int = -1) -> bo
 		if game != null and game.has_method("drop_weapon"):
 			game.drop_weapon(old, current_mag(), current_reserve(), global_position + Basis(Vector3.UP, yaw) * Vector3(0.0, 0.0, -1.2))
 		mags.erase(old)
-		reserves.erase(old)
 		loadout[slot] = id
 	else:
 		loadout.append(id)
 		slot = loadout.size() - 1
 	_validate_attachments(loadout.find(id))
 	mags[id] = mag_size(id) if start_mag < 0 else mini(start_mag, mag_size(id))
-	reserves[id] = Weapons.starting_reserve(id) if start_reserve < 0 else start_reserve
+	if start_reserve > 0:
+		add_ammo_cal(Weapons.caliber(id), start_reserve)
 	reloading = false
 	cancel_heal()
 	fire_timer = 0.3
@@ -892,27 +938,32 @@ func give_weapon(id: String, start_mag: int = -1, start_reserve: int = -1) -> bo
 
 
 func add_ammo(id: String, amount: int) -> void:
-	if not loadout.has(id):
-		return
-	var d: Dictionary = Weapons.def(id)
-	reserves[id] = mini(int(d["reserve"]), int(reserves.get(id, 0)) + amount)
-	_emit_ammo()
+	add_ammo_cal(Weapons.caliber(id), amount)
 
 
-## Ammo box: tops up every gun carried, scaled to its magazine.
-func add_ammo_box() -> void:
-	for id in loadout:
-		var d: Dictionary = Weapons.def(id)
-		add_ammo(id, maxi(5, int(round(float(d["mag"]) * 1.5))))
+func add_ammo_cal(cal: String, amount: int) -> int:
+	var cap := int(Weapons.AMMO_CAP.get(cal, 200))
+	var before := ammo_of(cal)
+	ammo[cal] = mini(cap, before + amount)
 	_emit_ammo()
+	inventory_changed.emit()
+	return ammo_of(cal) - before
+
+
+## Ammo box of one calibre (item_id); an untyped box feeds the gun in hand.
+func add_ammo_box(cal: String = "") -> void:
+	if cal == "":
+		cal = Weapons.caliber(current_id()) if has_gun() else "9mm"
+	add_ammo_cal(cal, int(Weapons.AMMO_BOX.get(cal, 30)))
 
 
 # ---------------------------------------------------------------- loot rules --
 func loot_block_reason(l: LootPickup) -> String:
 	match l.kind:
 		"ammo":
-			if not has_gun():
-				return "NEED A WEAPON FIRST"
+			var cal := l.item_id if l.item_id != "" else (Weapons.caliber(current_id()) if has_gun() else "9mm")
+			if ammo_of(cal) >= int(Weapons.AMMO_CAP.get(cal, 200)):
+				return "%s FULL" % cal.to_upper()
 		"armor":
 			var lv := int(l.item_id)
 			if vest_level > lv or (vest_level == lv and armor >= 99.0):
@@ -946,8 +997,9 @@ func take_loot(l: LootPickup) -> bool:
 		"weapon":
 			give_weapon(l.item_id, l.mag_override, l.reserve_override)
 		"ammo":
-			add_ammo_box()
-			notice.emit("AMMO TOPPED UP")
+			var cal := l.item_id if l.item_id != "" else (Weapons.caliber(current_id()) if has_gun() else "9mm")
+			var got := add_ammo_cal(cal, int(Weapons.AMMO_BOX.get(cal, 30)))
+			notice.emit("+%d  %s" % [got, cal.to_upper()])
 		"armor":
 			vest_level = int(l.item_id)
 			armor = 100.0
@@ -1316,7 +1368,11 @@ func reset_for_match() -> void:
 	kills = 0
 	loadout.clear()
 	mags.clear()
-	reserves.clear()
+	ammo.clear()
+	fire_single.clear()
+	zeroing.clear()
+	breath = 100.0
+	lean = 0.0
 	slot = 0
 	reloading = false
 	reload_timer = 0.0
@@ -1359,3 +1415,76 @@ func jump_from_plane() -> void:
 	freefall_speed = -8.0
 	velocity = Vector3(0, -8, 0)
 	notice.emit("W TO DIVE  ·  SPACE TO DEPLOY CHUTE")
+
+
+# ------------------------------------------------------------ gun handling --
+func toggle_fire_mode() -> void:
+	if not has_gun():
+		return
+	var id := current_id()
+	if not bool(Weapons.def(id).get("auto", false)) or id == "lmg":
+		notice.emit("%s HAS ONE FIRE MODE" % str(Weapons.def(id)["short"]))
+		return
+	fire_single[id] = not bool(fire_single.get(id, false))
+	notice.emit("FIRE MODE  —  %s" % ("SINGLE" if fire_single[id] else "AUTO"))
+	_sfx("empty_click", -4.0)
+	inventory_changed.emit()
+
+
+func adjust_zero(step: int) -> void:
+	if not has_gun():
+		return
+	var id := current_id()
+	var mx := int(Weapons.ZERO_MAX.get(id, 100))
+	if mx <= 100:
+		notice.emit("NO ZEROING ON THIS WEAPON")
+		return
+	var z := clampi(cur_zero() + step, 100, mx)
+	zeroing[id] = z
+	notice.emit("ZEROING  %d M" % z)
+	_sfx("empty_click", -8.0)
+	inventory_changed.emit()
+
+
+func _update_lean(delta: float) -> void:
+	var want := 0.0
+	if Input.is_action_pressed("lean_left"):
+		want -= 1.0
+	if Input.is_action_pressed("lean_right"):
+		want += 1.0
+	if sprinting:
+		want = 0.0
+	# Do not lean the camera into a wall.
+	if want != 0.0:
+		var side := Basis(Vector3.UP, yaw) * Vector3(want, 0, 0)
+		var head := global_position + Vector3(0, cam_base.y, 0)
+		var q := PhysicsRayQueryParameters3D.create(head, head + side * 0.62, 1)
+		q.exclude = [get_rid()]
+		if not get_world_3d().direct_space_state.intersect_ray(q).is_empty():
+			want = 0.0
+	lean = move_toward(lean, want, delta * 6.0)
+
+
+## Scoped aim drifts with breathing; hold Shift to steady it for a few seconds.
+func _update_breath(delta: float) -> void:
+	var scoped := aiming and cur_zoom() >= 1.9 and aim_blend > 0.7
+	holding_breath = scoped and Input.is_action_pressed("sprint") and breath > 0.0
+	if holding_breath:
+		breath = maxf(0.0, breath - delta * 22.0)
+	else:
+		breath = minf(100.0, breath + delta * (14.0 if not scoped else 9.0))
+	if not scoped:
+		_scope_sway = _scope_sway.lerp(Vector2.ZERO, clampf(delta * 8.0, 0.0, 1.0))
+		return
+	var t := Time.get_ticks_msec() * 0.001
+	var amp := deg_to_rad(0.10 + cur_zoom() * 0.022)
+	var planar := Vector2(velocity.x, velocity.z).length()
+	amp *= 1.0 + clampf(planar / WALK, 0.0, 1.5) * 1.6
+	if Input.is_action_pressed("crouch"):
+		amp *= 0.6
+	if breath <= 0.5:
+		amp *= 1.9
+	if holding_breath:
+		amp *= 0.12
+	var want := Vector2(sin(t * 0.83) + 0.35 * sin(t * 2.1), 0.6 * sin(t * 1.27 + 0.6) + 0.25 * sin(t * 2.9)) * amp
+	_scope_sway = _scope_sway.lerp(want, clampf(delta * 4.0, 0.0, 1.0))

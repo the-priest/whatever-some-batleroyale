@@ -58,6 +58,10 @@ var killfeed_box: VBoxContainer
 var slot_labels: Array[Label] = []
 var lbl_meds: Label
 var lbl_items: Label
+var lbl_cal: Label
+var breath_val := 100.0
+var breath_hold := false
+var breath_show := false
 var lbl_gear: Label
 var boost_bg: ColorRect
 var boost_fill: ColorRect
@@ -313,10 +317,15 @@ func set_scope(v: bool, name: String = "", velocity: float = 700.0) -> void:
 	scope.queue_redraw()
 
 
-func set_reddot(v: bool) -> void:
-	if v == reddot:
+var ads_dot := false
+
+
+func set_reddot(v: bool, iron: bool = false) -> void:
+	if v == reddot and iron == ads_dot:
 		return
 	reddot = v
+	ads_dot = iron
+	crosshair.visible = crosshair.visible or v or iron
 	crosshair.queue_redraw()
 
 
@@ -346,17 +355,39 @@ func _draw_scope() -> void:
 	var zoom := float(Weapons.SCOPE_ZOOM.get(scope_name, 4.0))
 	var fov := deg_to_rad(82.0 / zoom)
 	var px_per_rad := (sz.y * 0.5) / tan(fov * 0.5)
-	for i in range(1, 6):
+	var zero := 100.0
+	var pl = get_parent().get("player")
+	if pl != null:
+		zero = float(pl.cur_zero())
+	var zt := zero / scope_velocity
+	var zero_ang := atan((0.5 * Ballistics.GRAVITY * zt * zt) / zero)
+	# Breath meter under the lens.
+	if breath_show:
+		var bw := r * 0.5
+		var by := c.y + r * 0.86
+		scope.draw_rect(Rect2(c.x - bw * 0.5, by, bw, 3), Color(0, 0, 0, 0.35))
+		scope.draw_rect(Rect2(c.x - bw * 0.5, by, bw * breath_val / 100.0, 3), Color(0.1, 0.1, 0.1, 0.85) if not breath_hold else Color(0.15, 0.4, 0.75, 0.9))
+		scope.draw_string(font_bold, Vector2(c.x - 100, by - 6), "HOLD SHIFT  —  STEADY", HORIZONTAL_ALIGNMENT_CENTER, 200, 10, Color(0.05, 0.05, 0.05, 0.55))
+	scope.draw_string(font_mono, Vector2(c.x + r * 0.45, c.y + r * 0.72), "ZERO %d" % int(zero), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.05, 0.05, 0.05, 0.6))
+	var last_mark := c.y
+	var last_label := c.y
+	for i in range(1, 7):
 		var dist := 100.0 * float(i)
+		if dist <= zero:
+			continue
 		var tof := dist / scope_velocity
 		var drop := 0.5 * Ballistics.GRAVITY * tof * tof
-		var y := c.y + atan(drop / dist) * px_per_rad
+		var y := c.y + (atan(drop / dist) - zero_ang) * px_per_rad
 		if y > c.y + r * 0.95:
 			break
 		var w := 10.0 if i % 2 == 0 else 6.0
+		if y - last_mark < 3.0:
+			continue
 		scope.draw_line(Vector2(c.x - w, y), Vector2(c.x + w, y), thin, 1.0)
-		if i % 2 == 0 or zoom >= 6.0:
+		if y - last_label > 11.0:
 			scope.draw_string(font_mono, Vector2(c.x + w + 4, y + 4), "%d" % int(dist), HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.05, 0.05, 0.05, 0.9))
+			last_label = y
+		last_mark = y
 	scope.draw_string(font_bold, Vector2(c.x - r * 0.62, c.y + r * 0.72), scope_name.to_upper(), HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(0.05, 0.05, 0.05, 0.6))
 
 
@@ -490,6 +521,10 @@ func _build_weapon_panel() -> void:
 	lbl_reserve = _lv(" / 0", 16, MUTED)
 	lbl_reserve.add_theme_font_override("font", font_mono)
 	lbl_reserve.size_flags_vertical = Control.SIZE_SHRINK_END
+	lbl_cal = _lv("", 11, DIM)
+	lbl_cal.size_flags_vertical = Control.SIZE_SHRINK_END
+	row.add_child(lbl_cal)
+	row.add_child(_spacer(0))
 	row.add_child(lbl_ammo)
 	row.add_child(lbl_reserve)
 	vb.add_child(lbl_weapon)
@@ -621,7 +656,8 @@ func _build_menu() -> void:
 	grid.add_theme_constant_override("h_separation", 26)
 	grid.add_theme_constant_override("v_separation", 4)
 	for t in ["WASD  MOVE", "SHIFT  SPRINT", "C / CTRL  CROUCH", "LMB  FIRE", "RMB  AIM", "R  RELOAD",
-			"E  PICK UP", "1 2 / Q  WEAPONS", "H  HEAL  (4 5 6)", "G  GRENADE", "M  MAP", "ESC  PAUSE"]:
+			"F  PICK UP", "1 2 / WHEEL  WEAPONS", "Q / E  LEAN", "B  FIRE MODE", "PGUP/DN  ZEROING", "SHIFT (SCOPED)  HOLD BREATH",
+			"H  HEAL  (4 5 6)", "G  GRENADE", "M  MAP", "ESC  PAUSE"]:
 		var l := _lv(t, 12, MUTED, false)
 		grid.add_child(l)
 	col.add_child(grid)
@@ -761,7 +797,7 @@ func set_gameplay_visible(v: bool) -> void:
 
 
 func set_crosshair_visible(v: bool) -> void:
-	crosshair.visible = v or reddot
+	crosshair.visible = v or reddot or ads_dot
 
 
 func show_pause(v: bool) -> void:
@@ -797,12 +833,21 @@ func update_weapon(id: String, mag: int, reserve: int) -> void:
 		return
 	if id == "" or not Weapons.DEFS.has(id):
 		lbl_weapon.text = "UNARMED"
+		lbl_cal.text = ""
 		lbl_weapon.add_theme_color_override("font_color", MUTED)
 		lbl_ammo.text = "—"
 		lbl_reserve.text = ""
 		return
 	var d: Dictionary = Weapons.def(id)
-	lbl_weapon.text = str(d["name"])
+	var p = get_parent().get("player")
+	var tags := ""
+	if p != null and p.has_gun() and p.current_id() == id:
+		if bool(d.get("auto", false)) and id != "lmg":
+			tags += "   " + ("SINGLE" if not p.is_auto() else "AUTO")
+		if int(Weapons.ZERO_MAX.get(id, 100)) > 100:
+			tags += "   %dM" % p.cur_zero()
+	lbl_weapon.text = str(d["name"]) + tags
+	lbl_cal.text = Weapons.caliber(id).to_upper()
 	lbl_weapon.add_theme_color_override("font_color", Weapons.tier_color(id).lightened(0.15))
 	lbl_ammo.text = "%d" % mag
 	lbl_reserve.text = " / %d" % reserve
@@ -844,6 +889,12 @@ func set_inventory(p: Player) -> void:
 		parts.append("[6] ENERGY ×%d" % p.energy)
 	if p.grenades > 0:
 		parts.append("[G] FRAG ×%d" % p.grenades)
+	var ammo_parts: Array[String] = []
+	for cal in ["9mm", "5.56", "7.62", "12ga"]:
+		if p.ammo_of(cal) > 0:
+			ammo_parts.append("%s %d" % [cal.to_upper(), p.ammo_of(cal)])
+	if not ammo_parts.is_empty():
+		parts.append("AMMO  " + "  ".join(ammo_parts))
 	lbl_items.text = "     ".join(parts)
 	var gear: Array[String] = []
 	if p.helmet_level > 0:
@@ -851,6 +902,14 @@ func set_inventory(p: Player) -> void:
 	if p.vest_level > 0:
 		gear.append("VEST LV%d" % p.vest_level)
 	lbl_gear.text = "   ·   ".join(gear)
+
+
+func set_breath(v: float, holding: bool, show: bool) -> void:
+	breath_val = v
+	breath_hold = holding
+	breath_show = show
+	if scoped:
+		scope.queue_redraw()
 
 
 func set_boost(v: float) -> void:
@@ -1148,6 +1207,10 @@ func _draw_crosshair() -> void:
 	if reddot:
 		crosshair.draw_circle(c, 2.6, Color(1.0, 0.12, 0.08, 0.95))
 		crosshair.draw_arc(c, 3.2, 0, TAU, 16, Color(1.0, 0.3, 0.2, 0.35), 1.0)
+		return
+	if ads_dot:
+		crosshair.draw_circle(c, 2.2, Color(0, 0, 0, 0.6))
+		crosshair.draw_circle(c, 1.4, Color(1, 1, 1, 0.95))
 		return
 	var gap := 4.0 + spread
 	var ln := 7.0

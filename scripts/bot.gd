@@ -123,12 +123,14 @@ func _ready() -> void:
 
 	_muzzle_flash = MeshInstance3D.new()
 	var q := QuadMesh.new()
-	q.size = Vector2(0.34, 0.34)
+	q.size = Vector2(0.5, 0.5)
 	_muzzle_flash.mesh = q
 	var fm := StandardMaterial3D.new()
 	fm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	fm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	fm.albedo_color = Color(1.0, 0.8, 0.4, 0.95)
+	fm.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	fm.albedo_color = Color(1.0, 0.85, 0.55, 1.0)
+	fm.albedo_texture = Weapons.flash_texture()
 	fm.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 	fm.no_depth_test = true
 	fm.cull_mode = BaseMaterial3D.CULL_DISABLED
@@ -633,7 +635,7 @@ func _shoot_logic(delta: float) -> void:
 	var aim_pt := enemy.global_position + Vector3(0, aim_h, 0) + tvel * tof * comp
 	aim_pt.y += 0.5 * Ballistics.GRAVITY * tof * tof * comp
 	var base_dir := (aim_pt - from).normalized()
-	var mult := 0.75 if enemy is Player else 0.55
+	var mult := 0.75 if enemy is Player else 0.42
 	var pellets := int(d["pellets"])
 	_shot_seq += 1
 	for i in pellets:
@@ -668,7 +670,8 @@ func _find_enemy() -> Node3D:
 	for c in candidates:
 		var to: Vector3 = (c as Node3D).global_position - global_position
 		var d := to.length()
-		if d > sight:
+		# Bots pick fights with each other at shorter range than with you.
+		if d > (sight if c is Player else sight * 0.65):
 			continue
 		var flat := Vector3(to.x, 0, to.z).normalized()
 		var in_view: bool = d < CLOSE_SENSE or alert_timer > 0.0 or fwd.dot(flat) > FOV_COS or c == enemy

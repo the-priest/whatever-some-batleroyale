@@ -13,6 +13,8 @@ const WEAPON_DROP_WEIGHTS := {
 	"pistol": 22, "smg": 24, "rifle": 22, "shotgun": 14, "dmr": 8, "lmg": 6, "sniper": 4,
 }
 const AIRDROP_WEAPONS := ["sniper", "lmg", "dmr", "sniper"]
+const HI_WEAPONS := ["dmr", "sniper", "rifle", "lmg", "dmr"]
+const HI_GEAR := [["scope", "4x"], ["scope", "8x"], ["armor", "2"], ["helmet", "2"], ["armor", "3"], ["med", ""], ["scope", "2x"], ["ammo", "7.62"], ["ammo", "5.56"]]
 ## Floor loot table for non-weapon spots: [kind, id, weight].
 const GEAR_TABLE := [
 	["ammo", "", 16.0], ["bandage", "", 15.0], ["med", "", 7.0], ["energy", "", 7.0],
@@ -64,6 +66,7 @@ var end_cam_angle := 0.0
 var mouse_sens := 1.0
 var volume := 0.8
 var _loot_label_t := 0.0
+var _last_best: LootPickup = null
 var _wind: AudioStreamPlayer3D = null
 
 
@@ -223,15 +226,19 @@ func _start_match() -> void:
 	for p in world.loot_points:
 		var kind := str(p.get("kind", "weapon"))
 		var base := Vector3(p["pos"])
+		var hi := str(p.get("tier", "")) == "hi"
 		if kind == "weapon":
-			_spawn_loot("weapon", _weighted_weapon(), base)
+			_spawn_loot("weapon", HI_WEAPONS[randi() % HI_WEAPONS.size()] if hi else _weighted_weapon(), base)
 			# Guns come with something beside them: usually ammo.
-			if randf() < 0.75:
-				var a := randf() * TAU
-				var extra := ["ammo", ""] if randf() < 0.55 else _roll_gear()
-				_spawn_loot(extra[0], extra[1], base + Vector3(cos(a), 0.0, sin(a)) * 0.9)
+			var gun_id: String = loot_pool[loot_pool.size() - 1].item_id
+			var a := randf() * TAU
+			if randf() < 0.85:
+				_spawn_loot("ammo", Weapons.caliber(gun_id), base + Vector3(cos(a), 0.0, sin(a)) * 0.9)
+			if randf() < 0.35:
+				var extra := _roll_gear()
+				_spawn_loot(extra[0], extra[1], base + Vector3(cos(a + 2.0), 0.0, sin(a + 2.0)) * 0.9)
 		else:
-			var g := _roll_gear()
+			var g: Array = HI_GEAR[randi() % HI_GEAR.size()] if hi else _roll_gear()
 			_spawn_loot(g[0], g[1], base)
 			if bool(p.get("village", false)) and randf() < 0.5:
 				var a := randf() * TAU
@@ -363,8 +370,15 @@ func _roll_gear() -> Array:
 	for e in GEAR_TABLE:
 		roll -= float(e[2])
 		if roll <= 0.0:
+			if e[0] == "ammo":
+				return ["ammo", _random_caliber()]
 			return [e[0], e[1]]
-	return ["ammo", ""]
+	return ["ammo", _random_caliber()]
+
+
+func _random_caliber() -> String:
+	var r := randf()
+	return "5.56" if r < 0.34 else ("9mm" if r < 0.62 else ("7.62" if r < 0.84 else "12ga"))
 
 
 func _weighted_weapon() -> String:
@@ -538,6 +552,7 @@ func _crosshair_spread() -> float:
 
 func _update_progress() -> void:
 	hud.set_boost(player.boost)
+	hud.set_breath(player.breath, player.holding_breath, player.aiming and player.cur_zoom() >= 1.9)
 	var hp := player.heal_progress()
 	if hp >= 0.0:
 		hud.set_progress(player.heal_label(), hp)
@@ -592,11 +607,18 @@ func _update_prompt() -> void:
 	else:
 		hud.set_prompt("")
 	_loot_label_t -= get_process_delta_time()
-	if _loot_label_t <= 0.0:
-		_loot_label_t = 0.15
+	if _loot_label_t <= 0.0 or best != _last_best:
+		_loot_label_t = 0.12
+		_last_best = best
+		var pp := player.global_position
 		for l in loot_pool:
 			if is_instance_valid(l) and not l.taken:
-				l.label.visible = l == best or l.global_position.distance_to(player.global_position) < 9.0
+				var dd: float = l.global_position.distance_to(pp)
+				# Only the item you are about to take gets a name tag; light shafts
+				# fade out up close so a pile of loot does not become a wall of light.
+				l.label.visible = l == best
+				l.beacon.visible = dd > 7.0
+				l.ring.visible = dd < 60.0
 
 
 func _update_minimap() -> void:
@@ -691,6 +713,8 @@ func _on_ammo_changed(mag: int, reserve: int) -> void:
 func _on_inventory_changed() -> void:
 	if player != null:
 		hud.set_inventory(player)
+		if player.has_gun():
+			hud.update_weapon(player.current_id(), player.current_mag(), player.current_reserve())
 
 
 func _on_hitmarker(headshot: bool, killed: bool) -> void:
@@ -769,8 +793,8 @@ func _on_bot_eliminated(victim: Bot, killer: String) -> void:
 func _drop_bot_loot(b: Bot) -> void:
 	var base := ground_at(b.global_position)
 	if b.armed and b.weapon_id != "":
-		_spawn_loot("weapon", b.weapon_id, base + Vector3(0.0, 0.08, 0.0), int(Weapons.def(b.weapon_id)["mag"]), Weapons.starting_reserve(b.weapon_id))
-	var extras: Array = [["ammo", ""]]
+		_spawn_loot("weapon", b.weapon_id, base + Vector3(0.0, 0.08, 0.0), int(Weapons.def(b.weapon_id)["mag"]))
+	var extras: Array = [["ammo", Weapons.caliber(b.weapon_id) if b.armed else _random_caliber()]]
 	if b.meds > 0:
 		extras.append(["med", ""])
 	if randf() < 0.6:
@@ -888,12 +912,12 @@ func _spawn_airdrop() -> void:
 func on_airdrop_landed(drop: Airdrop) -> void:
 	var base := drop.global_position
 	var gun: String = AIRDROP_WEAPONS[randi() % AIRDROP_WEAPONS.size()]
-	var items: Array = [["weapon", gun], ["armor", "3"], ["helmet", "3"], ["med", ""], ["scope", "8x" if gun == "sniper" or gun == "dmr" else "4x"], ["ammo", ""]]
+	var items: Array = [["weapon", gun], ["armor", "3"], ["helmet", "3"], ["med", ""], ["scope", "8x" if gun == "sniper" or gun == "dmr" else "4x"], ["ammo", Weapons.caliber(gun)], ["ammo", Weapons.caliber(gun)]]
 	for i in items.size():
 		var a := TAU * float(i) / float(items.size())
 		var p := ground_at(base + Vector3(cos(a), 0.0, sin(a)) * 1.9) + Vector3(0, 0.08, 0)
 		if items[i][0] == "weapon":
-			_spawn_loot("weapon", gun, p, -1, int(Weapons.def(gun)["mag"]) * 3)
+			_spawn_loot("weapon", gun, p)
 		else:
 			_spawn_loot(items[i][0], items[i][1], p)
 	# Armed bots nearby want it too.
@@ -1108,6 +1132,10 @@ func _run_shot() -> void:
 	await get_tree().process_frame
 	print("[shot] match up, player=", player)
 	var p := player
+	if OS.get_cmdline_user_args().has("--tower") and world.villages.towers.size() > 0:
+		var tc: Vector2 = world.villages.towers[0].center
+		spot = Vector3(tc.x + 14.0, 0.0, tc.y + 10.0)
+		ang = atan2(14.0, 10.0)
 	if p == null:
 		print("[shot] no player")
 		get_tree().quit()
@@ -1122,6 +1150,9 @@ func _run_shot() -> void:
 	p.velocity = Vector3.ZERO
 	p.yaw = ang
 	p.pitch = -0.16
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--pitch="):
+			p.pitch = float(a.substr(8))
 	p.camera.make_current()
 	phase = "playing"
 	var args := OS.get_cmdline_user_args()
@@ -1144,8 +1175,40 @@ func _run_shot() -> void:
 	for a in args:
 		if a.begins_with("--wait="):
 			wait = int(a.substr(7))
+	if args.has("--loot"):
+		var kinds := [["armor", "3"], ["helmet", "2"], ["scope", "4x"], ["med", ""], ["weapon", "sniper"], ["energy", ""], ["grenade", ""], ["ammo", ""]]
+		var fwd := Basis(Vector3.UP, p.yaw) * Vector3(0, 0, -1)
+		var right := Basis(Vector3.UP, p.yaw) * Vector3(1, 0, 0)
+		for i in kinds.size():
+			var lp := p.global_position + fwd * (4.0 + float(i / 4) * 2.2) + right * (float(i % 4) - 1.5) * 1.6
+			_spawn_loot(kinds[i][0], kinds[i][1], ground_at(lp) + Vector3(0, 0.08, 0)).label.visible = true
 	for i in wait:
 		await get_tree().process_frame
+		if args.has("--fire") and i % 6 == 0 and i > 20:
+			p.fire_timer = 0.0
+			p._try_fire()
+			# Some enemy fire crossing the view as well.
+			var side := Basis(Vector3.UP, p.yaw) * Vector3(-30, 1.5, -60)
+			ballistics.fire(null, p.global_position + side, (p.global_position + Basis(Vector3.UP, p.yaw) * Vector3(25, 1, -50) - (p.global_position + side)).normalized(), "rifle", p.global_position + side, 1)
+	if args.has("--fire"):
+		# One volley right before capture so tracers are in flight in the frame.
+		get_tree().paused = false
+		p.fire_timer = 0.0
+		p._try_fire()
+		for k in 4:
+			var side := Basis(Vector3.UP, p.yaw) * Vector3(-40.0 + k * 3.0, 2.0 + k, -90.0)
+			var tgt := Basis(Vector3.UP, p.yaw) * Vector3(30.0, 1.0 + k * 0.5, -40.0)
+			ballistics.fire(null, p.global_position + side, (tgt - side).normalized(), "rifle", p.global_position + side, 1)
+		# Advance the bullets a few metres without letting them leave the frame.
+		for b in ballistics.bullets:
+			b["pos"] = b["pos"] + Vector3(b["vel"]) * 0.035
+			b["dist"] = float(b["dist"]) + float(b["speed"]) * 0.035
+			b["trail"] = float(b["speed"]) * 0.035
+			ballistics._place_tracer(b, p.camera)
+		ballistics.set_physics_process(false)
+		for b in ballistics.bullets:
+			var mi: MeshInstance3D = b["mesh"]
+			print("[shot] bullet pos=", b["pos"], " mesh vis=", mi.visible, " in_tree=", mi.is_inside_tree(), " xf=", mi.global_transform.origin, " scale=", mi.global_transform.basis.get_scale(), " cam=", p.camera.global_position)
 	print("[shot] frames waited")
 	await RenderingServer.frame_post_draw
 	print("[shot] post draw")
@@ -1331,8 +1394,8 @@ func _run_sim() -> void:
 	for i in 5:
 		await get_tree().physics_frame
 	# Loot of every kind.
-	var kinds := [["weapon", "rifle"], ["ammo", ""], ["armor", "2"], ["helmet", "1"], ["bandage", ""], ["med", ""],
-		["energy", ""], ["scope", "4x"], ["extmag", ""], ["comp", ""], ["grenade", ""], ["weapon", "sniper"], ["armor", "3"]]
+	var kinds := [["weapon", "rifle"], ["ammo", "5.56"], ["armor", "2"], ["helmet", "1"], ["bandage", ""], ["med", ""],
+		["energy", ""], ["scope", "4x"], ["extmag", ""], ["comp", ""], ["grenade", ""], ["weapon", "sniper"], ["armor", "3"], ["ammo", "7.62"]]
 	for k in kinds:
 		var l := _spawn_loot(k[0], k[1], player.global_position)
 		await get_tree().process_frame
@@ -1412,6 +1475,25 @@ func _run_sim() -> void:
 	_check("250m shot with holdover hits (hp %d)" % int(target.hp), target.hp < hp_before)
 	player.set_physics_process(true)
 	target.set_physics_process(true)
+	# Gun handling: recoil pattern is repeatable, fire mode, zeroing.
+	player.select_slot(player.loadout.find("rifle"))
+	for i in 30:
+		await get_tree().physics_frame
+	var seq_a: Array = []
+	var seq_b: Array = []
+	for i in 8:
+		seq_a.append(Weapons.recoil_step("rifle", i))
+		seq_b.append(Weapons.recoil_step("rifle", i))
+	_check("recoil pattern deterministic", seq_a == seq_b and absf(seq_a[0].x) < 0.01 and seq_a[7].x != 0.0)
+	_check("rifle starts auto", player.is_auto())
+	player.toggle_fire_mode()
+	_check("fire mode toggles to single", not player.is_auto())
+	player.toggle_fire_mode()
+	player.adjust_zero(100)
+	player.adjust_zero(100)
+	_check("rifle zero 300 (%d)" % player.cur_zero(), player.cur_zero() == 300)
+	_check("zero angle sane", Weapons.zero_angle("rifle", 300.0) > 0.0005 and Weapons.zero_angle("rifle", 300.0) < 0.02)
+	_check("ammo pools: 5.56=%d 7.62=%d" % [player.ammo_of("5.56"), player.ammo_of("7.62")], player.ammo_of("5.56") > 0 and player.ammo_of("7.62") > 0)
 	# Grenade.
 	player.global_position = spot + Vector3(0, 1.0, 0)
 	var g_before := player.grenades

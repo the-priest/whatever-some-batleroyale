@@ -5,9 +5,9 @@ render_mode blend_mix, depth_draw_opaque, cull_back, diffuse_burley, specular_sc
 // The meshes have no UVs, so colours are derived from model-space position:
 // barrel = blued steel, receiver = dark gunmetal, stock/grip = walnut.
 
-uniform vec3 gunmetal : source_color = vec3(0.085, 0.092, 0.104);
-uniform vec3 steel : source_color = vec3(0.255, 0.270, 0.295);
-uniform vec3 wood : source_color = vec3(0.335, 0.175, 0.082);
+uniform vec3 gunmetal : source_color = vec3(0.17, 0.18, 0.20);
+uniform vec3 steel : source_color = vec3(0.40, 0.42, 0.45);
+uniform vec3 wood : source_color = vec3(0.45, 0.25, 0.12);
 uniform vec3 accent : source_color = vec3(0.72, 0.36, 0.10);
 uniform float wear = 0.35;
 uniform float accent_amount = 0.0;
@@ -76,8 +76,15 @@ void fragment() {
 	base += vec3(0.05) * edge * wear * grain;
 
 	ALBEDO = base;
-	ROUGHNESS = mix(0.72, 0.28, clamp(rail + recv + barrel * 0.7, 0.0, 1.0));
-	METALLIC = mix(0.12, 0.85, clamp(rail + barrel + recv, 0.0, 1.0));
-	SPECULAR = 0.55;
+	// The compatibility renderer has no reflection probes, so fully metallic
+	// surfaces read as black. Keep metalness low and let specular do the work.
+	ROUGHNESS = mix(0.62, 0.32, clamp(rail + recv + barrel * 0.7, 0.0, 1.0));
+	METALLIC = mix(0.05, 0.35, clamp(rail + barrel + recv, 0.0, 1.0));
+	SPECULAR = 0.6;
+	// A little fill light so the gun never drops to black in shadow.
+	EMISSION = base * 0.18;
+	// Rim light to separate the silhouette from dark backgrounds.
+	float rim = pow(1.0 - clamp(dot(NORMAL, VIEW), 0.0, 1.0), 3.0);
+	EMISSION += vec3(0.10, 0.11, 0.12) * rim;
 	AO = mix(0.65, 1.0, clamp(1.0 - ax * 1.2, 0.0, 1.0));
 }

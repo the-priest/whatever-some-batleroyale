@@ -13,7 +13,7 @@ const DEFS := {
 		"mag": 30, "reserve": 210, "spread": 1.35, "ads_spread": 0.22,
 		"recoil": 1.05, "range": 150.0, "auto": true, "reload": 2.45,
 		"head": 2.1, "pellets": 1, "sound": "rifle", "tier": 2,
-		"scale": 0.50, "hip": Vector3(0.185, -0.175, -0.42), "ads": Vector3(0.0, -0.092, -0.32),
+		"scale": 0.425, "hip": Vector3(0.185, -0.175, -0.42), "ads": Vector3(0.0, -0.078, -0.32),
 		"kick": 0.030, "zoom": 1.25,
 	},
 	"smg": {
@@ -23,7 +23,7 @@ const DEFS := {
 		"mag": 35, "reserve": 280, "spread": 1.8, "ads_spread": 0.55,
 		"recoil": 0.62, "range": 85.0, "auto": true, "reload": 1.95,
 		"head": 1.9, "pellets": 1, "sound": "smg", "tier": 1,
-		"scale": 0.42, "hip": Vector3(0.165, -0.150, -0.38), "ads": Vector3(0.0, -0.083, -0.30),
+		"scale": 0.357, "hip": Vector3(0.165, -0.150, -0.38), "ads": Vector3(0.0, -0.071, -0.30),
 		"kick": 0.017, "zoom": 1.15,
 	},
 	"shotgun": {
@@ -33,7 +33,7 @@ const DEFS := {
 		"mag": 6, "reserve": 48, "spread": 4.6, "ads_spread": 3.4,
 		"recoil": 3.1, "range": 42.0, "auto": false, "reload": 3.05,
 		"head": 1.7, "pellets": 8, "sound": "shotgun", "tier": 2,
-		"scale": 0.50, "hip": Vector3(0.185, -0.170, -0.42), "ads": Vector3(0.0, -0.090, -0.33),
+		"scale": 0.425, "hip": Vector3(0.185, -0.170, -0.42), "ads": Vector3(0.0, -0.076, -0.33),
 		"kick": 0.075, "zoom": 1.1,
 	},
 	"lmg": {
@@ -43,7 +43,7 @@ const DEFS := {
 		"mag": 100, "reserve": 300, "spread": 2.0, "ads_spread": 0.5,
 		"recoil": 1.15, "range": 160.0, "auto": true, "reload": 4.7,
 		"head": 2.0, "pellets": 1, "sound": "lmg", "tier": 3,
-		"scale": 0.54, "hip": Vector3(0.205, -0.200, -0.45), "ads": Vector3(0.0, -0.100, -0.34),
+		"scale": 0.459, "hip": Vector3(0.205, -0.200, -0.45), "ads": Vector3(0.0, -0.085, -0.34),
 		"kick": 0.028, "zoom": 1.2,
 	},
 	"dmr": {
@@ -53,7 +53,7 @@ const DEFS := {
 		"mag": 20, "reserve": 140, "spread": 0.9, "ads_spread": 0.10,
 		"recoil": 1.9, "range": 220.0, "auto": false, "reload": 2.65,
 		"head": 2.3, "pellets": 1, "sound": "dmr", "tier": 3,
-		"scale": 0.52, "hip": Vector3(0.195, -0.180, -0.43), "ads": Vector3(0.0, -0.090, -0.34),
+		"scale": 0.442, "hip": Vector3(0.195, -0.180, -0.43), "ads": Vector3(0.0, -0.076, -0.34),
 		"kick": 0.050, "zoom": 1.8,
 	},
 	"pistol": {
@@ -63,7 +63,7 @@ const DEFS := {
 		"mag": 15, "reserve": 120, "spread": 1.5, "ads_spread": 0.45,
 		"recoil": 0.85, "range": 70.0, "auto": false, "reload": 1.75,
 		"head": 2.0, "pellets": 1, "sound": "pistol", "tier": 1,
-		"scale": 0.34, "hip": Vector3(0.145, -0.140, -0.34), "ads": Vector3(0.0, -0.082, -0.29),
+		"scale": 0.289, "hip": Vector3(0.145, -0.140, -0.34), "ads": Vector3(0.0, -0.070, -0.29),
 		"kick": 0.026, "zoom": 1.05,
 	},
 	"sniper": {
@@ -73,7 +73,7 @@ const DEFS := {
 		"mag": 5, "reserve": 40, "spread": 0.35, "ads_spread": 0.0,
 		"recoil": 4.2, "range": 420.0, "auto": false, "reload": 3.55,
 		"head": 2.5, "pellets": 1, "sound": "sniper", "tier": 4,
-		"scale": 0.23, "hip": Vector3(0.195, -0.190, -0.46), "ads": Vector3(0.0, -0.098, -0.36),
+		"scale": 0.196, "hip": Vector3(0.195, -0.190, -0.46), "ads": Vector3(0.0, -0.083, -0.36),
 		"kick": 0.10, "zoom": 4.2,
 	},
 }
@@ -87,6 +87,28 @@ const TIER_COLORS := [
 ]
 
 static var _geo: Dictionary = {}
+static var _flash_tex: Texture2D
+
+
+## Soft star-shaped muzzle flash, generated once.
+static func flash_texture() -> Texture2D:
+	if _flash_tex != null:
+		return _flash_tex
+	var n := 64
+	var img := Image.create(n, n, false, Image.FORMAT_RGBA8)
+	for y in n:
+		for x in n:
+			var p := Vector2(x - n * 0.5 + 0.5, y - n * 0.5 + 0.5) / (n * 0.5)
+			var r := p.length()
+			var a := atan2(p.y, p.x)
+			var star := pow(absf(cos(a * 3.0)), 6.0) * 0.55 + pow(absf(cos(a * 2.0 + 0.4)), 10.0) * 0.35
+			var v := clampf(1.0 - r / (0.32 + star * 0.68), 0.0, 1.0)
+			v = v * v
+			var core := clampf(1.0 - r / 0.22, 0.0, 1.0)
+			var c := Color(1.0, 0.72 + core * 0.28, 0.35 + core * 0.6, clampf(v + core, 0.0, 1.0))
+			img.set_pixel(x, y, c)
+	_flash_tex = ImageTexture.create_from_image(img)
+	return _flash_tex
 static var _mats: Dictionary = {}
 static var _view_mat: ShaderMaterial
 static var _drop_mat: StandardMaterial3D
@@ -118,10 +140,53 @@ static func attachment_fits(gun: String, kind: String) -> bool:
 	return false
 
 
-## Reserve ammo that comes with a freshly looted gun: two magazines.
+const CALIBER := {
+	"pistol": "9mm", "smg": "9mm", "rifle": "5.56", "lmg": "5.56",
+	"dmr": "7.62", "sniper": "7.62", "shotgun": "12ga",
+}
+const AMMO_CAP := {"9mm": 240, "5.56": 300, "7.62": 140, "12ga": 60}
+const AMMO_BOX := {"9mm": 60, "5.56": 60, "7.62": 30, "12ga": 15}
+## How far each gun can be zeroed (metres).
+const ZERO_MAX := {"sniper": 600, "dmr": 500, "rifle": 400, "lmg": 300}
+
+
+static func caliber(id: String) -> String:
+	return str(CALIBER.get(id, "9mm"))
+
+
+## Kept for loot that still asks for a reserve figure: one box of the calibre.
 static func starting_reserve(id: String) -> int:
-	var d := def(id)
-	return mini(int(d["reserve"]), int(d["mag"]) * 2)
+	return int(AMMO_BOX.get(caliber(id), 30))
+
+
+## Learnable spray pattern: horizontal (degrees, signed) and a vertical
+## multiplier for the n-th shot of a spray. Small jitter is added by the caller.
+static func recoil_step(id: String, n: int) -> Vector2:
+	var k := float(n)
+	match id:
+		"rifle":
+			# Straight up for five, then a lazy drift right and back left.
+			var h := 0.0 if n < 5 else sin((k - 5.0) * 0.35) * 0.55 + 0.12
+			return Vector2(h, 1.0 + minf(k, 10.0) * 0.035)
+		"smg":
+			# Tight, climbs gently, slight left wander.
+			return Vector2(-0.10 + sin(k * 0.6) * 0.25, 0.9 + minf(k, 14.0) * 0.015)
+		"lmg":
+			# Heavy start that settles once the belt is running.
+			return Vector2(sin(k * 0.22) * 0.45, 1.25 - minf(k, 12.0) * 0.035)
+		"pistol":
+			return Vector2(sin(k * 1.7) * 0.3, 1.0)
+		"dmr":
+			return Vector2(0.25 * (1.0 if n % 2 == 0 else -1.0), 1.0)
+	return Vector2(0.0, 1.0)
+
+
+## Angle (radians) the bore is tilted up so a round crosses the sight line at
+## `zero` metres.
+static func zero_angle(id: String, zero: float) -> float:
+	var v := float(def(id).get("velocity", 500.0))
+	var t := zero / v
+	return atan((0.5 * 9.8 * t * t) / maxf(1.0, zero))
 
 
 static func tier_color(id: String) -> Color:
@@ -191,9 +256,9 @@ static func view_material(id: String) -> ShaderMaterial:
 static func drop_material(id: String) -> StandardMaterial3D:
 	if _drop_mat == null:
 		_drop_mat = StandardMaterial3D.new()
-		_drop_mat.metallic = 0.72
-		_drop_mat.roughness = 0.34
-		_drop_mat.albedo_color = Color(0.26, 0.28, 0.31)
+		_drop_mat.metallic = 0.3
+		_drop_mat.roughness = 0.4
+		_drop_mat.albedo_color = Color(0.32, 0.34, 0.37)
 	var m: StandardMaterial3D = _drop_mat.duplicate()
 	m.rim_enabled = true
 	m.rim = 0.55
@@ -271,8 +336,10 @@ static func _apply_gun_shading(n: Node) -> void:
 				var m := mi.get_active_material(s)
 				if m is BaseMaterial3D:
 					m = (m as BaseMaterial3D).duplicate()
-					(m as BaseMaterial3D).metallic = 0.75
-					(m as BaseMaterial3D).roughness = 0.35
+					(m as BaseMaterial3D).metallic = 0.3
+					(m as BaseMaterial3D).roughness = 0.45
+					(m as BaseMaterial3D).emission_enabled = true
+					(m as BaseMaterial3D).emission = Color(0.06, 0.06, 0.065)
 					mi.set_surface_override_material(s, m)
 	for c in n.get_children():
 		_apply_gun_shading(c)

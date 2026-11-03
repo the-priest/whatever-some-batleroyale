@@ -19,6 +19,7 @@ var detail := FastNoiseLite.new()
 var ridge := FastNoiseLite.new()
 var macro := FastNoiseLite.new()
 var woods := FastNoiseLite.new()
+var ridgelines := FastNoiseLite.new()
 var peaks: Array[Vector3] = []  # x, z, amplitude
 var seed_value: int = 20261101
 
@@ -56,12 +57,25 @@ func _init(p_seed: int = 20261101) -> void:
 	woods.frequency = 0.0042
 	woods.fractal_octaves = 4
 
+	ridgelines.seed = p_seed + 777
+	ridgelines.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+	ridgelines.fractal_type = FastNoiseLite.FRACTAL_RIDGED
+	ridgelines.frequency = 0.0045
+	ridgelines.fractal_octaves = 3
+
 	peaks = [
 		Vector3(-120.0, -175.0, 30.0),
 		Vector3(215.0, 195.0, 36.0),
 		Vector3(-255.0, 215.0, 22.0),
 		Vector3(60.0, 285.0, 18.0),
 	]
+	# A few more hills that move with the seed, so every island plays differently.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = p_seed + 99
+	for i in 4:
+		var a := rng.randf() * TAU
+		var r := rng.randf_range(60.0, 300.0)
+		peaks.append(Vector3(cos(a) * r, sin(a) * r, rng.randf_range(14.0, 26.0)))
 	heights.resize(RES * RES)
 	_generate()
 
@@ -71,12 +85,15 @@ func _generate() -> void:
 		var z := -HALF + float(iz) * STEP
 		for ix in RES:
 			var x := -HALF + float(ix) * STEP
-			var h := 11.0 + hills.get_noise_2d(x, z) * 15.0 + detail.get_noise_2d(x, z) * 4.0
+			var h := 11.0 + hills.get_noise_2d(x, z) * 19.0 + detail.get_noise_2d(x, z) * 4.5
 			for p in peaks:
 				var d := Vector2(x, z).distance_to(Vector2(p.x, p.y))
-				var m := clampf(1.0 - d / 250.0, 0.0, 1.0)
+				var m := clampf(1.0 - d / 210.0, 0.0, 1.0)
 				m = m * m * (3.0 - 2.0 * m)
 				h += p.z * m * (0.55 + 0.45 * ridge.get_noise_2d(x, z))
+			# Ridgelines: long crests to fight over and hide behind.
+			var rl := ridgelines.get_noise_2d(x, z) * 0.5 + 0.5
+			h += pow(clampf((rl - 0.55) / 0.45, 0.0, 1.0), 1.6) * 9.0
 			# Coast falloff: land right out to the rim, sea only past it.
 			# A short shelf just outside the square hides the seam.
 			var r := maxf(absf(x), absf(z)) / HALF

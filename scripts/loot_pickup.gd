@@ -240,12 +240,15 @@ func display_name() -> String:
 			return str(SCOPE_NAMES.get(item_id, "SCOPE"))
 		"bandage":
 			return "BANDAGES ×%d" % amount
+		"ammo":
+			if item_id != "":
+				return "%s  ×%d" % [item_id.to_upper(), int(Weapons.AMMO_BOX.get(item_id, 30))]
 	return str(ITEM_NAMES.get(kind, "LOOT"))
 
 
 func prompt_text() -> String:
 	var verb := "PICK UP" if kind == "weapon" else ("EQUIP" if kind in ["armor", "helmet", "scope", "extmag", "comp"] else "TAKE")
-	return "[E]  %s  %s" % [verb, display_name()]
+	return "[F]  %s  %s" % [verb, display_name()]
 
 
 ## Empty string when the player can take this, otherwise the reason they cannot.
