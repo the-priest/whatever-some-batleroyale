@@ -675,8 +675,8 @@ func _reload_pose(t: float, id: String) -> Array:
 		return [pos, rot]
 
 	# Magazine weapons: tilt, mag out, new mag in, slap, charge.
-	pos += Vector3(-0.025, -0.045, 0.02) * tilt
-	rot += Vector3(0.16, 0.08, 0.50) * tilt
+	pos += Vector3(-0.045, -0.015, 0.015) * tilt
+	rot += Vector3(0.22, 0.18, 0.26) * tilt
 	if _mag_node != null:
 		var out := _seg(t, 0.16, 0.30)
 		var back_in := _seg(t, 0.40, 0.58)

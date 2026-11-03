@@ -1216,6 +1216,33 @@ func _run_shot() -> void:
 			# Some enemy fire crossing the view as well.
 			var side := Basis(Vector3.UP, p.yaw) * Vector3(-30, 1.5, -60)
 			ballistics.fire(null, p.global_position + side, (p.global_position + Basis(Vector3.UP, p.yaw) * Vector3(25, 1, -50) - (p.global_position + side)).normalized(), "rifle", p.global_position + side, 1)
+	if args.has("--bot"):
+		for b in bots:
+			if is_instance_valid(b):
+				var fwd := Basis(Vector3.UP, p.yaw) * Vector3(1.5, 0, -14.0)
+				b.state = Bot.State.GROUND
+				b.visible = true
+				b.global_position = ground_at(p.global_position + fwd) + Vector3(0, 0.1, 0)
+				b.arm_weapon("rifle")
+				b.vest_level = 2
+				b.set_physics_process(false)
+				var to: Vector3 = p.global_position - b.global_position
+				b.rotation.y = atan2(-to.x, -to.z) + 0.5
+				break
+		for i in 10:
+			await get_tree().process_frame
+	if args.has("--reload"):
+		p.mags[p.current_id()] = 0
+		p.ammo[Weapons.caliber(p.current_id())] = 60
+		p.start_reload()
+		# Freeze the pose at the moment the magazine is out.
+		var at := 0.38
+		for a in args:
+			if a.begins_with("--at_t="):
+				at = float(a.substr(7))
+		p.reload_timer = p._reload_dur * (1.0 - at)
+		p._update_weapon(0.0)
+		p.set_physics_process(false)
 	if args.has("--fire"):
 		# One volley right before capture so tracers are in flight in the frame.
 		get_tree().paused = false
