@@ -57,6 +57,10 @@ var lbl_big: Label
 var killfeed_box: VBoxContainer
 var slot_labels: Array[Label] = []
 var lbl_meds: Label
+var lbl_items: Label
+var lbl_gear: Label
+var boost_bg: ColorRect
+var boost_fill: ColorRect
 var menu: Control
 var play_button: Button
 var menu_seed: Label
@@ -292,12 +296,28 @@ func _build_scope() -> void:
 	root.add_child(scope)
 
 
-func set_scope(v: bool) -> void:
-	if v == scoped:
+var scope_name := ""
+var reddot := false
+
+
+var scope_velocity := 700.0
+
+
+func set_scope(v: bool, name: String = "", velocity: float = 700.0) -> void:
+	if v == scoped and name == scope_name:
 		return
 	scoped = v
+	scope_name = name
+	scope_velocity = velocity
 	scope.visible = v
 	scope.queue_redraw()
+
+
+func set_reddot(v: bool) -> void:
+	if v == reddot:
+		return
+	reddot = v
+	crosshair.queue_redraw()
 
 
 func _draw_scope() -> void:
@@ -320,10 +340,24 @@ func _draw_scope() -> void:
 	scope.draw_line(Vector2(c.x, c.y + r * 0.12), Vector2(c.x, c.y + r), thin, 3.0)
 	scope.draw_line(Vector2(c.x - r * 0.12, c.y), Vector2(c.x + r * 0.12, c.y), thin, 1.0)
 	scope.draw_line(Vector2(c.x, c.y - r), Vector2(c.x, c.y + r * 0.12), thin, 1.0)
-	for i in range(1, 4):
-		var y := c.y + r * 0.04 * i
-		scope.draw_line(Vector2(c.x - 6, y), Vector2(c.x + 6, y), thin, 1.0)
 	scope.draw_circle(c, 1.6, Color(0.85, 0.12, 0.1))
+	# Bullet-drop holdover marks: where the round lands at 100 m steps,
+	# for this zoom and a typical rifle round.
+	var zoom := float(Weapons.SCOPE_ZOOM.get(scope_name, 4.0))
+	var fov := deg_to_rad(82.0 / zoom)
+	var px_per_rad := (sz.y * 0.5) / tan(fov * 0.5)
+	for i in range(1, 6):
+		var dist := 100.0 * float(i)
+		var tof := dist / scope_velocity
+		var drop := 0.5 * Ballistics.GRAVITY * tof * tof
+		var y := c.y + atan(drop / dist) * px_per_rad
+		if y > c.y + r * 0.95:
+			break
+		var w := 10.0 if i % 2 == 0 else 6.0
+		scope.draw_line(Vector2(c.x - w, y), Vector2(c.x + w, y), thin, 1.0)
+		if i % 2 == 0 or zoom >= 6.0:
+			scope.draw_string(font_mono, Vector2(c.x + w + 4, y + 4), "%d" % int(dist), HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.05, 0.05, 0.05, 0.9))
+	scope.draw_string(font_bold, Vector2(c.x - r * 0.62, c.y + r * 0.72), scope_name.to_upper(), HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(0.05, 0.05, 0.05, 0.6))
 
 
 func _build_crosshair() -> void:
@@ -370,7 +404,7 @@ func _build_bars() -> void:
 	var box := _panel()
 	box.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
 	box.offset_left = 28
-	box.offset_top = -118
+	box.offset_top = -120
 	box.offset_right = 348
 	box.offset_bottom = -28
 	var vb := VBoxContainer.new()
@@ -396,10 +430,31 @@ func _build_bars() -> void:
 	var hp_bg := _bar(9, Color(0.92, 0.93, 0.94))
 	health_fill = hp_bg.get_meta("fill")
 	vb.add_child(hp_bg)
+	boost_bg = _bar(3, Color(0.45, 0.95, 0.55))
+	boost_fill = boost_bg.get_meta("fill")
+	boost_bg.visible = false
+	vb.add_child(boost_bg)
 
 	box.add_child(vb)
 	root.add_child(box)
 	_hud_nodes.append(box)
+
+	lbl_gear = _lv("", 12, Color(0.55, 0.75, 0.95))
+	lbl_gear.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	lbl_gear.offset_left = 30
+	lbl_gear.offset_right = 600
+	lbl_gear.offset_top = -144
+	lbl_gear.offset_bottom = -126
+	root.add_child(lbl_gear)
+	_hud_nodes.append(lbl_gear)
+	lbl_items = _lv("", 12, Color(0.92, 0.80, 0.70))
+	lbl_items.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	lbl_items.offset_left = 30
+	lbl_items.offset_right = 900
+	lbl_items.offset_top = -164
+	lbl_items.offset_bottom = -146
+	root.add_child(lbl_items)
+	_hud_nodes.append(lbl_items)
 
 
 func _build_weapon_panel() -> void:
@@ -566,7 +621,7 @@ func _build_menu() -> void:
 	grid.add_theme_constant_override("h_separation", 26)
 	grid.add_theme_constant_override("v_separation", 4)
 	for t in ["WASD  MOVE", "SHIFT  SPRINT", "C / CTRL  CROUCH", "LMB  FIRE", "RMB  AIM", "R  RELOAD",
-			"E  PICK UP", "1 2 / Q  WEAPONS", "H  MEDKIT", "M  MAP", "SPACE  JUMP / CHUTE", "ESC  PAUSE"]:
+			"E  PICK UP", "1 2 / Q  WEAPONS", "H  HEAL  (4 5 6)", "G  GRENADE", "M  MAP", "ESC  PAUSE"]:
 		var l := _lv(t, 12, MUTED, false)
 		grid.add_child(l)
 	col.add_child(grid)
@@ -706,7 +761,7 @@ func set_gameplay_visible(v: bool) -> void:
 
 
 func set_crosshair_visible(v: bool) -> void:
-	crosshair.visible = v
+	crosshair.visible = v or reddot
 
 
 func show_pause(v: bool) -> void:
@@ -760,18 +815,47 @@ func update_ammo(mag: int, reserve: int) -> void:
 		lbl_reserve.text = " / %d" % reserve
 
 
-func set_inventory(loadout: Array, slot: int, meds: int) -> void:
+func set_inventory(p: Player) -> void:
 	for i in 2:
 		var l := slot_labels[i]
-		if i < loadout.size():
-			var id: String = loadout[i]
-			l.text = "%d  %s" % [i + 1, str(Weapons.def(id)["short"])]
+		if i < p.loadout.size():
+			var id: String = p.loadout[i]
+			var att: Dictionary = p.attachments[i]
+			var extras := ""
+			if str(att.get("scope", "")) != "":
+				extras += " " + str(att["scope"]).to_upper()
+			if bool(att.get("extmag", false)):
+				extras += " EXT"
+			if bool(att.get("comp", false)):
+				extras += " COMP"
+			l.text = "%d  %s%s" % [i + 1, str(Weapons.def(id)["short"]), extras]
 			var c := Weapons.tier_color(id)
-			l.add_theme_color_override("font_color", c.lightened(0.2) if i == slot else Color(c.r, c.g, c.b, 0.5))
+			l.add_theme_color_override("font_color", c.lightened(0.2) if i == p.slot else Color(c.r, c.g, c.b, 0.5))
 		else:
 			l.text = "%d  —" % (i + 1)
 			l.add_theme_color_override("font_color", DIM)
-	lbl_meds.text = ("+ MEDKIT ×%d  [H]" % meds) if meds > 0 else ""
+	lbl_meds.text = ""
+	var parts: Array[String] = []
+	if p.bandages > 0:
+		parts.append("[4] BANDAGE ×%d" % p.bandages)
+	if p.meds > 0:
+		parts.append("[5] MEDKIT ×%d" % p.meds)
+	if p.energy > 0:
+		parts.append("[6] ENERGY ×%d" % p.energy)
+	if p.grenades > 0:
+		parts.append("[G] FRAG ×%d" % p.grenades)
+	lbl_items.text = "     ".join(parts)
+	var gear: Array[String] = []
+	if p.helmet_level > 0:
+		gear.append("HELMET LV%d" % p.helmet_level)
+	if p.vest_level > 0:
+		gear.append("VEST LV%d" % p.vest_level)
+	lbl_gear.text = "   ·   ".join(gear)
+
+
+func set_boost(v: float) -> void:
+	boost_fill.anchor_right = clampf(v / 100.0, 0.0, 1.0)
+	boost_bg.visible = v > 0.5
 
 
 func set_progress(text: String, frac: float) -> void:
@@ -1061,6 +1145,10 @@ func _draw_compass() -> void:
 
 func _draw_crosshair() -> void:
 	var c := Vector2(60, 60)
+	if reddot:
+		crosshair.draw_circle(c, 2.6, Color(1.0, 0.12, 0.08, 0.95))
+		crosshair.draw_arc(c, 3.2, 0, TAU, 16, Color(1.0, 0.3, 0.2, 0.35), 1.0)
+		return
 	var gap := 4.0 + spread
 	var ln := 7.0
 	var col := Color(0.95, 0.96, 0.97, 0.85)

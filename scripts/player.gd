@@ -12,8 +12,9 @@ signal fired(id: String, from: Vector3, to: Vector3, hit: bool)
 signal inventory_changed
 
 const MAX_MEDS := 3
-const HEAL_TIME := 2.6
-const HEAL_AMOUNT := 50.0
+const MAX_BANDAGES := 10
+const MAX_ENERGY := 4
+const MAX_GRENADES := 3
 
 enum Mode { PLANE, FREEFALL, CHUTE, GROUND }
 
@@ -99,7 +100,21 @@ var _mag_rest := Vector3.ZERO
 var _was_on_floor := true
 var _fall_speed := 0.0
 var _sprint_lock := 0.0
+var _shot_seq := 0
+var _pending_hits: Dictionary = {}
 var meds := 0
+var bandages := 0
+var energy := 0
+var grenades := 0
+var boost := 0.0
+var vest_level := 0
+var helmet_level := 0
+var helmet_hp := 0.0
+var attachments: Array = [{}, {}]
+var heal_item := ""
+var heal_dur := 1.0
+var _boost_acc := 0.0
+var _throw_cd := 0.0
 var heal_timer := 0.0
 var healing := false
 var in_water := false
@@ -196,11 +211,12 @@ func _unhandled_input(event: InputEvent) -> void:
 func _ads_sens_scale() -> float:
 	if not aiming or not has_gun():
 		return 1.0
-	var zoom := float(Weapons.def(current_id()).get("zoom", 1.0))
-	return clampf(0.75 / zoom, 0.16, 0.7)
+	return clampf(0.8 / cur_zoom(), 0.1, 0.75)
 
 
 func _physics_process(delta: float) -> void:
+	if not _pending_hits.is_empty():
+		_flush_hits()
 	if not alive:
 		return
 	flash_time = maxf(0.0, flash_time - delta)
@@ -282,6 +298,8 @@ func _ground(delta: float) -> void:
 		speed *= 0.45
 	if in_water:
 		speed *= 0.6
+	if boost > 50.0:
+		speed *= 1.06
 	var basis_yaw := Basis(Vector3.UP, yaw)
 	var wish := basis_yaw * Vector3(input.x, 0.0, input.y)
 	var target := wish * speed * (0.55 if not is_on_floor() else 1.0)
@@ -347,6 +365,16 @@ func _ground(delta: float) -> void:
 		_try_pickup()
 	if Input.is_action_just_pressed("heal"):
 		start_heal()
+	if Input.is_action_just_pressed("use_bandage"):
+		use_item("bandage")
+	if Input.is_action_just_pressed("use_med"):
+		use_item("med")
+	if Input.is_action_just_pressed("use_energy"):
+		use_item("energy")
+	_throw_cd = maxf(0.0, _throw_cd - delta)
+	if Input.is_action_just_pressed("grenade"):
+		throw_grenade()
+	_tick_boost(delta)
 	aiming = Input.is_action_pressed("aim") and not reloading and not healing
 	fire_timer = maxf(0.0, fire_timer - delta)
 	if reloading:
@@ -443,8 +471,10 @@ func _update_camera(delta: float) -> void:
 	else:
 		var target_fov := 82.0
 		if has_gun():
-			var zoom := float(Weapons.def(current_id()).get("zoom", 1.0))
-			target_fov = lerpf(82.0, 82.0 / zoom, aim_blend)
+			var zoom := cur_zoom()
+			# Optics snap in at the end of the raise instead of zooming smoothly.
+			var k := aim_blend if zoom < 1.9 else smoothstep(0.75, 1.0, aim_blend)
+			target_fov = lerpf(82.0, 82.0 / zoom, k)
 		target_fov += sprint_blend * 6.0
 		camera.fov = lerpf(camera.fov, target_fov, clampf(delta * 14.0, 0.0, 1.0))
 
@@ -505,6 +535,7 @@ func _update_weapon(delta: float) -> void:
 		gun_holder.visible = false
 		if game != null and game.hud != null:
 			game.hud.set_scope(false)
+			game.hud.set_reddot(false)
 		return
 	var id := current_id()
 	var d: Dictionary = Weapons.def(id)
@@ -587,10 +618,11 @@ func _update_weapon(delta: float) -> void:
 	gun_holder.rotation = rot
 
 	# Sniper scope: hide the gun and let the HUD draw the scope.
-	var scoped := id == "sniper" and aim_blend > 0.92
+	var scoped := cur_zoom() >= 1.9 and aim_blend > 0.92
 	gun_holder.visible = not scoped
 	if game != null and game.hud != null:
-		game.hud.set_scope(scoped)
+		game.hud.set_scope(scoped, cur_scope(), float(d.get("velocity", 700.0)))
+		game.hud.set_reddot(not scoped and aim_blend > 0.85 and cur_scope() == "reddot")
 
 
 ## Offsets (position, rotation) for a reload at normalised time t.
@@ -695,7 +727,7 @@ func _try_fire() -> void:
 	fire_timer = 60.0 / float(d["rpm"])
 	# Spread is measured before this shot adds its own bloom.
 	var spread_deg := current_spread_deg()
-	var rec := float(d["recoil"]) * (0.62 if aim_blend > 0.5 else 1.0)
+	var rec := float(d["recoil"]) * (0.62 if aim_blend > 0.5 else 1.0) * recoil_mult()
 	if Input.is_action_pressed("crouch"):
 		rec *= 0.85
 	var kick_up := deg_to_rad(rec * 0.55)
@@ -705,7 +737,7 @@ func _try_fire() -> void:
 	recoil_yaw += deg_to_rad(side) * 0.6
 	yaw -= deg_to_rad(side) * 0.15
 	bloom = minf(float(d.get("bloom_max", 1.4)), bloom + float(d.get("bloom", 0.22)))
-	var kick_amt := float(d["kick"])
+	var kick_amt := float(d["kick"]) * (0.8 if recoil_mult() < 1.0 else 1.0)
 	kick_vel += Vector3(randf_range(-0.6, 0.6) * kick_amt, kick_amt * 3.0, kick_amt * 26.0)
 	kick_rot_vel += Vector3(kick_amt * 34.0, randf_range(-1.0, 1.0) * kick_amt * 6.0, randf_range(-1.0, 1.0) * kick_amt * 10.0)
 	flash_time = 0.05
@@ -724,12 +756,8 @@ func _try_fire() -> void:
 	var from := camera.global_position
 	var dir := -camera.global_basis.z
 	var pellets := int(d["pellets"])
-	var hit_any := false
-	var killed_any := false
-	var head_any := false
-	var total_dmg := 0.0
-	var hit_pos := Vector3.ZERO
-	var last_to := from + dir * 30.0
+	_shot_seq += 1
+	var muzzle_pos := muzzle.global_position if muzzle != null else from
 	for p in range(pellets):
 		var s := spread_deg
 		if pellets > 1:
@@ -738,43 +766,8 @@ func _try_fire() -> void:
 		var rad := deg_to_rad(s) * sqrt(randf())
 		var offset := camera.global_basis * Vector3(cos(ang) * rad, sin(ang) * rad, 0.0)
 		var shot_dir := (dir + offset).normalized()
-		var to := from + shot_dir * float(d["range"])
-		var q := PhysicsRayQueryParameters3D.create(from, to, 1 | 4)
-		q.exclude = [get_rid()]
-		q.collide_with_areas = true
-		var space := get_world_3d().direct_space_state
-		var hit := space.intersect_ray(q)
-		last_to = to
-		if not hit.is_empty():
-			var col: Object = hit["collider"]
-			var pos: Vector3 = hit["position"]
-			last_to = pos
-			var headshot := false
-			if col != null and col.has_method("head_y"):
-				headshot = pos.y >= float(col.call("head_y"))
-			var falloff := clampf(1.0 - (from.distance_to(pos) / maxf(1.0, float(d["range"]))) * 0.45, 0.45, 1.0)
-			var dmg := float(d["damage"]) * falloff
-			if headshot:
-				dmg *= float(d["head"])
-			if col != null and col.has_method("take_damage") and bool(col.get("alive")):
-				var res = col.call("take_damage", dmg, pos, headshot, self)
-				hit_any = true
-				head_any = head_any or headshot
-				total_dmg += dmg
-				hit_pos = pos
-				if res is bool and res:
-					killed_any = true
-				if game != null and game.has_method("spawn_blood"):
-					game.spawn_blood(pos)
-			else:
-				spawn_impact(pos, hit.get("normal", Vector3.UP), col)
-	var tracer_from := muzzle.global_position if muzzle != null else from
-	fired.emit(id, tracer_from, last_to, hit_any)
-	if hit_any:
-		shots_hit += 1
-		hitmarker.emit(head_any, killed_any)
-		if game != null and game.has_method("on_player_hit"):
-			game.on_player_hit(hit_pos, total_dmg, head_any)
+		if game != null and game.ballistics != null:
+			game.ballistics.fire(self, from, shot_dir, id, muzzle_pos, _shot_seq)
 	if game != null and game.has_method("on_gunshot"):
 		game.on_gunshot(from, self)
 	if game != null and game.has_method("play_sfx_at"):
@@ -782,9 +775,26 @@ func _try_fire() -> void:
 	_emit_ammo()
 
 
-func spawn_impact(pos: Vector3, normal: Vector3, col: Object) -> void:
-	if game != null and game.has_method("spawn_impact"):
-		game.spawn_impact(pos, normal, col)
+## Called by the ballistics system when one of our bullets lands.
+func on_bullet_hit(shot_id: int, pos: Vector3, dmg: float, headshot: bool, killed: bool) -> void:
+	if not _pending_hits.has(shot_id):
+		_pending_hits[shot_id] = {"dmg": 0.0, "pos": pos, "head": false, "killed": false}
+		shots_hit += 1
+	var h: Dictionary = _pending_hits[shot_id]
+	h["dmg"] = float(h["dmg"]) + dmg
+	h["pos"] = pos
+	h["head"] = bool(h["head"]) or headshot
+	h["killed"] = bool(h["killed"]) or killed
+
+
+func _flush_hits() -> void:
+	# Shotgun pellets of one shot land on the same tick: report them as one hit.
+	for k in _pending_hits:
+		var h: Dictionary = _pending_hits[k]
+		hitmarker.emit(bool(h["head"]), bool(h["killed"]))
+		if game != null and game.has_method("on_player_hit"):
+			game.on_player_hit(h["pos"], float(h["dmg"]), bool(h["head"]))
+	_pending_hits.clear()
 
 
 func start_reload() -> void:
@@ -792,14 +802,14 @@ func start_reload() -> void:
 		return
 	var id := current_id()
 	var d: Dictionary = Weapons.def(id)
-	if current_mag() >= int(d["mag"]) or current_reserve() <= 0:
+	if current_mag() >= mag_size() or current_reserve() <= 0:
 		if current_reserve() <= 0:
 			notice.emit("NO AMMO")
 		return
 	cancel_heal()
 	reloading = true
 	_reload_was_empty = current_mag() == 0
-	_reload_need = int(d["mag"]) - current_mag()
+	_reload_need = mag_size() - current_mag()
 	_reload_dur = float(d["reload"]) * (1.0 if _reload_was_empty else 0.82)
 	if id == "shotgun":
 		_reload_need = mini(_reload_need, current_reserve())
@@ -813,7 +823,7 @@ func _finish_reload() -> void:
 	reloading = false
 	var id := current_id()
 	var d: Dictionary = Weapons.def(id)
-	var need := int(d["mag"]) - current_mag()
+	var need := mag_size() - current_mag()
 	var take := mini(need, current_reserve())
 	mags[id] = current_mag() + take
 	reserves[id] = current_reserve() - take
@@ -867,7 +877,8 @@ func give_weapon(id: String, start_mag: int = -1, start_reserve: int = -1) -> bo
 	else:
 		loadout.append(id)
 		slot = loadout.size() - 1
-	mags[id] = int(d["mag"]) if start_mag < 0 else start_mag
+	_validate_attachments(loadout.find(id))
+	mags[id] = mag_size(id) if start_mag < 0 else mini(start_mag, mag_size(id))
 	reserves[id] = Weapons.starting_reserve(id) if start_reserve < 0 else start_reserve
 	reloading = false
 	cancel_heal()
@@ -896,27 +907,202 @@ func add_ammo_box() -> void:
 	_emit_ammo()
 
 
-func add_med() -> bool:
-	if meds >= MAX_MEDS:
+# ---------------------------------------------------------------- loot rules --
+func loot_block_reason(l: LootPickup) -> String:
+	match l.kind:
+		"ammo":
+			if not has_gun():
+				return "NEED A WEAPON FIRST"
+		"armor":
+			var lv := int(l.item_id)
+			if vest_level > lv or (vest_level == lv and armor >= 99.0):
+				return "YOUR VEST IS BETTER"
+		"helmet":
+			var lv := int(l.item_id)
+			if helmet_level > lv or (helmet_level == lv and helmet_hp >= 99.0):
+				return "YOUR HELMET IS BETTER"
+		"bandage":
+			if bandages >= MAX_BANDAGES:
+				return "BANDAGES FULL"
+		"med":
+			if meds >= MAX_MEDS:
+				return "MEDKITS FULL  —  5 TO USE ONE"
+		"energy":
+			if energy >= MAX_ENERGY:
+				return "ENERGY DRINKS FULL"
+		"grenade":
+			if grenades >= MAX_GRENADES:
+				return "GRENADES FULL"
+		"scope", "extmag", "comp":
+			if _attach_slot_for(l.kind, l.item_id) < 0:
+				return "NO WEAPON CAN TAKE THIS" if loadout.size() > 0 else "NEED A WEAPON FIRST"
+	return ""
+
+
+func take_loot(l: LootPickup) -> bool:
+	if loot_block_reason(l) != "":
 		return false
-	meds += 1
+	match l.kind:
+		"weapon":
+			give_weapon(l.item_id, l.mag_override, l.reserve_override)
+		"ammo":
+			add_ammo_box()
+			notice.emit("AMMO TOPPED UP")
+		"armor":
+			vest_level = int(l.item_id)
+			armor = 100.0
+			notice.emit("VEST LV%d EQUIPPED" % vest_level)
+		"helmet":
+			helmet_level = int(l.item_id)
+			helmet_hp = 100.0
+			notice.emit("HELMET LV%d EQUIPPED" % helmet_level)
+		"bandage":
+			bandages = mini(MAX_BANDAGES, bandages + l.amount)
+		"med":
+			meds += 1
+		"energy":
+			energy += 1
+		"grenade":
+			grenades += 1
+		"scope", "extmag", "comp":
+			var s := _attach_slot_for(l.kind, l.item_id)
+			var att: Dictionary = attachments[s]
+			if l.kind == "scope":
+				var old := str(att.get("scope", ""))
+				if old != "" and game != null and game.has_method("drop_item"):
+					game.drop_item("scope", old, global_position + Basis(Vector3.UP, yaw) * Vector3(0.6, 0, -1.0))
+				att["scope"] = l.item_id
+			else:
+				att[l.kind] = true
+				if l.kind == "extmag" and s < loadout.size():
+					_emit_ammo()
+			notice.emit("%s  →  %s" % [l.display_name(), str(Weapons.def(loadout[s])["short"])])
+	_emit_health()
 	inventory_changed.emit()
 	return true
 
 
-func start_heal() -> void:
-	if healing or meds <= 0:
-		if meds <= 0:
-			notice.emit("NO MEDKITS")
+## Attachments live on a weapon slot; ones that do not fit a new gun drop off.
+func _validate_attachments(s: int) -> void:
+	if s < 0 or s >= loadout.size():
 		return
-	if hp >= 100.0:
+	var w: String = loadout[s]
+	var att: Dictionary = attachments[s]
+	var drop_at := global_position + Basis(Vector3.UP, yaw) * Vector3(-0.7, 0, -1.0)
+	var sc := str(att.get("scope", ""))
+	if sc != "" and not Weapons.scope_fits(w, sc):
+		att.erase("scope")
+		if game != null:
+			game.drop_item("scope", sc, drop_at)
+	for k in ["extmag", "comp"]:
+		if bool(att.get(k, false)) and not Weapons.attachment_fits(w, k):
+			att.erase(k)
+			if game != null:
+				game.drop_item(k, "", drop_at)
+
+
+## Which slot an attachment goes on: the gun in hand first, then the other one.
+func _attach_slot_for(kind: String, id: String) -> int:
+	var order := [slot, 1 - slot]
+	for s in order:
+		if s < 0 or s >= loadout.size():
+			continue
+		var w: String = loadout[s]
+		var att: Dictionary = attachments[s]
+		if kind == "scope":
+			if not Weapons.scope_fits(w, id):
+				continue
+			var cur := str(att.get("scope", ""))
+			if cur == id:
+				continue
+			return s
+		elif not bool(att.get(kind, false)) and Weapons.attachment_fits(w, kind):
+			return s
+	return -1
+
+
+# ------------------------------------------------------- per-gun modifiers --
+func cur_att() -> Dictionary:
+	return attachments[slot] if slot < attachments.size() else {}
+
+
+func mag_size(id: String = "") -> int:
+	if id == "":
+		id = current_id()
+	var base := int(Weapons.def(id)["mag"])
+	var s := loadout.find(id)
+	if s >= 0 and bool(attachments[s].get("extmag", false)):
+		return int(round(base * 1.5))
+	return base
+
+
+func cur_zoom() -> float:
+	if not has_gun():
+		return 1.0
+	var z := float(Weapons.def(current_id()).get("zoom", 1.0))
+	var sc := str(cur_att().get("scope", ""))
+	if sc != "":
+		z = maxf(z, float(Weapons.SCOPE_ZOOM.get(sc, 1.0)))
+	return z
+
+
+func cur_scope() -> String:
+	if not has_gun():
+		return ""
+	var sc := str(cur_att().get("scope", ""))
+	if sc == "" and current_id() == "sniper":
+		return "4x"
+	return sc
+
+
+func recoil_mult() -> float:
+	return 0.68 if bool(cur_att().get("comp", false)) else 1.0
+
+
+# -------------------------------------------------------------- consumables --
+const USE_TIME := {"bandage": 2.2, "med": 4.0, "energy": 1.6}
+
+
+func use_item(item: String) -> void:
+	if healing:
+		if heal_item == item:
+			return
+		cancel_heal()
+	var have := {"bandage": bandages, "med": meds, "energy": energy}
+	if int(have.get(item, 0)) <= 0:
+		notice.emit("NO %s" % {"bandage": "BANDAGES", "med": "MEDKITS", "energy": "ENERGY DRINKS"}[item])
+		return
+	if item == "bandage" and hp >= 75.0:
+		notice.emit("BANDAGES ONLY HEAL TO 75")
+		return
+	if item == "med" and hp >= 100.0:
 		notice.emit("ALREADY AT FULL HEALTH")
+		return
+	if item == "energy" and boost >= 95.0:
+		notice.emit("BOOST ALREADY FULL")
 		return
 	reloading = false
 	healing = true
-	heal_timer = HEAL_TIME
-	if game != null and game.has_method("play_sfx_at"):
-		game.play_sfx_at("heal", global_position, -2.0)
+	heal_item = item
+	heal_dur = float(USE_TIME[item])
+	heal_timer = heal_dur
+	_sfx("heal", -2.0)
+
+
+## H: the sensible item for the situation.
+func start_heal() -> void:
+	if hp < 60.0 and meds > 0:
+		use_item("med")
+	elif hp < 75.0 and bandages > 0:
+		use_item("bandage")
+	elif meds > 0 and hp < 100.0:
+		use_item("med")
+	elif energy > 0:
+		use_item("energy")
+	elif bandages > 0:
+		use_item("bandage")
+	else:
+		notice.emit("NO HEALING ITEMS")
 
 
 func cancel_heal() -> void:
@@ -926,17 +1112,43 @@ func cancel_heal() -> void:
 
 func _finish_heal() -> void:
 	healing = false
-	if meds <= 0:
-		return
-	meds -= 1
-	heal(HEAL_AMOUNT)
+	match heal_item:
+		"bandage":
+			if bandages > 0:
+				bandages -= 1
+				hp = minf(maxf(hp, 75.0) if hp >= 75.0 else 75.0, hp + 15.0)
+		"med":
+			if meds > 0:
+				meds -= 1
+				hp = minf(100.0, hp + 60.0)
+		"energy":
+			if energy > 0:
+				energy -= 1
+				boost = minf(100.0, boost + 40.0)
+	_emit_health()
 	inventory_changed.emit()
 
 
 func heal_progress() -> float:
 	if not healing:
 		return -1.0
-	return 1.0 - clampf(heal_timer / HEAL_TIME, 0.0, 1.0)
+	return 1.0 - clampf(heal_timer / maxf(0.01, heal_dur), 0.0, 1.0)
+
+
+func heal_label() -> String:
+	return {"bandage": "BANDAGING", "med": "USING MEDKIT", "energy": "DRINKING"}.get(heal_item, "HEALING")
+
+
+func _tick_boost(delta: float) -> void:
+	if boost <= 0.0:
+		return
+	boost = maxf(0.0, boost - delta * 2.0)
+	if hp < 100.0:
+		_boost_acc += delta
+		if _boost_acc >= 1.0:
+			_boost_acc -= 1.0
+			hp = minf(100.0, hp + 1.5)
+			_emit_health()
 
 
 func reload_progress() -> float:
@@ -946,6 +1158,7 @@ func reload_progress() -> float:
 
 
 func add_armor(amount: float) -> void:
+	vest_level = maxi(vest_level, 1)
 	armor = minf(100.0, armor + amount)
 	_emit_health()
 
@@ -955,14 +1168,31 @@ func heal(amount: float) -> void:
 	_emit_health()
 
 
+const ABSORB := [0.0, 0.30, 0.40, 0.55]
+
+
 func take_damage(amount: float, from_pos: Vector3 = Vector3.ZERO, headshot: bool = false, source: Node = null) -> bool:
 	if not alive or spawn_protect > 0.0:
 		return false
 	var dmg := amount
-	if armor > 0.0:
-		var absorbed := minf(armor, dmg * 0.55)
-		armor -= absorbed
-		dmg -= absorbed
+	if source != null:
+		# The storm ignores armour; bullets and blasts do not.
+		if headshot and helmet_level > 0:
+			dmg *= 1.0 - ABSORB[helmet_level]
+			helmet_hp -= amount * 0.6
+			if helmet_hp <= 0.0:
+				helmet_level = 0
+				helmet_hp = 0.0
+				notice.emit("HELMET DESTROYED")
+				inventory_changed.emit()
+		elif not headshot and vest_level > 0:
+			dmg *= 1.0 - ABSORB[vest_level]
+			armor -= amount * 0.45
+			if armor <= 0.0:
+				vest_level = 0
+				armor = 0.0
+				notice.emit("VEST DESTROYED")
+				inventory_changed.emit()
 	hp -= dmg
 	_damage_flash = 1.0
 	if source != null and source != self:
@@ -978,7 +1208,7 @@ func take_damage(amount: float, from_pos: Vector3 = Vector3.ZERO, headshot: bool
 		reloading = false
 		flash.visible = false
 		gun_holder.visible = false
-		var killer := "THE ZONE"
+		var killer := "THE STORM"
 		if source != null and source.has_method("display_name"):
 			killer = source.call("display_name")
 		last_killer = source
@@ -987,6 +1217,29 @@ func take_damage(amount: float, from_pos: Vector3 = Vector3.ZERO, headshot: bool
 
 
 var last_killer: Node = null
+
+
+# ---------------------------------------------------------------- grenades --
+func throw_grenade() -> void:
+	if grenades <= 0:
+		notice.emit("NO GRENADES")
+		return
+	if _throw_cd > 0.0:
+		return
+	grenades -= 1
+	_throw_cd = 0.9
+	inventory_changed.emit()
+	var dir := -camera.global_basis.z
+	var g := Grenade.new()
+	g.game = game
+	g.thrower = self
+	game.add_child(g)
+	g.global_position = camera.global_position + dir * 0.6 + Vector3(0, -0.1, 0)
+	g.linear_velocity = dir * 17.0 + Vector3(0, 3.5, 0) + velocity * 0.5
+	g.angular_velocity = Vector3(randf_range(-8, 8), randf_range(-8, 8), randf_range(-8, 8))
+	kick_vel += Vector3(0.0, -0.6, 0.4)
+	equip_t = 0.35
+	_sfx("equip", -4.0)
 
 
 func force_respawn() -> void:
@@ -1073,6 +1326,14 @@ func reset_for_match() -> void:
 	landed = false
 	spawn_protect = 0.0
 	meds = 0
+	bandages = 0
+	energy = 0
+	grenades = 0
+	boost = 0.0
+	vest_level = 0
+	helmet_level = 0
+	helmet_hp = 0.0
+	attachments = [{}, {}]
 	healing = false
 	heal_timer = 0.0
 	shots_fired = 0

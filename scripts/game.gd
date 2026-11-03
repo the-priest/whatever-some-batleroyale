@@ -12,9 +12,17 @@ const BOT_NAMES := [
 const WEAPON_DROP_WEIGHTS := {
 	"pistol": 22, "smg": 24, "rifle": 22, "shotgun": 14, "dmr": 8, "lmg": 6, "sniper": 4,
 }
-const AIRDROP_WEAPONS := ["sniper", "lmg", "dmr", "rifle"]
+const AIRDROP_WEAPONS := ["sniper", "lmg", "dmr", "sniper"]
+## Floor loot table for non-weapon spots: [kind, id, weight].
+const GEAR_TABLE := [
+	["ammo", "", 16.0], ["bandage", "", 15.0], ["med", "", 7.0], ["energy", "", 7.0],
+	["armor", "1", 8.0], ["armor", "2", 4.0], ["armor", "3", 1.2],
+	["helmet", "1", 8.0], ["helmet", "2", 4.0], ["helmet", "3", 1.2],
+	["scope", "reddot", 6.0], ["scope", "2x", 5.0], ["scope", "4x", 3.0], ["scope", "8x", 1.2],
+	["extmag", "", 4.5], ["comp", "", 4.5], ["grenade", "", 7.0],
+]
 const SETTINGS_PATH := "user://settings.cfg"
-const HEAR_RANGE := 85.0
+const HEAR_RANGE := 70.0
 const PING_RANGE := 160.0
 
 var world: WorldBuilder
@@ -24,6 +32,7 @@ var plane: DropPlane
 var zone: Zone
 var hud: HUD
 var sfx: Sfx
+var ballistics: Ballistics
 var menu_cam: Camera3D
 
 var phase := "boot"      # boot | menu | plane | playing | end
@@ -64,6 +73,10 @@ func _ready() -> void:
 	sfx = Sfx.new()
 	sfx.name = "Sfx"
 	add_child(sfx)
+	ballistics = Ballistics.new()
+	ballistics.name = "Ballistics"
+	ballistics.game = self
+	add_child(ballistics)
 	hud = HUD.new()
 	hud.name = "HUD"
 	add_child(hud)
@@ -91,6 +104,8 @@ func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	if OS.get_cmdline_user_args().has("--smoke"):
 		_run_smoke()
+	elif OS.get_cmdline_user_args().has("--sim"):
+		_run_sim()
 	elif OS.get_cmdline_user_args().has("--shot"):
 		_run_shot()
 
@@ -122,7 +137,6 @@ func _create_player() -> void:
 	player.damaged.connect(_on_player_damaged)
 	player.died.connect(_on_player_died)
 	player.notice.connect(_on_notice)
-	player.fired.connect(_on_shot_fired)
 	player.inventory_changed.connect(_on_inventory_changed)
 	player.mouse_sens = 0.0022 * mouse_sens
 	menu_cam.make_current()
@@ -208,17 +222,21 @@ func _start_match() -> void:
 	loot_pool.clear()
 	for p in world.loot_points:
 		var kind := str(p.get("kind", "weapon"))
-		var id := ""
+		var base := Vector3(p["pos"])
 		if kind == "weapon":
-			id = _weighted_weapon()
+			_spawn_loot("weapon", _weighted_weapon(), base)
+			# Guns come with something beside them: usually ammo.
+			if randf() < 0.75:
+				var a := randf() * TAU
+				var extra := ["ammo", ""] if randf() < 0.55 else _roll_gear()
+				_spawn_loot(extra[0], extra[1], base + Vector3(cos(a), 0.0, sin(a)) * 0.9)
 		else:
-			var r := randf()
-			kind = "armor" if r < 0.30 else ("med" if r < 0.62 else "ammo")
-		_spawn_loot(kind, id, Vector3(p["pos"]))
-		# A box of ammo next to many guns so the first fight is not a pistol duel.
-		if kind == "weapon" and randf() < 0.45:
-			var a := randf() * TAU
-			_spawn_loot("ammo", "", Vector3(p["pos"]) + Vector3(cos(a), 0.0, sin(a)) * 0.9)
+			var g := _roll_gear()
+			_spawn_loot(g[0], g[1], base)
+			if bool(p.get("village", false)) and randf() < 0.5:
+				var a := randf() * TAU
+				var g2 := _roll_gear()
+				_spawn_loot(g2[0], g2[1], base + Vector3(cos(a), 0.0, sin(a)) * 0.9)
 
 	# Bots: most drop near a weapon so the first minute has real fights.
 	var weapon_spots: Array = []
@@ -232,7 +250,7 @@ func _start_match() -> void:
 		var b := Bot.new()
 		var target := _random_ground_point(390.0)
 		var jump_t := randf_range(0.05, 0.90)
-		if weapon_spots.size() > 0 and randf() < 0.80:
+		if weapon_spots.size() > 0 and randf() < 0.6:
 			var best_spot: Vector3
 			var best_cost := 1.0e9
 			for attempt in 10:
@@ -248,7 +266,7 @@ func _start_match() -> void:
 					break
 			if best_cost <= 150.0:
 				var a := randf() * TAU
-				var r := randf_range(7.0, 24.0)
+				var r := randf_range(10.0, 45.0)
 				target = Vector3(best_spot.x + cos(a) * r, best_spot.y, best_spot.z + sin(a) * r)
 		b.setup(BOT_NAMES[i % BOT_NAMES.size()] + ("" if i < BOT_NAMES.size() else str(i)), Vector2(target.x, target.z), self, seed_value + i * 977 + randi() % 1000)
 		add_child(b)
@@ -327,6 +345,7 @@ func _cleanup_match() -> void:
 		if is_instance_valid(t):
 			t.queue_free()
 	tracers.clear()
+	ballistics.clear()
 	for i in impacts:
 		if is_instance_valid(i):
 			i.queue_free()
@@ -334,6 +353,18 @@ func _cleanup_match() -> void:
 	if player != null:
 		player.mode = Player.Mode.PLANE
 	hud.set_storm(false)
+
+
+func _roll_gear() -> Array:
+	var total := 0.0
+	for e in GEAR_TABLE:
+		total += float(e[2])
+	var roll := randf() * total
+	for e in GEAR_TABLE:
+		roll -= float(e[2])
+		if roll <= 0.0:
+			return [e[0], e[1]]
+	return ["ammo", ""]
 
 
 func _weighted_weapon() -> String:
@@ -506,9 +537,10 @@ func _crosshair_spread() -> float:
 
 
 func _update_progress() -> void:
+	hud.set_boost(player.boost)
 	var hp := player.heal_progress()
 	if hp >= 0.0:
-		hud.set_progress("USING MEDKIT", hp)
+		hud.set_progress(player.heal_label(), hp)
 		return
 	var rp := player.reload_progress()
 	if rp >= 0.0:
@@ -658,7 +690,7 @@ func _on_ammo_changed(mag: int, reserve: int) -> void:
 
 func _on_inventory_changed() -> void:
 	if player != null:
-		hud.set_inventory(player.loadout, player.slot, player.meds)
+		hud.set_inventory(player)
 
 
 func _on_hitmarker(headshot: bool, killed: bool) -> void:
@@ -702,10 +734,6 @@ func _on_notice(text: String) -> void:
 	hud.show_notice(text, 2.0)
 
 
-func _on_shot_fired(_id: String, from: Vector3, to: Vector3, _hit: bool) -> void:
-	spawn_tracer(from, to, true)
-
-
 func _on_bot_eliminated(victim: Bot, killer: String) -> void:
 	alive = maxi(0, alive - 1)
 	var k := killer if killer != "" else "THE STORM"
@@ -742,15 +770,21 @@ func _drop_bot_loot(b: Bot) -> void:
 	var base := ground_at(b.global_position)
 	if b.armed and b.weapon_id != "":
 		_spawn_loot("weapon", b.weapon_id, base + Vector3(0.0, 0.08, 0.0), int(Weapons.def(b.weapon_id)["mag"]), Weapons.starting_reserve(b.weapon_id))
-	var extras := ["ammo"]
-	if b.meds > 0 or randf() < 0.5:
-		extras.append("med")
-	if b.armor > 10.0 or randf() < 0.25:
-		extras.append("armor")
+	var extras: Array = [["ammo", ""]]
+	if b.meds > 0:
+		extras.append(["med", ""])
+	if randf() < 0.6:
+		extras.append(["bandage", ""])
+	if b.vest_level > 0:
+		extras.append(["armor", str(b.vest_level)])
+	if b.helmet_level > 0:
+		extras.append(["helmet", str(b.helmet_level)])
+	if randf() < 0.35:
+		extras.append(_roll_gear())
 	for i in extras.size():
 		var a := TAU * float(i) / float(extras.size()) + randf() * 0.5
-		var p := ground_at(b.global_position + Vector3(cos(a), 0.0, sin(a)) * 1.1)
-		_spawn_loot(extras[i], "", p + Vector3(0, 0.08, 0))
+		var p := ground_at(b.global_position + Vector3(cos(a), 0.0, sin(a)) * 1.2)
+		_spawn_loot(extras[i][0], extras[i][1], p + Vector3(0, 0.08, 0))
 
 
 func _win() -> void:
@@ -820,6 +854,10 @@ func try_pickup(p: Player) -> void:
 		hud.set_prompt("")
 
 
+func drop_item(kind: String, id: String, pos: Vector3) -> void:
+	_spawn_loot(kind, id, ground_at(pos) + Vector3(0, 0.08, 0)).dropped = true
+
+
 func drop_weapon(id: String, mag: int, reserve: int, pos: Vector3) -> void:
 	if id == "":
 		return
@@ -850,10 +888,14 @@ func _spawn_airdrop() -> void:
 func on_airdrop_landed(drop: Airdrop) -> void:
 	var base := drop.global_position
 	var gun: String = AIRDROP_WEAPONS[randi() % AIRDROP_WEAPONS.size()]
-	_spawn_loot("weapon", gun, base + Vector3(1.6, 0.08, 0.0), -1, int(Weapons.def(gun)["mag"]) * 3)
-	_spawn_loot("armor", "", base + Vector3(-1.6, 0.08, 0.0))
-	_spawn_loot("med", "", base + Vector3(0.0, 0.08, 1.6))
-	_spawn_loot("ammo", "", base + Vector3(0.0, 0.08, -1.6))
+	var items: Array = [["weapon", gun], ["armor", "3"], ["helmet", "3"], ["med", ""], ["scope", "8x" if gun == "sniper" or gun == "dmr" else "4x"], ["ammo", ""]]
+	for i in items.size():
+		var a := TAU * float(i) / float(items.size())
+		var p := ground_at(base + Vector3(cos(a), 0.0, sin(a)) * 1.9) + Vector3(0, 0.08, 0)
+		if items[i][0] == "weapon":
+			_spawn_loot("weapon", gun, p, -1, int(Weapons.def(gun)["mag"]) * 3)
+		else:
+			_spawn_loot(items[i][0], items[i][1], p)
 	# Armed bots nearby want it too.
 	for b in bots:
 		if is_instance_valid(b) and b.alive and b.armed and b.global_position.distance_to(base) < 140.0 and randf() < 0.6:
@@ -861,8 +903,31 @@ func on_airdrop_landed(drop: Airdrop) -> void:
 
 
 # ------------------------------------------------------------------- effects --
-func spawn_impact(pos: Vector3, normal: Vector3, _col: Object) -> void:
-	_puff(pos + normal * 0.04, Color(0.62, 0.58, 0.50, 0.8), 0.6, 1.9)
+func spawn_impact(pos: Vector3, normal: Vector3, _col: Object, big := false) -> void:
+	_puff(pos + normal * 0.04, Color(0.62, 0.58, 0.50, 0.8), 0.9 if big else 0.6, 4.0 if big else 2.2)
+	if player != null and pos.distance_to(player.global_position) < 40.0:
+		sfx.play_at("bullet_impact", pos, -12.0, 0.2)
+
+
+func spawn_explosion(pos: Vector3) -> void:
+	sfx.play_at("explosion", pos, 4.0, 0.1)
+	var light := OmniLight3D.new()
+	light.light_color = Color(1.0, 0.65, 0.3)
+	light.light_energy = 8.0
+	light.omni_range = 14.0
+	add_child(light)
+	light.global_position = pos + Vector3.UP * 0.6
+	var tl := light.create_tween()
+	tl.tween_property(light, "light_energy", 0.0, 0.35)
+	tl.tween_callback(light.queue_free)
+	_puff(pos + Vector3.UP * 0.4, Color(1.0, 0.72, 0.35, 0.95), 4.0, 26.0)
+	_puff(pos + Vector3.UP * 0.8, Color(0.25, 0.23, 0.21, 0.8), 6.0, 34.0)
+	if player != null and player.alive:
+		var d := pos.distance_to(player.global_position)
+		if d < 30.0:
+			player.add_trauma(clampf(1.0 - d / 30.0, 0.0, 1.0) * 0.9)
+	# Bots nearby flinch toward the blast.
+	on_gunshot(pos, null)
 
 
 func spawn_blood(pos: Vector3) -> void:
@@ -945,17 +1010,6 @@ func spawn_tracer(from: Vector3, to: Vector3, mine := false) -> void:
 		var old = tracers.pop_front()
 		if is_instance_valid(old):
 			old.queue_free()
-
-
-func bot_shot_fired(from: Vector3, to: Vector3) -> void:
-	spawn_tracer(from, to)
-	# Near-miss crack: a shot that passes close to the player is audible.
-	if player != null and player.alive and phase == "playing":
-		var seg := to - from
-		var t := clampf((player.global_position + Vector3(0, 1.4, 0) - from).dot(seg) / maxf(0.001, seg.length_squared()), 0.0, 1.0)
-		var closest := from + seg * t
-		if closest.distance_to(player.global_position + Vector3(0, 1.4, 0)) < 2.0:
-			sfx.play_at("bolt", closest, -10.0, 0.25)
 
 
 func shake(amt: float) -> void:
@@ -1256,3 +1310,124 @@ func _count_landed_bots() -> int:
 		if is_instance_valid(b) and b.state == Bot.State.GROUND:
 			n += 1
 	return n
+
+
+# ----------------------------------------------------------------- sim test --
+# Headless gameplay test: exercises loot, items, ballistics, then fast-forwards
+# a whole match with an invulnerable observer. Run with --fixed-fps 60.
+func _check(name: String, ok: bool) -> void:
+	print("[sim] %s %s" % ["PASS" if ok else "FAIL", name])
+
+
+func _run_sim() -> void:
+	_start_match()
+	await get_tree().physics_frame
+	_player_jump(true)
+	var spot := _random_ground_point(200.0)
+	player.global_position = spot + Vector3(0, 1.0, 0)
+	player.mode = Player.Mode.GROUND
+	player.landed = true
+	player.velocity = Vector3.ZERO
+	for i in 5:
+		await get_tree().physics_frame
+	# Loot of every kind.
+	var kinds := [["weapon", "rifle"], ["ammo", ""], ["armor", "2"], ["helmet", "1"], ["bandage", ""], ["med", ""],
+		["energy", ""], ["scope", "4x"], ["extmag", ""], ["comp", ""], ["grenade", ""], ["weapon", "sniper"], ["armor", "3"]]
+	for k in kinds:
+		var l := _spawn_loot(k[0], k[1], player.global_position)
+		await get_tree().process_frame
+		var why := l.block_reason(player)
+		var ok := why == "" and l.pickup(player)
+		_check("pickup %s %s %s" % [k[0], k[1], why], ok)
+		loot_pool.erase(l)
+	_check("loadout rifle+sniper", player.loadout.size() == 2 and player.loadout.has("sniper"))
+	_check("vest lv3", player.vest_level == 3)
+	_check("extmag mag size", player.mag_size("rifle") == 45)
+	var att0: Dictionary = player.attachments[player.loadout.find("rifle")]
+	_check("rifle has 4x", str(att0.get("scope", "")) == "4x")
+	# Healing.
+	player.hp = 40.0
+	player.use_item("bandage")
+	for i in 150:
+		await get_tree().physics_frame
+	_check("bandage heals 40->55 (%d)" % int(player.hp), absf(player.hp - 55.0) < 1.5)
+	player.use_item("med")
+	for i in 250:
+		await get_tree().physics_frame
+	_check("medkit heals (%d)" % int(player.hp), player.hp > 99.0)
+	# Reload: empty the mag then reload.
+	player.select_slot(player.loadout.find("rifle"))
+	for i in 30:
+		await get_tree().physics_frame
+	player.mags["rifle"] = 0
+	player.start_reload()
+	for i in 200:
+		await get_tree().physics_frame
+	_check("reload fills ext mag (%d)" % player.current_mag(), player.current_mag() == 45)
+	# Ballistics: a bot 250 m away, aim with holdover, check a hit lands.
+	player.select_slot(player.loadout.find("sniper"))
+	for i in 40:
+		await get_tree().physics_frame
+	var target: Bot = null
+	for b in bots:
+		if is_instance_valid(b):
+			target = b
+			break
+	var dir2 := Vector2(1, 0)
+	var tgt_pos := Vector3.ZERO
+	for attempt in 30:
+		var a := randf() * TAU
+		dir2 = Vector2(cos(a), sin(a))
+		var p2 := Vector2(player.global_position.x, player.global_position.z) + dir2 * 250.0
+		var h := terrain.height_at(p2.x, p2.y)
+		if h > 2.0:
+			tgt_pos = Vector3(p2.x, h, p2.y)
+			break
+	target.state = Bot.State.GROUND
+	target.set_physics_process(false)
+	# Both up in clear air so nothing but the bullet's own drop matters.
+	var sky := maxf(player.global_position.y, tgt_pos.y) + 70.0
+	target.global_position = Vector3(tgt_pos.x, sky, tgt_pos.z)
+	player.global_position = Vector3(player.global_position.x, sky, player.global_position.z)
+	player.set_physics_process(false)
+	var eye := player.global_position + Vector3(0, Player.EYE, 0)
+	var aim := target.global_position + Vector3(0, 1.0, 0)
+	var dist := eye.distance_to(aim)
+	var tof := dist / 720.0
+	var hold := aim + Vector3(0, 0.5 * Ballistics.GRAVITY * tof * tof, 0)
+	var hp_before := target.hp
+	# Drop check: a level shot into open sky, sampled after ~0.35 s of flight.
+	ballistics.fire(player, eye + Vector3(0, 60, 0), Vector3(dir2.x, 0, dir2.y), "sniper", eye, 999001)
+	for i in 21:
+		await get_tree().physics_frame
+	if ballistics.bullets.size() > 0:
+		var bp: Vector3 = ballistics.bullets[0]["pos"]
+		var fell := eye.y + 60.0 - bp.y
+		var flown := Vector2(bp.x - eye.x, bp.z - eye.z).length()
+		_check("bullet drop %.2f m after %.0f m (expect ~0.58)" % [fell, flown], fell > 0.45 and fell < 0.75 and flown > 230.0)
+	ballistics.clear()
+	ballistics.fire(player, eye, (hold - eye).normalized(), "sniper", eye, 999002)
+	for i in 40:
+		await get_tree().physics_frame
+	_check("250m shot with holdover hits (hp %d)" % int(target.hp), target.hp < hp_before)
+	player.set_physics_process(true)
+	target.set_physics_process(true)
+	# Grenade.
+	player.global_position = spot + Vector3(0, 1.0, 0)
+	var g_before := player.grenades
+	player.throw_grenade()
+	_check("grenade thrown", player.grenades == g_before - 1)
+	for i in 240:
+		await get_tree().physics_frame
+	# Full match fast-forward.
+	player.spawn_protect = 1.0e9
+	var t0 := match_time
+	var last_print := 0.0
+	while alive > 1 and match_time - t0 < 700.0:
+		await get_tree().physics_frame
+		if match_time - last_print > 30.0:
+			last_print = match_time
+			print("[sim] t=%d alive=%d zone phase=%d r=%d armed=%d" % [int(match_time), alive, zone.phase, int(zone.radius), _count_armed_bots()])
+	print("[sim] match over t=%d alive=%d bullets_live=%d" % [int(match_time), alive, ballistics.bullets.size()])
+	_check("match finishes", alive <= 1)
+	get_tree().quit()

@@ -56,6 +56,8 @@ var alert_timer := 0.0
 var heard_pos := Vector3.ZERO
 var aggression := 0.5
 var meds := 0
+var vest_level := 0
+var helmet_level := 0
 var heal_timer := 0.0
 var _roam_wait := 0.0
 var _progress_t := 0.0
@@ -63,6 +65,7 @@ var _progress_pos := Vector3.ZERO
 var _step := 0.0
 var _burst := 0
 var _see_cache := {}
+var _shot_seq := 0
 
 var last_killer_node: Node = null
 
@@ -77,8 +80,8 @@ func setup(p_name: String, p_target: Vector2, p_game: Node, seed_n: int) -> void
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed_n
 	shoot_skill = rng.randf_range(0.30, 0.82)
-	reaction = rng.randf_range(0.25, 0.65)
-	sight = rng.randf_range(95.0, 165.0)
+	reaction = rng.randf_range(0.35, 0.85)
+	sight = rng.randf_range(85.0, 150.0)
 	aggression = rng.randf_range(0.2, 0.95)
 
 
@@ -349,7 +352,7 @@ func _ground(delta: float) -> void:
 				if roam_point.distance_to(nc) > nr * 0.9 or (here.distance_to(zc) > r * 0.85 and roam_point.distance_to(zc) > r * 0.85):
 					roam_point = nc + (here - nc).normalized() * (nr * randf_range(0.2, 0.6))
 					roam_point += Vector2(randf_range(-10, 10), randf_range(-10, 10))
-			if alert_timer > 0.0 and aggression > 0.45 and heard_pos.distance_to(global_position) > 10.0:
+			if alert_timer > 0.0 and aggression > 0.6 and heard_pos.distance_to(global_position) > 10.0:
 				# Go and see who is shooting.
 				roam_point = Vector2(heard_pos.x, heard_pos.z)
 			if here.distance_to(roam_point) < 3.0:
@@ -521,8 +524,10 @@ func _wants(l: LootPickup, my_tier: int) -> bool:
 		"weapon":
 			return not armed or int(Weapons.def(l.item_id).get("tier", 1)) > my_tier
 		"armor":
-			return armed and armor < 60.0
-		"med":
+			return armed and int(l.item_id) > vest_level
+		"helmet":
+			return armed and int(l.item_id) > helmet_level
+		"med", "bandage":
 			return armed and meds < 2
 	return false
 
@@ -535,8 +540,11 @@ func _take_loot(l: LootPickup) -> void:
 			game.drop_weapon(weapon_id, -1, -1, global_position + Vector3(0.6, 0, 0.6))
 		arm_weapon(l.item_id)
 	elif l.kind == "armor":
-		armor = minf(100.0, armor + 50.0)
-	elif l.kind == "med":
+		vest_level = int(l.item_id)
+		armor = 100.0
+	elif l.kind == "helmet":
+		helmet_level = int(l.item_id)
+	elif l.kind == "med" or l.kind == "bandage":
 		meds += 1
 	l.consume()
 	if game != null and game.has_method("play_sfx_at"):
@@ -598,7 +606,10 @@ func _shoot_logic(delta: float) -> void:
 		mag = int(d["mag"])
 		fire_timer = float(d["reload"])
 		return
-	fire_timer = 60.0 / float(d["rpm"]) * (1.0 if dist < 45.0 else 1.35)
+	fire_timer = 60.0 / float(d["rpm"]) * (1.15 if dist < 45.0 else 1.6)
+	# Fire in bursts with short pauses, like a person re-acquiring the target.
+	if bool(d["auto"]) and _burst > 0 and _burst % randi_range(4, 7) == 0:
+		fire_timer += randf_range(0.35, 0.8)
 	mag -= 1
 	_flash = 0.05
 	_muzzle_flash.visible = true
@@ -608,46 +619,30 @@ func _shoot_logic(delta: float) -> void:
 	var tvel := Vector3.ZERO
 	if enemy is CharacterBody3D:
 		tvel = (enemy as CharacterBody3D).velocity
-	var spread_deg := 0.9 + (1.0 - shoot_skill) * 3.4
+	var spread_deg := 1.2 + (1.0 - shoot_skill) * 3.8
 	spread_deg += dist * 0.010
 	spread_deg += Vector2(tvel.x, tvel.z).length() * 0.20
 	spread_deg += maxf(0.0, 3.0 - float(_burst)) * 0.55
 	spread_deg *= float(d["spread"]) / 1.35 * 0.5 + 0.5
 	_burst += 1
 	var spread := deg_to_rad(spread_deg)
-	var dir := aim.normalized()
-	dir = (dir + Vector3(randf_range(-spread, spread), randf_range(-spread, spread), randf_range(-spread, spread))).normalized()
-	var to := from + dir * max_range
-	var q := PhysicsRayQueryParameters3D.create(from, to, 1 | 2 | 4)
-	q.exclude = [get_rid()]
-	q.collide_with_areas = false
-	var space := get_world_3d().direct_space_state
-	var hit := space.intersect_ray(q)
-	if not hit.is_empty():
-		var col: Object = hit["collider"]
-		to = hit["position"]
-		if col != null and col.has_method("take_damage") and col != self:
-			var pellets := int(d["pellets"])
-			var dmg := float(d["damage"]) * randf_range(0.8, 1.0)
-			if pellets > 1:
-				# One ray stands in for the whole shotgun spread.
-				dmg *= float(pellets) * clampf(1.0 - dist / float(d["range"]), 0.25, 0.8)
-			if col is Player:
-				dmg *= 0.8
-			var hs := false
-			if col.has_method("head_y"):
-				hs = hit["position"].y >= float(col.call("head_y"))
-				if hs:
-					dmg *= 1.8
-			col.call("take_damage", dmg, hit["position"], hs, self)
-			if game != null and game.has_method("spawn_blood"):
-				game.spawn_blood(hit["position"])
-		elif game != null and game.has_method("spawn_impact"):
-			game.spawn_impact(hit["position"], hit.get("normal", Vector3.UP), col)
+	# Lead the target and hold over for drop, as well as this bot is able to.
+	var speed := float(d.get("velocity", 500.0))
+	var tof := dist / speed
+	var comp := clampf(shoot_skill * 1.15, 0.0, 1.0)
+	var aim_pt := enemy.global_position + Vector3(0, aim_h, 0) + tvel * tof * comp
+	aim_pt.y += 0.5 * Ballistics.GRAVITY * tof * tof * comp
+	var base_dir := (aim_pt - from).normalized()
+	var mult := 0.75 if enemy is Player else 0.55
+	var pellets := int(d["pellets"])
+	_shot_seq += 1
+	for i in pellets:
+		var s := spread if pellets == 1 else deg_to_rad(float(d["spread"])) * randf_range(0.4, 1.5)
+		var dir := (base_dir + Vector3(randf_range(-s, s), randf_range(-s, s), randf_range(-s, s))).normalized()
+		if game != null and game.ballistics != null:
+			game.ballistics.fire(self, from, dir, weapon_id, global_position + global_basis * _muzzle_flash.position, _shot_seq, mult)
 	if game != null and game.has_method("play_sfx_at"):
 		game.play_sfx_at("shot_" + str(d["sound"]), from, 0.85)
-	if game != null and game.has_method("bot_shot_fired"):
-		game.bot_shot_fired(from, to)
 	if game != null and game.has_method("on_gunshot"):
 		game.on_gunshot(from, self)
 
@@ -730,10 +725,14 @@ func take_damage(amount: float, _pos: Vector3 = Vector3.ZERO, headshot: bool = f
 	if not alive:
 		return false
 	var dmg := amount
-	if armor > 0.0:
-		var abs := minf(armor, dmg * 0.5)
-		armor -= abs
-		dmg -= abs
+	if source != null:
+		if headshot and helmet_level > 0:
+			dmg *= 1.0 - Player.ABSORB[helmet_level]
+		elif not headshot and vest_level > 0 and armor > 0.0:
+			dmg *= 1.0 - Player.ABSORB[vest_level]
+			armor -= amount * 0.45
+			if armor <= 0.0:
+				vest_level = 0
 	hp -= dmg
 	hit_flash = 0.25
 	if anim != null:

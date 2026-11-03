@@ -7,6 +7,7 @@ extends RefCounted
 
 const DEFS := {
 	"rifle": {
+		"velocity": 540.0,
 		"ads_time": 0.20, "bloom": 0.20, "bloom_max": 1.3,
 		"name": "VK-47 RIFLE", "short": "RIFLE", "damage": 26.0, "rpm": 620.0,
 		"mag": 30, "reserve": 210, "spread": 1.35, "ads_spread": 0.22,
@@ -16,6 +17,7 @@ const DEFS := {
 		"kick": 0.030, "zoom": 1.25,
 	},
 	"smg": {
+		"velocity": 360.0,
 		"ads_time": 0.15, "bloom": 0.14, "bloom_max": 1.0,
 		"name": "SP-9 SMG", "short": "SMG", "damage": 18.0, "rpm": 920.0,
 		"mag": 35, "reserve": 280, "spread": 1.8, "ads_spread": 0.55,
@@ -25,6 +27,7 @@ const DEFS := {
 		"kick": 0.017, "zoom": 1.15,
 	},
 	"shotgun": {
+		"velocity": 330.0,
 		"ads_time": 0.20, "bloom": 0.0, "bloom_max": 0.0,
 		"name": "M-12 BREACHER", "short": "SHOTGUN", "damage": 13.0, "rpm": 78.0,
 		"mag": 6, "reserve": 48, "spread": 4.6, "ads_spread": 3.4,
@@ -34,6 +37,7 @@ const DEFS := {
 		"kick": 0.075, "zoom": 1.1,
 	},
 	"lmg": {
+		"velocity": 560.0,
 		"ads_time": 0.30, "bloom": 0.16, "bloom_max": 1.6,
 		"name": "PK-74 BELT", "short": "LMG", "damage": 24.0, "rpm": 700.0,
 		"mag": 100, "reserve": 300, "spread": 2.0, "ads_spread": 0.5,
@@ -43,6 +47,7 @@ const DEFS := {
 		"kick": 0.028, "zoom": 1.2,
 	},
 	"dmr": {
+		"velocity": 640.0,
 		"ads_time": 0.24, "bloom": 0.45, "bloom_max": 1.2,
 		"name": "SKS MARKSMAN", "short": "DMR", "damage": 46.0, "rpm": 300.0,
 		"mag": 20, "reserve": 140, "spread": 0.9, "ads_spread": 0.10,
@@ -52,6 +57,7 @@ const DEFS := {
 		"kick": 0.050, "zoom": 1.8,
 	},
 	"pistol": {
+		"velocity": 310.0,
 		"ads_time": 0.13, "bloom": 0.30, "bloom_max": 1.2,
 		"name": "P-18 SIDEARM", "short": "PISTOL", "damage": 23.0, "rpm": 380.0,
 		"mag": 15, "reserve": 120, "spread": 1.5, "ads_spread": 0.45,
@@ -61,6 +67,7 @@ const DEFS := {
 		"kick": 0.026, "zoom": 1.05,
 	},
 	"sniper": {
+		"velocity": 720.0,
 		"ads_time": 0.32, "bloom": 0.0, "bloom_max": 0.0,
 		"name": "AWM LONGBOW", "short": "SNIPER", "damage": 92.0, "rpm": 45.0,
 		"mag": 5, "reserve": 40, "spread": 0.35, "ads_spread": 0.0,
@@ -87,6 +94,28 @@ static var _drop_mat: StandardMaterial3D
 
 static func def(id: String) -> Dictionary:
 	return DEFS.get(id, DEFS["pistol"])
+
+
+const SCOPE_ZOOM := {"reddot": 1.3, "2x": 2.0, "4x": 4.0, "8x": 8.0}
+
+
+static func scope_fits(gun: String, scope: String) -> bool:
+	match scope:
+		"reddot":
+			return gun != "sniper"
+		"2x", "4x":
+			return gun in ["rifle", "smg", "lmg", "dmr", "sniper"]
+		"8x":
+			return gun in ["dmr", "sniper", "rifle"]
+	return false
+
+
+static func attachment_fits(gun: String, kind: String) -> bool:
+	if kind == "extmag":
+		return gun != "shotgun" and gun != "lmg"
+	if kind == "comp":
+		return gun != "shotgun"
+	return false
 
 
 ## Reserve ammo that comes with a freshly looted gun: two magazines.

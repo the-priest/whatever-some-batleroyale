@@ -187,10 +187,10 @@ func _build_house(h: Dictionary) -> void:
 			center.y + rng.randf_range(-d * 0.5 + 1.3, d * 0.5 - 1.3)
 		)
 		loot_points.append({"pos": p, "kind": "weapon", "village": true})
-	if rng.randf() < 0.8:
+	for i in rng.randi_range(2, 3):
 		loot_points.append({
-			"pos": Vector3(center.x + rng.randf_range(-w * 0.4, w * 0.4), pad + 0.06,
-				center.y + rng.randf_range(-d * 0.4, d * 0.4)),
+			"pos": Vector3(center.x + rng.randf_range(-w * 0.5 + 1.0, w * 0.5 - 1.0), pad + 0.06,
+				center.y + rng.randf_range(-d * 0.5 + 1.0, d * 0.5 - 1.0)),
 			"kind": "gear", "village": true,
 		})
 

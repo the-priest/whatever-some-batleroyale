@@ -550,7 +550,7 @@ func _build_wild_loot() -> void:
 		if spot == Vector3.ZERO:
 			continue
 		loot_points.append({"pos": spot + Vector3(0, 0.08, 0), "kind": "weapon", "village": false})
-	for i in 14:
+	for i in 34:
 		var spot := _random_land_point(20.0, 400.0)
 		if spot == Vector3.ZERO:
 			continue

@@ -1,13 +1,23 @@
 class_name LootPickup
 extends Node3D
 
-# A floor pickup: rotating weapon or a supply stack, with a tier-coloured
-# beacon so it is visible from a distance through trees.
+# A floor pickup: a rotating weapon or item with a tier-coloured ground ring
+# and light shaft, so loot reads from a distance.
+#
+# kinds: weapon (item_id = gun), ammo, armor (vest, tier 1-3), helmet (tier
+# 1-3), bandage, med, energy, scope (item_id = reddot|2x|4x|8x), extmag, comp,
+# grenade.
+
+const ITEM_NAMES := {
+	"ammo": "AMMO BOX", "bandage": "BANDAGES", "med": "MEDKIT", "energy": "ENERGY DRINK",
+	"extmag": "EXTENDED MAG", "comp": "COMPENSATOR", "grenade": "FRAG GRENADE",
+}
+const SCOPE_NAMES := {"reddot": "RED DOT SIGHT", "2x": "2X SCOPE", "4x": "4X SCOPE", "8x": "8X SCOPE"}
+const SCOPE_TIER := {"reddot": 1, "2x": 2, "4x": 3, "8x": 4}
 
 var kind := "weapon"
 var item_id := "pistol"
 var amount := 1
-var base_y := 0.0
 var taken := false
 var bob_phase := 0.0
 var label: Label3D
@@ -15,8 +25,6 @@ var beacon: MeshInstance3D
 var ring: MeshInstance3D
 var spin: Node3D
 var tier := 1
-var radius := 2.2
-var spawn_time := 0.0
 var mag_override := -1
 var reserve_override := -1
 var dropped := false
@@ -27,18 +35,42 @@ func setup(p_kind: String, p_id: String, p_amount: int = 1) -> void:
 	item_id = p_id
 	amount = p_amount
 	bob_phase = randf() * TAU
-	if kind == "weapon":
-		tier = int(Weapons.def(item_id).get("tier", 1))
-	else:
-		tier = 2 if kind == "armor" else 1
+	match kind:
+		"weapon":
+			tier = int(Weapons.def(item_id).get("tier", 1))
+		"armor", "helmet":
+			tier = clampi(int(item_id) if item_id != "" else 1, 1, 3) + 1
+			if item_id == "":
+				item_id = "1"
+		"scope":
+			tier = int(SCOPE_TIER.get(item_id, 1))
+		"extmag", "comp":
+			tier = 3
+		"med", "energy":
+			tier = 2
+		_:
+			tier = 1
+	if kind == "bandage" and amount <= 1:
+		amount = 5
+
+
+func accent_color() -> Color:
+	match kind:
+		"weapon":
+			return Weapons.tier_color(item_id)
+		"med", "bandage":
+			return Color(0.95, 0.38, 0.38)
+		"energy":
+			return Color(0.45, 0.95, 0.55)
+		"ammo":
+			return Color(0.95, 0.78, 0.35)
+		"grenade":
+			return Color(0.62, 0.78, 0.36)
+	return Weapons.TIER_COLORS[clampi(tier - 1, 0, 3)]
 
 
 func _ready() -> void:
-	var accent := Weapons.tier_color(item_id) if kind == "weapon" else Color(0.55, 0.78, 0.95)
-	if kind == "med":
-		accent = Color(0.95, 0.35, 0.35)
-	if kind == "ammo":
-		accent = Color(0.95, 0.78, 0.35)
+	var accent := accent_color()
 	spin = Node3D.new()
 	spin.position.y = 0.55
 	add_child(spin)
@@ -50,131 +82,177 @@ func _ready() -> void:
 		gun.rotation.z = 0.25
 		spin.add_child(gun)
 	else:
-		var mi := MeshInstance3D.new()
-		var bm := BoxMesh.new()
-		bm.size = Vector3(0.55, 0.38, 0.42) if kind != "med" else Vector3(0.46, 0.30, 0.32)
-		mi.mesh = bm
-		var m := StandardMaterial3D.new()
-		m.albedo_color = Color(0.18, 0.20, 0.21)
-		m.metallic = 0.5
-		m.roughness = 0.4
-		m.emission_enabled = true
-		m.emission = accent * 0.35
-		mi.material_override = m
-		mi.position.y = 0.55
-		spin.add_child(mi)
-		var band := MeshInstance3D.new()
-		var bb := BoxMesh.new()
-		bb.size = Vector3(0.57, 0.08, 0.44)
-		band.mesh = bb
-		var bmat := StandardMaterial3D.new()
-		bmat.albedo_color = accent
-		bmat.emission_enabled = true
-		bmat.emission = accent
-		bmat.emission_energy_multiplier = 1.6
-		band.material_override = bmat
-		band.position.y = 0.62
-		mi.add_child(band)
+		_build_item_model(accent)
 
 	# Glow ring on the ground.
 	ring = MeshInstance3D.new()
 	var torus := TorusMesh.new()
 	torus.inner_radius = 0.52
-	torus.outer_radius = 0.62
+	torus.outer_radius = 0.60
 	torus.rings = 20
 	torus.ring_segments = 6
 	ring.mesh = torus
 	var rm := StandardMaterial3D.new()
 	rm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	rm.albedo_color = accent
-	rm.emission_enabled = true
-	rm.emission = accent
-	rm.emission_energy_multiplier = 2.2
+	rm.albedo_color = Color(accent.r, accent.g, accent.b, 0.85)
 	rm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	rm.albedo_color.a = 0.85
 	ring.material_override = rm
 	ring.position.y = 0.03
-	ring.scale = Vector3.ONE * 0.9
+	ring.scale = Vector3.ONE * (0.9 if kind == "weapon" else 0.7)
+	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(ring)
 
-	# Thin vertical light shaft.
+	# Light shaft: taller for better loot.
 	beacon = MeshInstance3D.new()
 	var cyl := CylinderMesh.new()
-	cyl.top_radius = 0.035
-	cyl.bottom_radius = 0.14
-	cyl.height = 5.0
+	cyl.top_radius = 0.03
+	cyl.bottom_radius = 0.12
+	cyl.height = 2.5 + tier * 1.2
 	cyl.radial_segments = 6
 	cyl.rings = 1
 	beacon.mesh = cyl
 	var bmm := StandardMaterial3D.new()
 	bmm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	bmm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	bmm.albedo_color = Color(accent.r, accent.g, accent.b, 0.30)
+	bmm.albedo_color = Color(accent.r, accent.g, accent.b, 0.22 + tier * 0.03)
 	bmm.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
 	bmm.cull_mode = BaseMaterial3D.CULL_DISABLED
 	beacon.material_override = bmm
-	beacon.position.y = 2.5
+	beacon.position.y = cyl.height * 0.5
 	beacon.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(beacon)
 
 	label = Label3D.new()
 	label.text = display_name()
 	label.font = load("res://assets/fonts/ui_bold.ttf")
-	label.font_size = 64
-	label.pixel_size = 0.0042
-	label.modulate = accent
+	label.font_size = 56
+	label.pixel_size = 0.0040
+	label.modulate = accent.lightened(0.2)
 	label.outline_modulate = Color(0, 0, 0, 0.85)
 	label.outline_size = 12
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	label.no_depth_test = false
-	label.position.y = 1.55
+	label.position.y = 1.35
 	label.visible = false
 	add_child(label)
+
+
+func _mat(c: Color, metal := 0.3, rough := 0.5, glow := 0.0) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = c
+	m.metallic = metal
+	m.roughness = rough
+	if glow > 0.0:
+		m.emission_enabled = true
+		m.emission = c
+		m.emission_energy_multiplier = glow
+	return m
+
+
+func _part(mesh: Mesh, mat: Material, pos := Vector3.ZERO, rot := Vector3.ZERO) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.material_override = mat
+	mi.position = pos
+	mi.rotation = rot
+	spin.add_child(mi)
+	return mi
+
+
+func _box(size: Vector3) -> BoxMesh:
+	var b := BoxMesh.new()
+	b.size = size
+	return b
+
+
+func _cyl(r: float, h: float) -> CylinderMesh:
+	var c := CylinderMesh.new()
+	c.top_radius = r
+	c.bottom_radius = r
+	c.height = h
+	c.radial_segments = 12
+	c.rings = 1
+	return c
+
+
+func _build_item_model(accent: Color) -> void:
+	var dark := _mat(Color(0.16, 0.17, 0.18), 0.5, 0.45)
+	var glow := _mat(accent, 0.1, 0.4, 1.4)
+	match kind:
+		"armor":
+			# Plate carrier: torso slab with shoulder straps.
+			var vest := _mat(Color(0.20, 0.24, 0.20).lerp(accent * 0.6, 0.25), 0.1, 0.8)
+			_part(_box(Vector3(0.48, 0.52, 0.16)), vest)
+			_part(_box(Vector3(0.10, 0.12, 0.17)), vest, Vector3(-0.15, 0.31, 0))
+			_part(_box(Vector3(0.10, 0.12, 0.17)), vest, Vector3(0.15, 0.31, 0))
+			_part(_box(Vector3(0.36, 0.05, 0.17)), glow, Vector3(0, -0.06, 0.005))
+		"helmet":
+			var hm := SphereMesh.new()
+			hm.radius = 0.2
+			hm.height = 0.26
+			hm.is_hemisphere = true
+			_part(hm, _mat(Color(0.22, 0.26, 0.22).lerp(accent * 0.6, 0.25), 0.2, 0.7), Vector3(0, -0.05, 0))
+			_part(_cyl(0.205, 0.035), glow, Vector3(0, -0.04, 0))
+		"bandage":
+			_part(_cyl(0.11, 0.16), _mat(Color(0.92, 0.9, 0.86), 0.0, 0.9), Vector3.ZERO, Vector3(0, 0, PI * 0.5))
+			_part(_cyl(0.112, 0.04), glow, Vector3.ZERO, Vector3(0, 0, PI * 0.5))
+		"med":
+			_part(_box(Vector3(0.46, 0.30, 0.30)), _mat(Color(0.88, 0.88, 0.86), 0.0, 0.6))
+			_part(_box(Vector3(0.20, 0.06, 0.31)), glow)
+			_part(_box(Vector3(0.06, 0.20, 0.31)), glow)
+		"energy":
+			_part(_cyl(0.07, 0.24), _mat(Color(0.15, 0.55, 0.30), 0.7, 0.3))
+			_part(_cyl(0.072, 0.06), glow, Vector3(0, 0.04, 0))
+		"ammo":
+			_part(_box(Vector3(0.52, 0.30, 0.30)), _mat(Color(0.28, 0.32, 0.22), 0.4, 0.6))
+			_part(_box(Vector3(0.53, 0.06, 0.31)), glow, Vector3(0, 0.05, 0))
+		"scope":
+			var length := 0.18 + tier * 0.06
+			var r := 0.035 + tier * 0.006
+			_part(_cyl(r, length), dark, Vector3.ZERO, Vector3(PI * 0.5, 0, 0))
+			_part(_cyl(r * 1.35, 0.05), dark, Vector3(0, 0, -length * 0.5), Vector3(PI * 0.5, 0, 0))
+			_part(_cyl(r * 1.15, 0.03), glow, Vector3(0, 0, length * 0.5), Vector3(PI * 0.5, 0, 0))
+		"extmag":
+			_part(_box(Vector3(0.07, 0.34, 0.10)), dark, Vector3.ZERO, Vector3(0.25, 0, 0))
+			_part(_box(Vector3(0.075, 0.05, 0.105)), glow, Vector3(0, -0.15, 0.04), Vector3(0.25, 0, 0))
+		"comp":
+			_part(_cyl(0.045, 0.2), dark, Vector3.ZERO, Vector3(PI * 0.5, 0, 0))
+			_part(_cyl(0.05, 0.04), glow, Vector3(0, 0, 0.08), Vector3(PI * 0.5, 0, 0))
+		"grenade":
+			var sm := SphereMesh.new()
+			sm.radius = 0.09
+			sm.height = 0.2
+			_part(sm, _mat(Color(0.28, 0.34, 0.20), 0.3, 0.6))
+			_part(_box(Vector3(0.03, 0.08, 0.06)), dark, Vector3(0.0, 0.11, 0.0))
+			_part(_cyl(0.025, 0.03), glow, Vector3(0, 0.1, 0))
+		_:
+			_part(_box(Vector3(0.4, 0.3, 0.3)), _mat(Color(0.18, 0.20, 0.21), 0.5, 0.4))
 
 
 func display_name() -> String:
 	match kind:
 		"weapon":
 			return str(Weapons.def(item_id).get("name", item_id.to_upper()))
-		"ammo":
-			return "AMMO"
 		"armor":
-			return "ARMOR  +50"
-		"med":
-			return "MEDKIT"
-		"gear":
-			return "SUPPLY"
-	return "LOOT"
+			return "VEST  LV%d" % int(item_id)
+		"helmet":
+			return "HELMET  LV%d" % int(item_id)
+		"scope":
+			return str(SCOPE_NAMES.get(item_id, "SCOPE"))
+		"bandage":
+			return "BANDAGES ×%d" % amount
+	return str(ITEM_NAMES.get(kind, "LOOT"))
 
 
 func prompt_text() -> String:
-	match kind:
-		"weapon":
-			return "[E]  PICK UP  " + display_name()
-		"ammo":
-			return "[E]  TAKE AMMO BOX"
-		"armor":
-			return "[E]  EQUIP ARMOR  +50"
-		"med":
-			return "[E]  TAKE MEDKIT"
-	return "[E]  TAKE"
+	var verb := "PICK UP" if kind == "weapon" else ("EQUIP" if kind in ["armor", "helmet", "scope", "extmag", "comp"] else "TAKE")
+	return "[E]  %s  %s" % [verb, display_name()]
 
 
 ## Empty string when the player can take this, otherwise the reason they cannot.
 func block_reason(player: Player) -> String:
 	if taken:
 		return "GONE"
-	match kind:
-		"ammo":
-			if not player.has_gun():
-				return "NEED A WEAPON FIRST"
-		"armor":
-			if player.armor >= 99.5:
-				return "ARMOR ALREADY FULL"
-		"med":
-			if player.meds >= Player.MAX_MEDS:
-				return "MEDKITS FULL  —  H TO USE ONE"
-	return ""
+	return player.loot_block_reason(self)
 
 
 func can_pickup(player: Player) -> bool:
@@ -184,18 +262,8 @@ func can_pickup(player: Player) -> bool:
 func pickup(player: Player) -> bool:
 	if taken:
 		return false
-	match kind:
-		"weapon":
-			player.give_weapon(item_id, mag_override, reserve_override)
-		"ammo":
-			player.add_ammo_box()
-		"armor":
-			player.add_armor(50.0)
-		"med":
-			player.add_med()
-		"gear":
-			player.add_armor(25.0)
-			player.heal(25.0)
+	if not player.take_loot(self):
+		return false
 	taken = true
 	_pop()
 	return true
@@ -224,12 +292,7 @@ func _pop() -> void:
 func _process(delta: float) -> void:
 	if taken:
 		return
-	spawn_time += delta
-	var bob := sin(Time.get_ticks_msec() * 0.0022 + bob_phase) * 0.07
-	spin.position.y = 0.55 + bob + 0.12
-	if kind == "weapon":
-		spin.rotation.y += delta * 1.05
-	else:
-		spin.rotation.y += delta * 0.5
-	ring.scale = Vector3.ONE * (0.9 + sin(Time.get_ticks_msec() * 0.003 + bob_phase) * 0.10)
-	beacon.rotation.y += delta * 0.6
+	var t := Time.get_ticks_msec() * 0.001
+	spin.position.y = 0.62 + sin(t * 2.2 + bob_phase) * 0.07
+	spin.rotation.y += delta * (1.05 if kind == "weapon" else 0.7)
+	ring.scale = Vector3.ONE * ((0.9 if kind == "weapon" else 0.7) + sin(t * 3.0 + bob_phase) * 0.08)
