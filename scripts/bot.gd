@@ -88,6 +88,8 @@ func setup(p_name: String, p_target: Vector2, p_game: Node, seed_n: int) -> void
 func _ready() -> void:
 	add_to_group("bots")
 	add_to_group("damageable")
+	# Passengers are inside the hold: nobody should see them through the hull.
+	visible = state != State.PLANE
 	collision_layer = 4
 	collision_mask = 1 | 2 | 4
 	floor_max_angle = deg_to_rad(55.0)

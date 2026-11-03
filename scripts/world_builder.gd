@@ -90,12 +90,13 @@ func _build_lighting() -> void:
 	env.background_mode = Environment.BG_SKY
 	var sky := Sky.new()
 	var sky_mat := ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = Color(0.20, 0.38, 0.66)
-	sky_mat.sky_horizon_color = Color(0.69, 0.80, 0.90)
-	sky_mat.sky_curve = 0.16
+	sky_mat.sky_top_color = Color(0.16, 0.34, 0.66)
+	sky_mat.sky_horizon_color = Color(0.62, 0.76, 0.90)
+	sky_mat.sky_curve = 0.13
 	sky_mat.sky_energy_multiplier = 1.05
-	sky_mat.ground_bottom_color = Color(0.16, 0.19, 0.20)
-	sky_mat.ground_horizon_color = Color(0.60, 0.65, 0.64)
+	# Below the horizon is open sea, so the sky's "ground" matches the water.
+	sky_mat.ground_bottom_color = Color(0.10, 0.26, 0.34)
+	sky_mat.ground_horizon_color = Color(0.56, 0.71, 0.84)
 	sky_mat.ground_curve = 0.08
 	sky_mat.sun_angle_max = 22.0
 	sky_mat.sun_curve = 0.12
@@ -112,15 +113,23 @@ func _build_lighting() -> void:
 	env.tonemap_white = 6.0
 
 	env.fog_enabled = true
-	env.fog_light_color = Color(0.68, 0.78, 0.88)
-	env.fog_light_energy = 1.0
-	env.fog_density = 0.0011
-	env.fog_sky_affect = 0.22
-	env.fog_aerial_perspective = 0.35
+	env.fog_light_color = Color(0.62, 0.74, 0.88)
+	env.fog_light_energy = 0.95
+	env.fog_density = 0.0009
+	env.fog_sky_affect = 0.15
+	env.fog_aerial_perspective = 0.3
 
 	env.adjustment_enabled = true
-	env.adjustment_contrast = 1.05
-	env.adjustment_saturation = 1.08
+	env.adjustment_contrast = 1.08
+	env.adjustment_saturation = 1.12
+
+	# Soft bloom: muzzle flashes, tracers and the sun on water get a halo.
+	env.glow_enabled = true
+	env.glow_intensity = 0.55
+	env.glow_strength = 0.9
+	env.glow_bloom = 0.04
+	env.glow_hdr_threshold = 1.15
+	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_SOFTLIGHT
 
 	we.environment = env
 	add_child(we)
@@ -246,8 +255,22 @@ func _ground_weights(x: float, z: float, h: float, n: Vector3) -> Color:
 func _build_water() -> void:
 	_mat_water = ShaderMaterial.new()
 	_mat_water.shader = load("res://shaders/water.gdshader")
+	for i in 2:
+		var nt := NoiseTexture2D.new()
+		nt.width = 512
+		nt.height = 512
+		nt.seamless = true
+		nt.as_normal_map = true
+		nt.bump_strength = 6.0 if i == 0 else 3.0
+		var fn := FastNoiseLite.new()
+		fn.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+		fn.frequency = 0.012 if i == 0 else 0.03
+		fn.fractal_octaves = 3
+		fn.seed = 11 + i
+		nt.noise = fn
+		_mat_water.set_shader_parameter("normal_a" if i == 0 else "normal_b", nt)
 	var plane := PlaneMesh.new()
-	plane.size = Vector2(9000.0, 9000.0)
+	plane.size = Vector2(16000.0, 16000.0)
 	plane.subdivide_width = 1
 	plane.subdivide_depth = 1
 	var mi := MeshInstance3D.new()
@@ -655,53 +678,99 @@ func _near_village(x: float, z: float, radius: float) -> bool:
 # -------------------------------------------------------------- set dressing
 
 func _build_distant_islands() -> void:
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.19, 0.28, 0.24)
-	mat.roughness = 1.0
-	mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
+	# Low green hills on the horizon with a sand ring at the waterline, so the
+	# sea does not just end at the sky.
+	var green := StandardMaterial3D.new()
+	green.albedo_color = Color(0.22, 0.36, 0.22)
+	green.roughness = 1.0
+	var sand := StandardMaterial3D.new()
+	sand.albedo_color = Color(0.72, 0.68, 0.52)
+	sand.roughness = 1.0
 	for i in 9:
 		var ang := TAU * float(i) / 9.0 + rng.randf_range(-0.2, 0.2)
-		var dist := rng.randf_range(760.0, 1180.0)
-		var height := rng.randf_range(26.0, 74.0)
-		var radius := rng.randf_range(90.0, 210.0)
-		var cone := CylinderMesh.new()
-		cone.top_radius = 2.0
-		cone.bottom_radius = radius
-		cone.height = height
-		cone.radial_segments = 9
-		cone.rings = 1
-		var mi := MeshInstance3D.new()
-		mi.name = "FarIsland_%d" % i
-		mi.mesh = cone
-		mi.material_override = mat
-		mi.position = Vector3(cos(ang) * dist, height * 0.5 - 6.0, sin(ang) * dist)
-		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		add_child(mi)
+		var dist := rng.randf_range(900.0, 1500.0)
+		var height := rng.randf_range(30.0, 90.0)
+		var radius := rng.randf_range(120.0, 260.0)
+		var c := Vector3(cos(ang) * dist, 0.0, sin(ang) * dist)
+		var parts := rng.randi_range(2, 4)
+		for j in parts:
+			var cone := CylinderMesh.new()
+			var r := radius * rng.randf_range(0.45, 0.9)
+			var h := height * rng.randf_range(0.5, 1.0)
+			cone.top_radius = r * 0.12
+			cone.bottom_radius = r
+			cone.height = h
+			cone.radial_segments = 24
+			cone.rings = 2
+			var mi := MeshInstance3D.new()
+			mi.mesh = cone
+			mi.material_override = green
+			var off := Vector3(rng.randf_range(-0.5, 0.5), 0, rng.randf_range(-0.5, 0.5)) * radius
+			mi.position = c + off + Vector3(0, h * 0.5 - 2.0, 0)
+			mi.scale = Vector3(1.0, 1.0, rng.randf_range(0.6, 1.0))
+			mi.rotation.y = rng.randf() * TAU
+			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			add_child(mi)
+		var beach := CylinderMesh.new()
+		beach.top_radius = radius * 1.08
+		beach.bottom_radius = radius * 1.15
+		beach.height = 3.0
+		beach.radial_segments = 32
+		var bi := MeshInstance3D.new()
+		bi.mesh = beach
+		bi.material_override = sand
+		bi.position = c + Vector3(0, -0.8, 0)
+		bi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(bi)
+
+
+func _cloud_texture() -> Texture2D:
+	# Soft cauliflower puff: fbm noise inside a radial falloff, shaded a little
+	# darker underneath.
+	var n := 128
+	var img := Image.create(n, n, false, Image.FORMAT_RGBA8)
+	var noise := FastNoiseLite.new()
+	noise.seed = 77
+	noise.frequency = 0.045
+	noise.fractal_octaves = 4
+	for y in n:
+		for x in n:
+			var p := Vector2(x - n * 0.5, y - n * 0.5) / (n * 0.5)
+			var r := p.length()
+			var nv := noise.get_noise_2d(x, y) * 0.5 + 0.5
+			var a := clampf((1.0 - r * r) * 1.6 - 0.25 + (nv - 0.5) * 0.9, 0.0, 1.0)
+			a = smoothstep(0.0, 1.0, a)
+			var shade := lerpf(1.0, 0.78, clampf(p.y * 0.8 + 0.3, 0.0, 1.0))
+			img.set_pixel(x, y, Color(shade, shade, shade * 1.02, a))
+	img.generate_mipmaps()
+	return ImageTexture.create_from_image(img)
 
 
 func _build_clouds() -> void:
-	var tex: Texture2D = load("res://assets/textures/tex_cloud.png")
+	var tex := _cloud_texture()
 	var mat := StandardMaterial3D.new()
 	mat.albedo_texture = tex
-	mat.albedo_color = Color(1, 1, 1, 0.55)
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-	mat.no_depth_test = false
 	mat.disable_receive_shadows = true
-	for i in 22:
-		var s := Sprite3D.new()
-		s.name = "Cloud_%d" % i
-		s.texture = tex
-		s.material_override = mat
-		s.pixel_size = 0.001
-		s.modulate = Color(1, 1, 1, rng.randf_range(0.35, 0.65))
-		var dist := rng.randf_range(200.0, 900.0)
+	mat.vertex_color_use_as_albedo = true
+	for i in 26:
+		var dist := rng.randf_range(150.0, 1100.0)
 		var ang := rng.randf() * TAU
-		s.position = Vector3(cos(ang) * dist, rng.randf_range(135.0, 195.0), sin(ang) * dist)
-		s.scale = Vector3.ONE * rng.randf_range(90.0, 220.0)
-		s.render_priority = -1
-		add_child(s)
+		var base := Vector3(cos(ang) * dist, rng.randf_range(150.0, 230.0), sin(ang) * dist)
+		var size := rng.randf_range(50.0, 110.0)
+		# A cloud is a cluster of overlapping puffs.
+		for j in rng.randi_range(4, 7):
+			var s := Sprite3D.new()
+			s.texture = tex
+			s.material_override = mat
+			s.pixel_size = 1.0 / 128.0
+			s.modulate = Color(1, 1, 1, rng.randf_range(0.55, 0.85))
+			s.position = base + Vector3(rng.randf_range(-1.0, 1.0) * size, rng.randf_range(-0.15, 0.25) * size, rng.randf_range(-0.6, 0.6) * size)
+			s.scale = Vector3.ONE * size * rng.randf_range(0.7, 1.3)
+			s.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			add_child(s)
 
 
 func _build_minimap() -> void:

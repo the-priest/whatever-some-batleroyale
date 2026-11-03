@@ -148,7 +148,7 @@ func _ready() -> void:
 	camera.name = "Camera"
 	camera.fov = base_fov
 	camera.near = 0.08
-	camera.far = 1200.0
+	camera.far = 4000.0
 	camera.position = cam_base
 	camera.cull_mask = 0xFFFFF
 	add_child(camera)

@@ -100,7 +100,7 @@ func _ready() -> void:
 	menu_cam = Camera3D.new()
 	menu_cam.fov = 68.0
 	menu_cam.near = 0.1
-	menu_cam.far = 2000.0
+	menu_cam.far = 6000.0
 	add_child(menu_cam)
 	menu_cam.make_current()
 
@@ -412,6 +412,11 @@ func _cleanup_match() -> void:
 	if _wind != null and is_instance_valid(_wind):
 		_wind.queue_free()
 	_wind = null
+	for n in [_cabin, _wind2d]:
+		if n != null and is_instance_valid(n):
+			n.queue_free()
+	_cabin = null
+	_wind2d = null
 	for t in tracers:
 		if is_instance_valid(t):
 			t.queue_free()
@@ -533,11 +538,13 @@ func _process(delta: float) -> void:
 func _follow_plane_cam(delta: float) -> void:
 	if plane == null:
 		return
-	var want := plane.chase_position()
-	cam_shake = maxf(0.0, cam_shake - delta * 2.0)
-	var jitter := Vector3(randf_range(-1, 1), randf_range(-1, 1), 0) * cam_shake * 0.25
-	menu_cam.global_position = menu_cam.global_position.lerp(want, clampf(delta * 3.0, 0.0, 1.0)) + jitter
-	menu_cam.look_at(plane.global_position + plane.global_basis * Vector3(0, 0, -12.0), Vector3.UP)
+	# Orbit the plane with the mouse (the player's look angles drive it).
+	var orbit := Basis(Vector3.UP, player.yaw) * Basis(Vector3.RIGHT, clampf(player.pitch, deg_to_rad(-60.0), deg_to_rad(25.0)) - 0.18)
+	var focus := plane.global_position + Vector3(0, 1.5, 0)
+	var want := focus + orbit * Vector3(0, 0, 34.0)
+	menu_cam.global_position = menu_cam.global_position.lerp(want, clampf(delta * 6.0, 0.0, 1.0))
+	menu_cam.look_at(focus, Vector3.UP)
+	menu_cam.fov = lerpf(menu_cam.fov, 62.0, delta * 2.0)
 
 
 func _update_airborne_bots() -> void:
@@ -554,6 +561,7 @@ func _update_airborne_bots() -> void:
 func _update_play(delta: float) -> void:
 	match_time += delta
 	survive_time += delta
+	_update_wind(delta)
 	if player == null or not is_instance_valid(player):
 		return
 	_update_airborne_bots()
@@ -774,12 +782,12 @@ func _player_jump(auto: bool) -> void:
 		return
 	player.jump_from_plane()
 	player.velocity += plane.jump_velocity() if plane != null else Vector3.ZERO
-	player.yaw = plane.rotation.y if plane != null else player.yaw
 	player.camera.make_current()
 	phase = "playing"
 	if not auto:
 		sfx.play_ui("jump_whoosh", -6.0)
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	_fade_cabin()
 	_attach_wind_audio()
 
 
@@ -1165,24 +1173,78 @@ func respawn_player() -> void:
 func _attach_plane_audio() -> void:
 	if plane == null:
 		return
-	var p := _loop_player("plane_loop", -10.0)
+	var p := _loop_player("plane_loop", -2.0)
 	if p != null:
+		p.unit_size = 60.0
+		p.max_distance = 1500.0
 		plane.add_child(p)
 		p.position = Vector3.ZERO
 		p.play()
+	_attach_cabin_audio()
 
 
+var _cabin: AudioStreamPlayer = null
+var _wind2d: AudioStreamPlayer = null
+
+
+## Inside the hold: the engines through the hull, as a flat (non-positional) loop.
+func _attach_cabin_audio() -> void:
+	var s := sfx.stream("plane_interior")
+	if s == null:
+		return
+	_make_loop(s)
+	_cabin = AudioStreamPlayer.new()
+	_cabin.stream = s
+	_cabin.volume_db = -7.0
+	add_child(_cabin)
+	_cabin.play()
+
+
+func _fade_cabin() -> void:
+	if _cabin == null or not is_instance_valid(_cabin):
+		return
+	var c := _cabin
+	_cabin = null
+	var tw := c.create_tween()
+	tw.tween_property(c, "volume_db", -50.0, 1.2)
+	tw.tween_callback(c.queue_free)
+
+
+## Freefall rush that follows your speed, softens under the canopy and stops
+## on landing.
 func _attach_wind_audio() -> void:
-	var p := _loop_player("wind_loop", -14.0)
-	if p != null:
-		player.add_child(p)
-		p.position = Vector3(0, 1.6, 0)
-		p.play()
-		_wind = p
-		var tw := p.create_tween()
-		tw.tween_interval(4.0)
-		tw.tween_property(p, "volume_db", -40.0, 6.0)
-		tw.tween_callback(p.queue_free)
+	var s := sfx.stream("wind_loop")
+	if s == null:
+		return
+	_make_loop(s)
+	_wind2d = AudioStreamPlayer.new()
+	_wind2d.stream = s
+	_wind2d.volume_db = -30.0
+	add_child(_wind2d)
+	_wind2d.play()
+
+
+func _update_wind(delta: float) -> void:
+	if _wind2d == null or not is_instance_valid(_wind2d) or player == null:
+		return
+	var want := -60.0
+	if player.mode == Player.Mode.FREEFALL:
+		want = lerpf(-16.0, -4.0, clampf(-player.velocity.y / 70.0, 0.0, 1.0))
+	elif player.mode == Player.Mode.CHUTE:
+		want = -20.0
+	_wind2d.volume_db = lerpf(_wind2d.volume_db, want, clampf(delta * 3.0, 0.0, 1.0))
+	_wind2d.pitch_scale = lerpf(_wind2d.pitch_scale, 1.15 if player.mode == Player.Mode.FREEFALL else 0.85, clampf(delta * 2.0, 0.0, 1.0))
+	if player.mode == Player.Mode.GROUND and _wind2d.volume_db < -45.0:
+		_wind2d.queue_free()
+		_wind2d = null
+
+
+func _make_loop(s: AudioStream) -> void:
+	if s is AudioStreamWAV:
+		var wav: AudioStreamWAV = s
+		wav.loop_mode = AudioStreamWAV.LOOP_FORWARD
+		wav.loop_begin = 0
+		wav.loop_end = int(wav.get_length() * wav.mix_rate)
 
 
 func _loop_player(name: String, db: float) -> AudioStreamPlayer3D:
@@ -1232,6 +1294,19 @@ func _run_shot() -> void:
 		return
 	print("[shot] starting match")
 	_start_match()
+	if OS.get_cmdline_user_args().has("--plane"):
+		for a in OS.get_cmdline_user_args():
+			if a.begins_with("--yaw="):
+				player.yaw = float(a.substr(6))
+		player.pitch = -0.15
+		plane.t = 0.3
+		for i in 60:
+			await get_tree().process_frame
+		await RenderingServer.frame_post_draw
+		get_viewport().get_texture().get_image().save_png(out)
+		print("[shot] saved ", out)
+		get_tree().quit()
+		return
 	await get_tree().process_frame
 	print("[shot] match up, player=", player)
 	var p := player
