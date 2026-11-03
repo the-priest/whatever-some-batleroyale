@@ -73,6 +73,17 @@ func play_at(name: String, pos: Vector3, db := 0.0, pitch_jitter := 0.08) -> voi
 	p.stream = s
 	p.global_position = pos
 	p.volume_db = db
+	if name.begins_with("shot_") or name == "explosion":
+		# Gunfire carries across the island and loses its top end with distance.
+		p.unit_size = 45.0
+		p.max_distance = 950.0
+		p.attenuation_filter_cutoff_hz = 2600.0
+		p.attenuation_filter_db = -20.0
+	else:
+		p.unit_size = 14.0
+		p.max_distance = 260.0
+		p.attenuation_filter_cutoff_hz = 9000.0
+		p.attenuation_filter_db = -6.0
 	p.pitch_scale = 1.0 + randf_range(-pitch_jitter, pitch_jitter)
 	p.play()
 
