@@ -80,7 +80,7 @@ var flash: MeshInstance3D
 var flash_light: OmniLight3D
 var flash_time := 0.0
 var muzzle: Node3D
-var chute_mesh: MeshInstance3D
+var chute_mesh: Node3D
 var cam_base := Vector3(0, EYE, 0)
 
 var _gun_scale := 1.0
@@ -188,20 +188,8 @@ func _ready() -> void:
 	flash_light.light_cull_mask = 0xFFFFF & ~2
 	view.add_child(flash_light)
 
-	chute_mesh = MeshInstance3D.new()
-	var pm := PlaneMesh.new()
-	pm.size = Vector2(5.4, 4.2)
-	chute_mesh.mesh = pm
-	var cm := StandardMaterial3D.new()
-	cm.albedo_color = Color(0.86, 0.88, 0.92)
-	cm.roughness = 0.85
-	cm.cull_mode = BaseMaterial3D.CULL_DISABLED
-	cm.emission_enabled = true
-	cm.emission = Color(0.30, 0.36, 0.46)
-	cm.emission_energy_multiplier = 0.25
-	chute_mesh.material_override = cm
-	chute_mesh.position = Vector3(0, 2.6, 0.4)
-	chute_mesh.rotation.x = deg_to_rad(-12)
+	chute_mesh = Parachute.build(0, 4.2)
+	chute_mesh.position = Vector3(0, 0.4, 0.3)
 	chute_mesh.visible = false
 	add_child(chute_mesh)
 	_emit_health()

@@ -10,7 +10,8 @@ const MODEL_PATH := "res://assets/village/%s.gltf"
 const WALL_HEIGHT := 3.123
 const DOOR_WIDTH := 1.30
 
-const TOWN_NAMES := ["MOSSFORD", "HOLLOWMERE", "BRIARWICK", "STONEHELM", "ASHVALE", "THORNBY"]
+const TOWN_NAMES := ["MOSSFORD", "HOLLOWMERE", "BRIARWICK", "STONEHELM", "ASHVALE", "THORNBY",
+	"KESTREL BAY", "OLDHAVEN", "DUNMORE", "REDWATER"]
 
 ## Footprints that have a matching roof piece in the kit.
 const LOTS := [
@@ -20,16 +21,9 @@ const LOTS := [
 
 var terrain: Terrain
 var rng := RandomNumberGenerator.new()
-var sites: Array[Vector2] = [
-	Vector2(-168.0, -142.0),
-	Vector2(182.0, -168.0),
-	Vector2(-218.0, 186.0),
-	Vector2(138.0, 168.0),
-	Vector2(24.0, -292.0),
-	Vector2(296.0, 34.0),
-]
 var houses: Array[Dictionary] = []
 var village_pads: Array[Dictionary] = []
+var roads: Array[Dictionary] = []
 var loot_points: Array[Dictionary] = []
 var towers: Array[Dictionary] = []
 var poi_pads: Array[Dictionary] = []
@@ -58,51 +52,154 @@ func build(p_terrain: Terrain, p_seed: int) -> void:
 
 
 func _plan_villages() -> void:
-	for site in sites:
-		if terrain.height_at(site.x, site.y) < 4.0:
+	# Settlements are placed per seed: three street towns, four villages and a
+	# handful of farmsteads, spread out over flat-enough land.
+	var specs: Array = ["town", "town", "town", "village", "village", "village", "village",
+		"farm", "farm", "farm", "farm", "farm", "farm"]
+	var size := {"town": 44.0, "village": 30.0, "farm": 15.0}
+	var spacing := {"town": 175.0, "village": 120.0, "farm": 75.0}
+	var rng2 := RandomNumberGenerator.new()
+	rng2.seed = rng.seed + 11
+	var name_i := 0
+	for type in specs:
+		var radius: float = size[type]
+		var site := Vector2.INF
+		for attempt in 400:
+			var a := rng2.randf() * TAU
+			var r := sqrt(rng2.randf()) * (370.0 - radius)
+			var c := Vector2(cos(a), sin(a)) * r
+			if terrain.height_at(c.x, c.y) < 4.0 or terrain.slope_at(c.x, c.y) > 0.3:
+				continue
+			if terrain.roughness(c.x, c.y, radius * 0.7) > maxf(6.0, radius * 0.3):
+				continue
+			var ok := true
+			for v in village_pads:
+				if c.distance_to(v.center) < maxf(float(spacing[type]), float(v.spacing)) * (0.5 if type == "farm" or v.type == "farm" else 1.0) + radius + float(v.radius) - 40.0:
+					ok = false
+					break
+			if ok:
+				site = c
+				break
+		if site == Vector2.INF:
 			continue
-		var pad := terrain.flatten_circle(site.x, site.y, 31.0, 26.0)
-		village_pads.append({"center": site, "pad": pad, "name": TOWN_NAMES[village_pads.size() % TOWN_NAMES.size()]})
+		var pad := terrain.flatten_circle(site.x, site.y, radius, radius * 0.8)
+		var axis := rng2.randf() * PI
+		var town_name := ""
+		if type != "farm":
+			town_name = TOWN_NAMES[name_i % TOWN_NAMES.size()]
+			name_i += 1
+		village_pads.append({"center": site, "pad": pad, "name": town_name, "radius": radius,
+			"type": type, "spacing": spacing[type], "axis": axis})
 		_stat.village_count += 1
+		match type:
+			"town":
+				_plan_street(site, pad, radius, axis)
+			"village":
+				_plan_ring(site, pad, rng.randi_range(4, 6), 9.0, radius - 4.0)
+			"farm":
+				_plan_ring(site, pad, rng.randi_range(1, 2), 3.0, radius - 3.0)
+	_plan_roads()
 
-		var count := rng.randi_range(3, 5)
-		var placed := 0
-		var tries := 0
-		while placed < count and tries < 90:
-			tries += 1
+
+## Houses on both sides of a main street, doors to the road, a plaza mid-way.
+func _plan_street(site: Vector2, pad: float, radius: float, axis: float) -> void:
+	var dir := Vector2(cos(axis), sin(axis))
+	var perp := Vector2(-dir.y, dir.x)
+	roads.append({"a": site - dir * (radius + 6.0), "b": site + dir * (radius + 6.0), "w": 3.6})
+	var n := int((radius - 8.0) / 12.0)
+	for k in range(-n, n + 1):
+		var along := float(k) * 12.0
+		if absf(along) < 7.0:
+			continue  # plaza
+		for side in [-1.0, 1.0]:
+			if rng.randf() > 0.88:
+				continue
 			var lot: Vector2i = LOTS[rng.randi() % LOTS.size()]
 			var w := float(lot.x)
 			var d := float(lot.y)
-			if rng.randf() < 0.5:
+			if w > 10.0:
 				var tmp := w
 				w = d
 				d = tmp
-			var radius := maxf(w, d) * 0.5
-			var ang := rng.randf() * TAU
-			var dist := rng.randf_range(9.0, 22.0)
-			var c := site + Vector2(cos(ang), sin(ang)) * dist
-			if c.distance_to(site) + radius > 27.0:
+			var c: Vector2 = site + dir * along + perp * side * (6.2 + d * 0.5)
+			var hr := maxf(w, d) * 0.5
+			if c.distance_to(site) + hr > radius - 1.0:
 				continue
-			var overlap := false
-			for h in houses:
-				var hc: Vector2 = h.center
-				if c.distance_to(hc) < radius + float(h.radius) + 2.2:
-					overlap = true
-					break
-			if overlap:
-				continue
+			_add_house(c, w, d, -axis, pad, site + dir * along)
+	# Side street across the plaza for bigger towns.
+	roads.append({"a": site - perp * (radius * 0.6), "b": site + perp * (radius * 0.6), "w": 2.8})
 
-			# Door faces the village centre.
-			var to_center := site - c
-			var yaw_house := float(rng.randi_range(0, 3)) * PI * 0.5
-			var door_side := _door_for(to_center, yaw_house)
 
-			houses.append({
-				"center": c, "w": w, "d": d, "yaw": yaw_house, "pad": pad,
-				"radius": radius, "door_side": door_side,
-				"style": "Plaster" if rng.randf() < 0.72 else "UnevenBrick",
-			})
+## Houses scattered around a centre, doors facing it.
+func _plan_ring(site: Vector2, pad: float, count: int, min_d: float, max_r: float) -> void:
+	var placed := 0
+	var tries := 0
+	while placed < count and tries < 120:
+		tries += 1
+		var lot: Vector2i = LOTS[rng.randi() % LOTS.size()]
+		var w := float(lot.x)
+		var d := float(lot.y)
+		if rng.randf() < 0.5:
+			var tmp := w
+			w = d
+			d = tmp
+		var radius := maxf(w, d) * 0.5
+		var ang := rng.randf() * TAU
+		var c := site + Vector2(cos(ang), sin(ang)) * rng.randf_range(min_d, max_r)
+		if c.distance_to(site) + radius > max_r:
+			continue
+		if _add_house(c, w, d, float(rng.randi_range(0, 3)) * PI * 0.5, pad, site):
 			placed += 1
+
+
+func _add_house(c: Vector2, w: float, d: float, yaw_house: float, pad: float, face_to: Vector2) -> bool:
+	var radius := maxf(w, d) * 0.5
+	for h in houses:
+		var hc: Vector2 = h.center
+		if c.distance_to(hc) < radius + float(h.radius) + 2.2:
+			return false
+	houses.append({
+		"center": c, "w": w, "d": d, "yaw": yaw_house, "pad": pad,
+		"radius": radius, "door_side": _door_for(face_to - c, yaw_house),
+		"style": "Plaster" if rng.randf() < 0.72 else "UnevenBrick",
+	})
+	return true
+
+
+## Dirt roads between neighbouring settlements (each links to its nearest two).
+func _plan_roads() -> void:
+	var done := {}
+	for i in village_pads.size():
+		var a: Vector2 = village_pads[i].center
+		var near: Array = []
+		for j in village_pads.size():
+			if i != j:
+				near.append([a.distance_to(village_pads[j].center), j])
+		near.sort_custom(func(x, y): return x[0] < y[0])
+		for e in near.slice(0, 2):
+			var j: int = e[1]
+			var key := "%d_%d" % [mini(i, j), maxi(i, j)]
+			if done.has(key) or float(e[0]) > 330.0:
+				continue
+			done[key] = true
+			# A gentle bend through a midpoint so roads do not look ruled.
+			var b: Vector2 = village_pads[j].center
+			var mid := (a + b) * 0.5 + (b - a).orthogonal().normalized() * rng.randf_range(-25.0, 25.0)
+			roads.append({"a": a, "b": mid, "w": 2.6})
+			roads.append({"a": mid, "b": b, "w": 2.6})
+
+
+## Distance from a point to the nearest road centre line.
+func road_distance(x: float, z: float) -> float:
+	var p := Vector2(x, z)
+	var best := 1e9
+	for r in roads:
+		var a: Vector2 = r.a
+		var b: Vector2 = r.b
+		var ab := b - a
+		var t := clampf((p - a).dot(ab) / maxf(0.001, ab.length_squared()), 0.0, 1.0)
+		best = minf(best, p.distance_to(a + ab * t) - float(r.w))
+	return best
 
 
 func _door_for(to_center: Vector2, yaw_house: float) -> int:
@@ -207,11 +304,13 @@ func _build_village_extras() -> void:
 	for v in village_pads:
 		var site: Vector2 = v.center
 		var pad: float = v.pad
+		var vr: float = v.radius
+		var is_farm: bool = v.type == "farm"
 
 		# Plaza loot (open air crates) + cover.
-		for i in rng.randi_range(3, 5):
+		for i in (rng.randi_range(2, 3) if is_farm else rng.randi_range(3, 6)):
 			var ang := rng.randf() * TAU
-			var dist := rng.randf_range(4.0, 10.0)
+			var dist := rng.randf_range(4.0, maxf(6.0, vr * 0.3))
 			var p := Vector3(site.x + cos(ang) * dist, pad, site.y + sin(ang) * dist)
 			if rng.randf() < 0.55:
 				_place("Prop_Crate", p, rng.randf_range(0.0, TAU))
@@ -223,16 +322,20 @@ func _build_village_extras() -> void:
 				loot_points.append({"pos": p + Vector3(1.4, 0.06, 0.0), "kind": "gear", "village": true})
 
 		# Perimeter fence posts, broken up so they read as an old village edge.
-		for i in rng.randi_range(5, 9):
-			var ang := rng.randf() * TAU
-			var dist := rng.randf_range(23.0, 27.0)
+		# Farms get a near-complete paddock fence, towns a broken edge.
+		var posts := 28 if is_farm else rng.randi_range(6, 12)
+		for i in posts:
+			var ang := (TAU * float(i) / float(posts)) if is_farm else rng.randf() * TAU
+			if is_farm and rng.randf() < 0.12:
+				continue
+			var dist := vr - 1.0 if is_farm else rng.randf_range(vr - 6.0, vr - 2.0)
 			var p := Vector3(site.x + cos(ang) * dist, pad, site.y + sin(ang) * dist)
-			_place("Prop_WoodenFence_Single", p, ang + PI * 0.5 + rng.randf_range(-0.25, 0.25))
+			_place("Prop_WoodenFence_Single", p, ang + PI * 0.5 + rng.randf_range(-0.15, 0.15))
 
 		# Vines climbing a couple of house walls.
 		for h in houses:
 			var hc: Vector2 = h.center
-			if hc.distance_to(site) > 26.0:
+			if hc.distance_to(site) > vr:
 				continue
 			if rng.randf() < 0.5:
 				var side_dir := Vector3(rng.randf_range(-1, 1), 0, rng.randf_range(-1, 1)).normalized()
@@ -240,9 +343,9 @@ func _build_village_extras() -> void:
 				_place("Prop_Vine2", p, rng.randf_range(0.0, TAU))
 
 		# A few shamble walls to give the plaza silhouette some verticality.
-		for i in rng.randi_range(1, 2):
+		for i in (0 if is_farm else rng.randi_range(1, 3)):
 			var ang := rng.randf() * TAU
-			var dist := rng.randf_range(13.0, 20.0)
+			var dist := rng.randf_range(vr * 0.4, vr * 0.7)
 			var p := Vector3(site.x + cos(ang) * dist, pad, site.y + sin(ang) * dist)
 			_place("Wall_UnevenBrick_Straight", p, ang)
 			_add_wall_collider(p, ang, false)
@@ -505,7 +608,7 @@ func _plan_ruins() -> void:
 	rng2.seed = rng.seed + 57
 	var placed := 0
 	for i in 400:
-		if placed >= 9:
+		if placed >= 14:
 			break
 		var a := rng2.randf() * TAU
 		var r := sqrt(rng2.randf()) * 380.0

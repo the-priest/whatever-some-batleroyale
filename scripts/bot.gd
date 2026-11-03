@@ -18,7 +18,6 @@ var alive := true
 
 var rig: Node3D
 var anim: AnimationPlayer
-var gun_node: Node3D
 var weapon_id := ""
 var mag := 0
 var armed := false
@@ -37,7 +36,8 @@ var strafe_timer := 0.0
 var fall_speed := -12.0
 var landed := false
 var roam_point := Vector2.ZERO
-var chute_mesh: MeshInstance3D
+var chute_node: Node3D
+var body: SoldierRig
 var speed_anim := "Idle"
 var hit_flash := 0.0
 var dead_timer := 0.0
@@ -66,6 +66,11 @@ var _step := 0.0
 var _burst := 0
 var _see_cache := {}
 var _shot_seq := 0
+var _col: CollisionShape3D
+var _cap: CapsuleShape3D
+var crouched := false
+var _posture_t := 0.0
+var _reload_t := 0.0
 
 var last_killer_node: Node = null
 
@@ -101,27 +106,13 @@ func _ready() -> void:
 	col.shape = cap
 	col.position.y = 0.89
 	add_child(col)
+	_col = col
+	_cap = cap
 
-	var ps: PackedScene = load("res://assets/characters/mannequin.glb")
-	if ps != null:
-		rig = ps.instantiate()
-		# Slight per-bot tint so a crowd does not look like clones.
-		_tint_rig(rig)
-		add_child(rig)
-		rig.rotation.y = PI
-		var aps := rig.find_children("*", "AnimationPlayer", true, false)
-		if aps.size() > 0:
-			anim = aps[0]
-			anim.play("Idle")
-		for mi in rig.find_children("*", "MeshInstance3D", true, false):
-			(mi as MeshInstance3D).layers = 1
-			(mi as MeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-
-	gun_node = Node3D.new()
-	gun_node.position = Vector3(0.30, 1.32, -0.34)
-	gun_node.rotation.y = PI
-	gun_node.visible = false
-	add_child(gun_node)
+	body = SoldierRig.new()
+	add_child(body)
+	rig = body
+	anim = body.anim
 
 	_muzzle_flash = MeshInstance3D.new()
 	var q := QuadMesh.new()
@@ -141,47 +132,23 @@ func _ready() -> void:
 	_muzzle_flash.position = Vector3(0.30, 1.32, -0.95)
 	add_child(_muzzle_flash)
 
-	chute_mesh = MeshInstance3D.new()
-	var pm := PlaneMesh.new()
-	pm.size = Vector2(5.0, 3.9)
-	chute_mesh.mesh = pm
-	var cm := StandardMaterial3D.new()
-	cm.albedo_color = Color(0.82, 0.85, 0.90)
-	cm.roughness = 0.9
-	cm.cull_mode = BaseMaterial3D.CULL_DISABLED
-	chute_mesh.material_override = cm
-	chute_mesh.position = Vector3(0, 3.2, 0)
-	chute_mesh.visible = false
-	add_child(chute_mesh)
-
-
-func _tint_rig(n: Node) -> void:
-	var tint := Color.from_hsv(randf(), 0.30, 0.70)
-	for mi in n.find_children("*", "MeshInstance3D", true, false):
-		var mesh_inst := mi as MeshInstance3D
-		if mesh_inst.mesh == null:
-			continue
-		for si in range(mesh_inst.mesh.get_surface_count()):
-			var base := mesh_inst.get_active_material(si)
-			if base is BaseMaterial3D:
-				var dup: BaseMaterial3D = (base as BaseMaterial3D).duplicate()
-				dup.albedo_color = tint
-				dup.roughness = 0.68
-				dup.metallic = 0.04
-				mesh_inst.set_surface_override_material(si, dup)
-
-
-func _bot_material() -> StandardMaterial3D:
-	var m := StandardMaterial3D.new()
-	var hue := randf()
-	m.albedo_color = Color.from_hsv(hue, 0.35, 0.62)
-	m.roughness = 0.7
-	m.metallic = 0.05
-	return m
+	chute_node = Parachute.build()
+	chute_node.position = Vector3(0, 0.6, 0)
+	chute_node.visible = false
+	add_child(chute_node)
 
 
 func head_y() -> float:
-	return global_position.y + head_offset
+	return global_position.y + (1.0 if crouched else head_offset)
+
+
+func _set_crouch(v: bool) -> void:
+	if v == crouched:
+		return
+	crouched = v
+	# Shrink the hitbox with the pose so bullets miss the empty space above.
+	_cap.height = 1.2 if v else 1.78
+	_col.position.y = _cap.height * 0.5
 
 
 func display_name() -> String:
@@ -207,7 +174,10 @@ func _physics_process(delta: float) -> void:
 		velocity.x = move_toward(velocity.x, 0.0, 6.0 * delta)
 		velocity.z = move_toward(velocity.z, 0.0, 6.0 * delta)
 		move_and_slide()
-		if dead_timer > 9.0:
+		if dead_timer > 7.0:
+			# Settle into the ground rather than vanish.
+			position.y -= delta * 0.6
+		if dead_timer > 10.0:
 			queue_free()
 		return
 
@@ -251,11 +221,11 @@ func _fall(delta: float, chute: bool) -> void:
 		velocity.y = fall_speed
 		if global_position.y < game_ground_y() + 95.0 or dist < 18.0:
 			state = State.CHUTE
-			chute_mesh.visible = true
+			chute_node.visible = true
 			_play("Jump_Start")
 	move_and_slide()
 	if chute:
-		chute_mesh.rotation.y = sin(Time.get_ticks_msec() * 0.0009 + randf()) * 0.08
+		chute_node.rotation.y = sin(Time.get_ticks_msec() * 0.0009 + randf()) * 0.08
 	rotation.y = lerp_angle(rotation.y, atan2(-to.x, -to.y), delta * 2.0)
 	_play("Jump" if not chute else "Idle")
 	if is_on_floor() or global_position.y <= game_ground_y() + 0.6:
@@ -273,7 +243,7 @@ func _land() -> void:
 		return
 	state = State.GROUND
 	landed = true
-	chute_mesh.visible = false
+	chute_node.visible = false
 	velocity = Vector3.ZERO
 	global_position.y = game_ground_y() + 1.4
 	_play("Jump_Land")
@@ -334,6 +304,15 @@ func _ground(delta: float) -> void:
 			var to_e := (enemy.global_position - global_position).normalized()
 			var side := Vector3(-to_e.z, 0, to_e.x) * strafe_dir
 			var hold := 16.0
+			# At range, alternate between crouched shooting and standing to
+			# reposition; up close, stay up and strafe.
+			_posture_t -= delta
+			if _posture_t <= 0.0:
+				var want_crouch := d > 30.0 and not crouched and randf() < 0.45 + shoot_skill * 0.3
+				_set_crouch(want_crouch)
+				_posture_t = randf_range(2.0, 4.0) if crouched else randf_range(1.2, 2.5)
+			if crouched:
+				hold = d
 			if d > hold + 6.0:
 				target_pos = enemy.global_position
 				stop_dist = hold
@@ -346,6 +325,7 @@ func _ground(delta: float) -> void:
 				stop_dist = 0.0
 		else:
 			enemy = null
+			_set_crouch(false)
 			var here := Vector2(global_position.x, global_position.z)
 			if game != null and game.zone != null:
 				var zc: Vector2 = game.zone.center
@@ -371,6 +351,8 @@ func _ground(delta: float) -> void:
 	var flat := Vector3(target_pos.x - global_position.x, 0, target_pos.z - global_position.z)
 	var dist := flat.length()
 	var speed := RUN if want_sprint else WALK
+	if crouched:
+		speed = 1.8
 	if loot_target != null and target_pos.is_equal_approx(loot_target.global_position):
 		if dist < _last_loot_d - 0.5:
 			_last_loot_d = dist
@@ -453,16 +435,26 @@ func _animate_ground() -> void:
 			if game != null and game.player != null and game.player.global_position.distance_to(global_position) < 42.0:
 				game.play_sfx_at("step_%s_%d" % [game.surface_at(global_position), randi() % 4 + 1], global_position, 1.0 if planar > 5.5 else -3.0)
 	if is_on_floor() and planar > 0.4:
-		var want := "Sprint" if planar > 5.6 else "Jog_Fwd"
-		if want != speed_anim:
-			speed_anim = want
-			_play(want)
-		if anim != null:
-			anim.speed_scale = clampf(planar / (6.2 if want == "Sprint" else 4.0), 0.65, 1.5)
+		var want := "Sprint" if planar > 5.6 else ("Jog_Fwd" if planar > 2.6 else "Walk")
+		if crouched:
+			want = "Crouch_Fwd"
+		speed_anim = want
+		var ref := 6.2 if want == "Sprint" else (4.0 if want == "Jog_Fwd" else 1.6)
+		_play(want, clampf(planar / ref, 0.7, 1.4))
 	elif state == State.GROUND:
-		if speed_anim != "Idle":
-			speed_anim = "Idle"
-			_play("Idle")
+		speed_anim = "Crouch_Idle" if crouched else "Idle"
+		_play(speed_anim)
+	# Arms: gun up while fighting, held low otherwise.
+	if body != null:
+		if armed:
+			var fighting_now := enemy != null and is_instance_valid(enemy) and enemy_visible()
+			_reload_t = maxf(0.0, _reload_t - get_physics_process_delta_time())
+			body.set_arms("reload" if _reload_t > 0.0 else ("aim" if fighting_now else "idle"))
+			var aim_to: Vector3 = (enemy.global_position + Vector3(0, 1.2, 0) - _shot_origin()) if fighting_now else -global_basis.z
+			body.aim_dir = aim_to
+		else:
+			body.set_arms("")
+		body.set_gear(vest_level, helmet_level)
 
 
 func _pick_roam_point() -> void:
@@ -493,13 +485,14 @@ func hear_shot(pos: Vector3, shooter: Node) -> void:
 	think_timer = minf(think_timer, reaction)
 
 
-func _play(name: String) -> void:
-	if anim == null:
+func _play(name: String, speed := 1.0) -> void:
+	if body == null:
 		return
-	if anim.current_animation == name and anim.is_playing():
-		return
-	anim.speed_scale = 1.0
-	anim.play(name, 0.25)
+	var legs := name
+	match name:
+		"Jump_Start", "Jump_Land":
+			legs = "Jump" if name == "Jump_Start" else "Idle"
+	body.set_legs(legs, speed)
 
 
 # ------------------------------------------------------------------- loot ---
@@ -561,14 +554,8 @@ func arm_weapon(id: String) -> void:
 	armed = true
 	var d: Dictionary = Weapons.def(id)
 	mag = int(d["mag"])
-	if gun_node != null:
-		for c in gun_node.get_children():
-			c.queue_free()
-		var gun := Weapons.make_drop_node(id)
-		gun.scale = Vector3.ONE * float(d.get("len", 0.8))
-		gun.rotation.y = PI
-		gun_node.add_child(gun)
-		gun_node.visible = true
+	if body != null:
+		body.set_gun(id)
 	speed_anim = ""
 	_play("Idle")
 
@@ -609,6 +596,9 @@ func _shoot_logic(delta: float) -> void:
 	if mag <= 0:
 		mag = int(d["mag"])
 		fire_timer = float(d["reload"])
+		_reload_t = float(d["reload"])
+		if game != null and game.player != null and game.player.global_position.distance_to(global_position) < 30.0:
+			game.play_sfx_at("reload_out", global_position, -6.0)
 		return
 	fire_timer = 60.0 / float(d["rpm"]) * (1.15 if dist < 45.0 else 1.6)
 	# Fire in bursts with short pauses, like a person re-acquiring the target.
@@ -618,6 +608,8 @@ func _shoot_logic(delta: float) -> void:
 	_flash = 0.05
 	_muzzle_flash.visible = true
 	_muzzle_flash.rotation.z = randf() * TAU
+	if body != null:
+		_muzzle_flash.global_position = body.muzzle_position()
 	var from := _shot_origin()
 	# Aim error: skill, range, target movement and the first shots of a burst.
 	var tvel := Vector3.ZERO
@@ -644,7 +636,7 @@ func _shoot_logic(delta: float) -> void:
 		var s := spread if pellets == 1 else deg_to_rad(float(d["spread"])) * randf_range(0.4, 1.5)
 		var dir := (base_dir + Vector3(randf_range(-s, s), randf_range(-s, s), randf_range(-s, s))).normalized()
 		if game != null and game.ballistics != null:
-			game.ballistics.fire(self, from, dir, weapon_id, global_position + global_basis * _muzzle_flash.position, _shot_seq, mult)
+			game.ballistics.fire(self, from, dir, weapon_id, _muzzle_flash.global_position, _shot_seq, mult)
 	if game != null and game.has_method("play_sfx_at"):
 		game.play_sfx_at("shot_" + str(d["sound"]), from, 0.85)
 	if game != null and game.has_method("on_gunshot"):
@@ -652,7 +644,7 @@ func _shoot_logic(delta: float) -> void:
 
 
 func _shot_origin() -> Vector3:
-	return global_position + Vector3(0, 1.30, 0) + -global_basis.z * 0.55
+	return global_position + Vector3(0, 0.95 if crouched else 1.30, 0) + -global_basis.z * 0.55
 
 
 func _find_enemy() -> Node3D:
@@ -740,9 +732,8 @@ func take_damage(amount: float, _pos: Vector3 = Vector3.ZERO, headshot: bool = f
 				vest_level = 0
 	hp -= dmg
 	hit_flash = 0.25
-	if anim != null:
-		_play("Hit_Head" if headshot else "Hit_Chest")
-		anim.seek(0.0, true)
+	if body != null:
+		body.flinch(1.4 if headshot else 1.0)
 	heal_timer = 0.0
 	# Being shot at makes bots fight back.
 	if source != null and is_instance_valid(source) and source != self:
@@ -767,12 +758,9 @@ func _die(source: Node) -> void:
 	dead_timer = 0.0
 	collision_layer = 0
 	collision_mask = 1
-	chute_mesh.visible = false
-	gun_node.visible = false
-	if anim != null:
-		anim.speed_scale = 1.0
-		anim.play("Death01", 0.15)
-		anim.seek(0.0, true)
+	chute_node.visible = false
+	if body != null:
+		body.die()
 	last_killer_node = source if source != null and is_instance_valid(source) else null
 	var killer := ""
 	if source != null and source.has_method("display_name"):

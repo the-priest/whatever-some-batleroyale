@@ -21,6 +21,7 @@ var rng := RandomNumberGenerator.new()
 var _nature_cache: Dictionary = {}
 var _terrain_material: ShaderMaterial
 var _mat_water: ShaderMaterial
+var road_image: Image
 
 var stats := {
 	"trees": 0, "ground": 0, "rocks": 0, "houses": 0, "loot": 0, "colliders": 0,
@@ -145,6 +146,7 @@ func _build_terrain() -> void:
 	_terrain_material.set_shader_parameter("tex_sand", load("res://assets/textures/tex_sand.png"))
 	_terrain_material.set_shader_parameter("tex_rock", load("res://assets/textures/tex_rock.png"))
 	_terrain_material.set_shader_parameter("tex_macro", load("res://assets/textures/tex_macro.png"))
+	_terrain_material.set_shader_parameter("road_mask", _build_road_mask())
 
 	var body := StaticBody3D.new()
 	body.name = "TerrainCollision"
@@ -231,7 +233,8 @@ func _ground_weights(x: float, z: float, h: float, n: Vector3) -> Color:
 	for v in villages.village_pads:
 		var c: Vector2 = v.center
 		var d := Vector2(x, z).distance_to(c)
-		dirt = maxf(dirt, smoothstep(34.0, 16.0, d) * 0.62)
+		var vr: float = v.radius
+		dirt = maxf(dirt, smoothstep(vr + 3.0, vr * 0.5, d) * (0.45 if v.type == "town" else 0.62))
 	# Worn earth belongs under the canopy, not in free-floating blobs. The old
 	# smoothstep(0.62, 0.86) term only fired in the top quarter of the woods
 	# noise band, which produced discrete 30-80 m dirt discs with no cover on
@@ -250,6 +253,44 @@ func _ground_weights(x: float, z: float, h: float, n: Vector3) -> Color:
 		grass = 1.0
 		total = 1.0
 	return Color(grass / total, sand / total, rock / total, dirt / total)
+
+
+const ROAD_RES := 1024
+
+
+## Crisp dirt roads: segments rasterised into a mask the terrain shader blends.
+func _build_road_mask() -> ImageTexture:
+	var img := Image.create(ROAD_RES, ROAD_RES, false, Image.FORMAT_L8)
+	var k := float(ROAD_RES) / Terrain.SIZE
+	for r in villages.roads:
+		var a: Vector2 = r.a
+		var b: Vector2 = r.b
+		var w: float = r.w
+		var lo := (Vector2(minf(a.x, b.x), minf(a.y, b.y)) - Vector2.ONE * (w + 2.0) + Vector2.ONE * Terrain.HALF) * k
+		var hi := (Vector2(maxf(a.x, b.x), maxf(a.y, b.y)) + Vector2.ONE * (w + 2.0) + Vector2.ONE * Terrain.HALF) * k
+		var ab := b - a
+		var len2 := maxf(0.001, ab.length_squared())
+		for py in range(maxi(0, int(lo.y)), mini(ROAD_RES, int(hi.y) + 1)):
+			for px in range(maxi(0, int(lo.x)), mini(ROAD_RES, int(hi.x) + 1)):
+				var p := Vector2(px + 0.5, py + 0.5) / k - Vector2.ONE * Terrain.HALF
+				var t := clampf((p - a).dot(ab) / len2, 0.0, 1.0)
+				var d := p.distance_to(a + ab * t)
+				# Wheel ruts: two darker lines either side of the centre.
+				var v := smoothstep(w, w * 0.55, d)
+				if v <= 0.0:
+					continue
+				var cur := img.get_pixel(px, py).r
+				img.set_pixel(px, py, Color(maxf(cur, v), 0, 0))
+	road_image = img
+	return ImageTexture.create_from_image(img)
+
+
+func road_at(x: float, z: float) -> float:
+	if road_image == null:
+		return 0.0
+	var px := clampi(int((x + Terrain.HALF) / Terrain.SIZE * ROAD_RES), 0, ROAD_RES - 1)
+	var py := clampi(int((z + Terrain.HALF) / Terrain.SIZE * ROAD_RES), 0, ROAD_RES - 1)
+	return road_image.get_pixel(px, py).r
 
 
 func _build_water() -> void:
@@ -337,7 +378,7 @@ func _scatter_trees() -> void:
 
 	var placements: Array[Dictionary] = []
 	var grid: Dictionary = {}
-	var attempts := 5200
+	var attempts := 9000
 	for i in attempts:
 		var x := rng.randf_range(-Terrain.HALF + 12.0, Terrain.HALF - 12.0)
 		var z := rng.randf_range(-Terrain.HALF + 12.0, Terrain.HALF - 12.0)
@@ -346,14 +387,14 @@ func _scatter_trees() -> void:
 			continue
 		if terrain.slope_at(x, z) > 0.52:
 			continue
-		if _near_village(x, z, 38.0):
+		if _near_village(x, z, 38.0) or villages.road_distance(x, z) < 3.0:
 			continue
 		var forest := terrain.forest_density(x, z)
 		var chance := smoothstep(0.36, 0.72, forest) * 0.85 + 0.06
 		chance = clampf(chance, 0.0, 0.62)
 		if rng.randf() > chance:
 			continue
-		var cell := "%d_%d" % [int(x / 7.0), int(z / 7.0)]
+		var cell := "%d_%d" % [int(x / 6.0), int(z / 6.0)]
 		if grid.has(cell):
 			continue
 		grid[cell] = true
@@ -428,7 +469,7 @@ func _scatter_ground_cover() -> void:
 		{"name": "Grass_Common_Short", "w": 0.44, "view": 55.0, "scale": Vector2(0.75, 1.45), "wind": 0.16},
 		{"name": "Grass_Common_Tall", "w": 0.20, "view": 60.0, "scale": Vector2(0.75, 1.25), "wind": 0.18},
 		{"name": "Fern_1", "w": 0.11, "view": 75.0, "scale": Vector2(0.34, 0.55), "wind": 0.09},
-		{"name": "Bush_Common", "w": 0.14, "view": 140.0, "scale": Vector2(0.55, 0.95), "wind": 0.06},
+		{"name": "Bush_Common", "w": 0.17, "view": 160.0, "scale": Vector2(0.6, 1.15), "wind": 0.06},
 		{"name": "Bush_Common_Flowers", "w": 0.05, "view": 140.0, "scale": Vector2(0.55, 0.90), "wind": 0.06},
 		{"name": "Flower_4_Group", "w": 0.06, "view": 90.0, "scale": Vector2(0.55, 0.85), "wind": 0.10},
 	]
@@ -436,7 +477,7 @@ func _scatter_ground_cover() -> void:
 	for k in kinds:
 		buckets[k.name] = []
 
-	for i in 8000:
+	for i in 12000:
 		var x := rng.randf_range(-Terrain.HALF + 8.0, Terrain.HALF - 8.0)
 		var z := rng.randf_range(-Terrain.HALF + 8.0, Terrain.HALF - 8.0)
 		var h := terrain.height_at(x, z)
@@ -444,7 +485,7 @@ func _scatter_ground_cover() -> void:
 			continue
 		if terrain.slope_at(x, z) > 0.5:
 			continue
-		if _near_village(x, z, 14.0):
+		if _near_village(x, z, 14.0) or villages.road_distance(x, z) < 1.0:
 			continue
 		var forest := terrain.forest_density(x, z)
 		var r := rng.randf()
@@ -665,7 +706,8 @@ func _random_land_point(min_dist: float, max_dist: float) -> Vector3:
 func _near_village(x: float, z: float, radius: float) -> bool:
 	for v in villages.village_pads:
 		var c: Vector2 = v.center
-		if Vector2(x, z).distance_to(c) < radius:
+		# `radius` is tuned for a standard 31 m village; scale for towns/farms.
+		if Vector2(x, z).distance_to(c) < radius + float(v.radius) - 31.0:
 			return true
 	# Towers and ruins keep a clear yard of their own.
 	for p in villages.poi_pads:
@@ -806,6 +848,9 @@ func _build_minimap() -> void:
 				# Forest tint.
 				if terrain.forest_density(x, z) > 0.62:
 					c = c.lerp(Color(0.18, 0.32, 0.16), 0.35)
+				var rd := road_at(x, z)
+				if rd > 0.3:
+					c = c.lerp(Color(0.62, 0.52, 0.38), 0.85)
 			c = Color(c.r * shade, c.g * shade, c.b * shade, 1.0)
 			img.set_pixel(px, py, c)
 	# Buildings as small dark blocks, like a real map.

@@ -6,6 +6,7 @@ uniform sampler2D tex_dirt : source_color, filter_linear_mipmap, repeat_enable;
 uniform sampler2D tex_sand : source_color, filter_linear_mipmap, repeat_enable;
 uniform sampler2D tex_rock : source_color, filter_linear_mipmap, repeat_enable;
 uniform sampler2D tex_macro : source_color, filter_linear_mipmap, repeat_enable;
+uniform sampler2D road_mask : filter_linear, repeat_disable;
 
 varying vec4 vw;
 varying vec3 wpos;
@@ -48,6 +49,14 @@ void fragment() {
 	float h = clamp((wpos.y - 1.0) / 45.0, 0.0, 1.0);
 	col = mix(col * vec3(0.94, 0.98, 1.04), col * vec3(1.04, 1.01, 0.95), h);
 
+	// Dirt roads: packed earth with paler wheel ruts.
+	float road = texture(road_mask, (wpos.xz + vec2(450.0)) / 900.0).r;
+	if (road > 0.001) {
+		vec3 track = dirt * vec3(1.08, 1.0, 0.9) * (0.9 + macro * 0.15);
+		float rut = smoothstep(0.55, 0.75, road) * (1.0 - smoothstep(0.8, 0.95, road));
+		track *= 1.0 - rut * 0.18;
+		col = mix(col, track, smoothstep(0.0, 0.5, road) * 0.92);
+	}
 	ALBEDO = col;
 	ROUGHNESS = mix(0.96, 0.82, clamp(vw.b, 0.0, 1.0));
 	SPECULAR = 0.28;

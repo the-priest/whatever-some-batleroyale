@@ -113,7 +113,8 @@ func _ready() -> void:
 	hud.set_minimap(world.minimap_texture)
 	var places: Array = []
 	for v in world.villages.village_pads:
-		places.append([v.name, v.center, "town"])
+		if str(v.name) != "":
+			places.append([v.name, v.center, "town"])
 	for t in world.villages.towers:
 		places.append(["LOOKOUT", t.center, "tower"])
 	for p in world.villages.poi_pads:
@@ -1310,6 +1311,15 @@ func _run_shot() -> void:
 	await get_tree().process_frame
 	print("[shot] match up, player=", player)
 	var p := player
+	if OS.get_cmdline_user_args().has("--town"):
+		for v in world.villages.village_pads:
+			if v.type == "town":
+				var dir := Vector2(cos(float(v.axis)), sin(float(v.axis)))
+				var c: Vector2 = v.center - dir * (float(v.radius) - 6.0)
+				spot = Vector3(c.x, 0.0, c.y)
+				# Look down the main street.
+				ang = atan2(-dir.x, -dir.y)
+				break
 	if OS.get_cmdline_user_args().has("--tower") and world.villages.towers.size() > 0:
 		var tc: Vector2 = world.villages.towers[0].center
 		spot = Vector3(tc.x + 14.0, 0.0, tc.y + 10.0)
@@ -1381,19 +1391,26 @@ func _run_shot() -> void:
 			var side := Basis(Vector3.UP, p.yaw) * Vector3(-30, 1.5, -60)
 			ballistics.fire(null, p.global_position + side, (p.global_position + Basis(Vector3.UP, p.yaw) * Vector3(25, 1, -50) - (p.global_position + side)).normalized(), "rifle", p.global_position + side, 1)
 	if args.has("--bot"):
+		var poses := [["aim", "Idle", Vector3(-1.4, 0, -5.5), 2, 2], ["idle", "Jog_Fwd", Vector3(1.6, 0, -7.0), 1, 0], ["idle", "Sprint", Vector3(4.2, 0, -9.0), 3, 3]]
+		var k := 0
 		for b in bots:
-			if is_instance_valid(b):
-				var fwd := Basis(Vector3.UP, p.yaw) * Vector3(1.5, 0, -14.0)
-				b.state = Bot.State.GROUND
-				b.visible = true
-				b.global_position = ground_at(p.global_position + fwd) + Vector3(0, 0.1, 0)
-				b.arm_weapon("rifle")
-				b.vest_level = 2
-				b.set_physics_process(false)
-				var to: Vector3 = p.global_position - b.global_position
-				b.rotation.y = atan2(-to.x, -to.z) + 0.5
-				break
-		for i in 10:
+			if not is_instance_valid(b) or k >= poses.size():
+				continue
+			var pose: Array = poses[k]
+			k += 1
+			var fwd: Vector3 = Basis(Vector3.UP, p.yaw) * pose[2]
+			b.state = Bot.State.GROUND
+			b.visible = true
+			b.global_position = ground_at(p.global_position + fwd) + Vector3(0, 0.05, 0)
+			b.arm_weapon(["rifle", "carbine", "smg"][k - 1])
+			b.set_physics_process(false)
+			var to: Vector3 = p.global_position - b.global_position
+			b.rotation.y = atan2(-to.x, -to.z) + (0.0 if pose[0] == "aim" else 1.2)
+			b.body.set_gear(pose[3], pose[4])
+			b.body.set_arms(pose[0])
+			b.body.set_legs(pose[1])
+			b.body.aim_dir = (p.global_position + Vector3(0, 1.5, 0)) - (b.global_position + Vector3(0, 1.4, 0)) if pose[0] == "aim" else -b.global_basis.z
+		for i in 20:
 			await get_tree().process_frame
 	if args.has("--reload"):
 		p.mags[p.current_id()] = 0
