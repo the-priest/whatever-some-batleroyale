@@ -1,0 +1,39 @@
+extends Node
+
+## Registers input actions in code so the project file stays readable.
+
+func _enter_tree() -> void:
+	_key("move_forward", [KEY_W])
+	_key("move_back", [KEY_S])
+	_key("move_left", [KEY_A])
+	_key("move_right", [KEY_D])
+	_key("sprint", [KEY_SHIFT])
+	_key("jump", [KEY_SPACE])
+	_key("crouch", [KEY_CTRL, KEY_C])
+	_key("interact", [KEY_E])
+	_key("reload", [KEY_R])
+	_key("slot_1", [KEY_1])
+	_key("slot_2", [KEY_2])
+	_key("swap_weapon", [KEY_Q])
+	_key("map", [KEY_M])
+	_key("pause", [KEY_ESCAPE])
+	_key("free_look", [KEY_ALT])
+	_mouse("fire", MOUSE_BUTTON_LEFT)
+	_mouse("aim", MOUSE_BUTTON_RIGHT)
+
+
+func _key(action: String, keys: Array) -> void:
+	if not InputMap.has_action(action):
+		InputMap.add_action(action, 0.2)
+	for k in keys:
+		var ev := InputEventKey.new()
+		ev.physical_keycode = k
+		InputMap.action_add_event(action, ev)
+
+
+func _mouse(action: String, button: MouseButton) -> void:
+	if not InputMap.has_action(action):
+		InputMap.add_action(action, 0.2)
+	var ev := InputEventMouseButton.new()
+	ev.button_index = button
+	InputMap.action_add_event(action, ev)

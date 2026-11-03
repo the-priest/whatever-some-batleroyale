@@ -1,0 +1,37 @@
+; Block Royale - Godot 4 project
+config_version=5
+
+[application]
+config/name="Block Royale"
+config/description="Battle royale. Drop from the plane, loot, survive."
+run/main_scene="res://scenes/main.tscn"
+config/features=PackedStringArray("4.7", "GL Compatibility")
+config/icon="res://icon.svg"
+
+[autoload]
+Boot="*res://scripts/boot.gd"
+
+[display]
+window/size/viewport_width=1600
+window/size/viewport_height=900
+window/size/mode=2
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+window/vsync/vsync_mode=1
+
+[filesystem]
+import/blender/enabled=false
+import/fbx2gltf/enabled=false
+
+[physics]
+3d/physics_engine="Jolt Physics"
+common/physics_ticks_per_second=60
+
+[rendering]
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+textures/default_filters/anisotropic_filtering_level=3
+anti_aliasing/quality/msaa_3d=2
+lights_and_shadows/directional_shadow/size=4096
+lights_and_shadows/directional_shadow/soft_shadow_filter_quality=3
+environment/defaults/default_clear_color=Color(0.62, 0.78, 0.9, 1)
