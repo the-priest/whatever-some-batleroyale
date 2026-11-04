@@ -79,6 +79,7 @@ var loadout_optic := "reddot"
 var loadout_enabled := true
 var _loot_label_t := 0.0
 var _last_best: LootPickup = null
+var _lit_loot: Array = []
 var _wind: AudioStreamPlayer3D = null
 
 
@@ -133,6 +134,10 @@ func _ready() -> void:
 		_run_smoke()
 	elif OS.get_cmdline_user_args().has("--sim"):
 		_run_sim()
+	elif OS.get_cmdline_user_args().has("--cycle"):
+		_run_cycle()
+	elif OS.get_cmdline_user_args().has("--perf"):
+		_run_perf()
 	elif OS.get_cmdline_user_args().has("--shot"):
 		_run_shot()
 
@@ -588,7 +593,9 @@ func _auto_pickup(delta: float) -> void:
 	for l in loot_pool.duplicate():
 		if not is_instance_valid(l) or l.taken:
 			continue
-		var d: Vector3 = l.global_position - pp
+		var d: Vector3 = l.position - pp
+		if d.x * d.x + d.z * d.z > 4.0:
+			continue
 		if Vector2(d.x, d.z).length() > 1.8 or absf(d.y) > 1.6:
 			continue
 		var want := false
@@ -791,10 +798,13 @@ func _nearest_loot(pos: Vector3, max_d: float) -> LootPickup:
 	var best: LootPickup = null
 	var best_score := 1e9
 	var fwd := -player.camera.global_basis.z
+	var max_d2 := max_d * max_d
 	for l in loot_pool:
 		if not is_instance_valid(l) or l.taken:
 			continue
-		var to: Vector3 = l.global_position - pos
+		var to: Vector3 = l.position - pos
+		if to.x * to.x + to.z * to.z > max_d2:
+			continue
 		var d := to.length()
 		if d > max_d:
 			continue
@@ -830,17 +840,27 @@ func _update_prompt() -> void:
 		hud.set_prompt("")
 	_loot_label_t -= get_process_delta_time()
 	if _loot_label_t <= 0.0 or best != _last_best:
-		_loot_label_t = 0.12
+		_loot_label_t = 0.2
 		_last_best = best
 		var pp := player.global_position
+		# Only touch items near you: name tag on the one you are about to take,
+		# a faint ground ring on the rest within reach.
+		var near_now: Array = []
 		for l in loot_pool:
-			if is_instance_valid(l) and not l.taken:
-				var dd: float = l.global_position.distance_to(pp)
-				# Only the item you are about to take gets a name tag; light shafts
-				# fade out up close so a pile of loot does not become a wall of light.
-				l.label.visible = l == best
-				l.beacon.visible = false
-				l.ring.visible = dd < 14.0
+			if not is_instance_valid(l) or l.taken:
+				continue
+			var dx: float = l.position.x - pp.x
+			var dz: float = l.position.z - pp.z
+			if dx * dx + dz * dz < 196.0:
+				near_now.append(l)
+		for l in _lit_loot:
+			if is_instance_valid(l) and not near_now.has(l):
+				l.ring.visible = false
+				l.label.visible = false
+		for l in near_now:
+			l.ring.visible = true
+			l.label.visible = l == best
+		_lit_loot = near_now
 
 
 func _update_minimap() -> void:
@@ -1654,6 +1674,23 @@ func _run_smoke() -> void:
 			else:
 				ray_hits += 1
 	print("[smoke] terrain rays hit=", ray_hits, " miss=", ray_miss)
+	# Collision must match the rendered ground: compare ray hits to the mesh.
+	var worst := 0.0
+	var sum := 0.0
+	var cnt := 0
+	for i in 400:
+		var px := randf_range(-440.0, 440.0)
+		var pz := randf_range(-440.0, 440.0)
+		var q := PhysicsRayQueryParameters3D.create(Vector3(px, 300, pz), Vector3(px, -40, pz), 1)
+		q.collide_with_bodies = true
+		var hit := get_world_3d().direct_space_state.intersect_ray(q)
+		if hit.is_empty() or not (hit["collider"] as Node).name.begins_with("Terrain"):
+			continue
+		var err := absf(float(hit["position"].y) - terrain.mesh_height_at(px, pz))
+		worst = maxf(worst, err)
+		sum += err
+		cnt += 1
+	print("[smoke] ground collision vs mesh: n=%d avg err=%.3f m worst=%.3f m" % [cnt, sum / maxf(1, cnt), worst])
 	_start_match()
 	print("[smoke] match started plane=", plane != null, " bots=", bots.size(), " loot=", loot_pool.size())
 	await get_tree().physics_frame
@@ -1932,4 +1969,103 @@ func _run_sim() -> void:
 			print("[sim] t=%d alive=%d zone phase=%d r=%d armed=%d" % [int(match_time), alive, zone.phase, int(zone.radius), _count_armed_bots()])
 	print("[sim] match over t=%d alive=%d bullets_live=%d" % [int(match_time), alive, ballistics.bullets.size()])
 	_check("match finishes", alive <= 1)
+	get_tree().quit()
+
+
+# -------------------------------------------------------------- cycle test --
+# Several matches back to back, ending each a different way, checking that
+# nothing leaks or sticks between them.
+func _census() -> String:
+	var counts := {}
+	for c in get_children():
+		var k := c.get_class()
+		if c.get_script() != null and (c.get_script() as Script).get_global_name() != "":
+			k = (c.get_script() as Script).get_global_name()
+		counts[k] = int(counts.get(k, 0)) + 1
+	var keys := counts.keys()
+	keys.sort()
+	var parts: Array[String] = []
+	for k in keys:
+		parts.append("%s=%d" % [k, counts[k]])
+	return ", ".join(parts)
+
+
+func _land_player_now() -> void:
+	_player_jump(true)
+	var drop := _random_ground_point(250.0)
+	player.global_position = drop + Vector3(0, 0.5, 0)
+	player.mode = Player.Mode.GROUND
+	player.landed = true
+	player.velocity = Vector3.ZERO
+	on_player_landed()
+
+
+func _run_cycle() -> void:
+	for i in 10:
+		await get_tree().process_frame
+	var base := int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT))
+	print("[cycle] baseline nodes=%d  %s" % [base, _census()])
+	var endings := ["death", "win", "quit", "death"]
+	for r in endings.size():
+		_start_match()
+		for i in 30:
+			await get_tree().physics_frame
+		_land_player_now()
+		for i in 90:
+			await get_tree().physics_frame
+		player.start_reload()
+		match endings[r]:
+			"death":
+				var killer: Node = bots[0] if bots.size() > 0 else null
+				player.spawn_protect = 0.0
+				player.take_damage(9999.0, player.global_position + Vector3(5, 0, 0), false, killer)
+			"win":
+				for b in bots:
+					if is_instance_valid(b) and b.alive:
+						b.take_damage(9999.0, b.global_position, false, player)
+			"quit":
+				_quit_to_menu()
+		for i in 120:
+			await get_tree().physics_frame
+		print("[cycle] round %d (%s): phase=%s alive=%d winner=%s nodes=%d paused=%s" % [r, endings[r], phase, alive, winner, int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT)), get_tree().paused])
+		print("[cycle]   hud: progress=%.2f scope=%s low_hp=%.2f storm=%s end_visible=%s menu=%s prompt='%s'" % [hud.progress_frac, hud.scoped, hud.low_hp, hud.in_storm, hud.end_panel.visible, hud.menu.visible, hud.prompt_label])
+		print("[cycle]   audio: cabin=%s wind=%s storm=%s  children: %s" % [_cabin != null, _wind2d != null, _storm != null, _census()])
+	_quit_to_menu()
+	for i in 120:
+		await get_tree().physics_frame
+	var end_nodes := int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT))
+	print("[cycle] final nodes=%d (baseline %d, diff %d)  %s" % [end_nodes, base, end_nodes - base, _census()])
+	get_tree().quit()
+
+
+# --------------------------------------------------------------- perf test --
+func _run_perf() -> void:
+	for i in 10:
+		await get_tree().process_frame
+	_start_match()
+	for i in 30:
+		await get_tree().physics_frame
+	_land_player_now()
+	player.spawn_protect = 1.0e9
+	# Let the bots land and spread out, then measure a minute of play.
+	for i in 60 * 45:
+		await get_tree().physics_frame
+	if OS.get_cmdline_user_args().has("--nobots"):
+		for b in bots:
+			if is_instance_valid(b):
+				b.set_physics_process(false)
+	for window in 3:
+		var phys := 0.0
+		var proc := 0.0
+		var n := 0
+		var worst := 0.0
+		for i in 60 * 15:
+			await get_tree().physics_frame
+			var p := Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0
+			phys += p
+			proc += Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0
+			worst = maxf(worst, p)
+			n += 1
+		print("[perf] window %d: physics avg %.2f ms (worst %.2f)  process avg %.2f ms  alive=%d bullets=%d nodes=%d" % [
+			window, phys / n, worst, proc / n, alive, ballistics.bullets.size(), int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT))])
 	get_tree().quit()

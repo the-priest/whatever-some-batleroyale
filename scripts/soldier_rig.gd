@@ -187,6 +187,8 @@ func _build_tree() -> void:
 	bt.connect_node("blend", 1, "arms")
 	bt.connect_node("output", 0, "blend")
 	tree.tree_root = bt
+	# We drive the tree ourselves so distant soldiers can update less often.
+	tree.callback_mode_process = AnimationMixer.ANIMATION_CALLBACK_MODE_PROCESS_MANUAL
 	tree.active = true
 	set_legs("Idle")
 	set_arms("")
@@ -258,9 +260,19 @@ func muzzle_position() -> Vector3:
 
 
 var _lod_t := 0.0
+var _anim_acc := 0.0
+var _anim_frame := 0
+var _anim_every := 1
 
 
 func _process(delta: float) -> void:
+	if tree != null and tree.active:
+		_anim_acc += delta
+		_anim_frame += 1
+		if _anim_frame >= _anim_every:
+			tree.advance(_anim_acc)
+			_anim_acc = 0.0
+			_anim_frame = 0
 	# Far away: stop animating and stop drawing. You could not make out a
 	# soldier past ~260 m, and 50 animated rigs are not free.
 	_lod_t -= delta
@@ -268,7 +280,9 @@ func _process(delta: float) -> void:
 		_lod_t = 0.4 + randf() * 0.2
 		var cam := get_viewport().get_camera_3d()
 		if cam != null and model != null:
-			var near := cam.global_position.distance_to(global_position) < 260.0
+			var dist := cam.global_position.distance_to(global_position)
+			_anim_every = 1 if dist < 60.0 else (2 if dist < 120.0 else 3)
+			var near := dist < 260.0
 			if near != model.visible:
 				model.visible = near
 				gun_holder.visible = near

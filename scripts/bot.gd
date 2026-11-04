@@ -69,6 +69,8 @@ var _cap: CapsuleShape3D
 var crouched := false
 var calm_t := 0.0
 var fight_moving := false
+var _probe_t := 0
+var _probe_blocked := false
 var _fight_t := 0.0
 var _fight_dir := Vector3.FORWARD
 var _posture_t := 0.0
@@ -170,12 +172,40 @@ func jump_from_plane() -> void:
 	_play("Jump_Start")
 
 
+var _lod_skip := 0.0
+var _lod_mult := 1.0
+var _lod_odd := false
+
+
+## Bodies moved with a bigger step when ticking at half rate far away.
+func _move() -> void:
+	if _lod_mult > 1.0:
+		velocity *= _lod_mult
+		move_and_slide()
+		velocity /= _lod_mult
+	else:
+		move_and_slide()
+
+
 func _physics_process(delta: float) -> void:
+	# Far from the player (and out of sight range) bots think and move every
+	# other tick with a double step: same behaviour, half the cost.
+	_lod_mult = 1.0
+	if state == State.GROUND or state == State.DEAD:
+		var far: bool = game != null and game.player != null and game.player.global_position.distance_squared_to(global_position) > 180.0 * 180.0
+		if far:
+			_lod_odd = not _lod_odd
+			if _lod_odd:
+				_lod_skip = delta
+				return
+			delta += _lod_skip
+			_lod_mult = 2.0
+	_lod_skip = 0.0
 	if state == State.DEAD:
 		dead_timer += delta
 		velocity.x = move_toward(velocity.x, 0.0, 6.0 * delta)
 		velocity.z = move_toward(velocity.z, 0.0, 6.0 * delta)
-		move_and_slide()
+		_move()
 		if dead_timer > 7.0:
 			# Settle into the ground rather than vanish.
 			position.y -= delta * 0.6
@@ -269,7 +299,7 @@ func _ground(delta: float) -> void:
 		if heal_timer <= 0.0 and meds > 0:
 			meds -= 1
 			hp = minf(100.0, hp + 50.0)
-		move_and_slide()
+		_move()
 		_ground_safety()
 		_animate_ground()
 		return
@@ -396,11 +426,15 @@ func _ground(delta: float) -> void:
 				_take_loot(loot_target)
 	else:
 		var dir := flat.normalized()
-		# Simple obstacle probe.
+		# Obstacle probe, refreshed every few ticks: walls do not move.
 		var space := get_world_3d().direct_space_state
-		var q := PhysicsRayQueryParameters3D.create(global_position + Vector3.UP * 1.0, global_position + Vector3.UP * 1.0 + dir * 1.6, 1)
-		q.exclude = [get_rid()]
-		if not space.intersect_ray(q).is_empty():
+		_probe_t -= 1
+		if _probe_t <= 0:
+			_probe_t = 4
+			var q := PhysicsRayQueryParameters3D.create(global_position + Vector3.UP * 1.0, global_position + Vector3.UP * 1.0 + dir * 1.6, 1)
+			q.exclude = [get_rid()]
+			_probe_blocked = not space.intersect_ray(q).is_empty()
+		if _probe_blocked:
 			dir = dir.rotated(Vector3.UP, deg_to_rad(70.0))
 		if game != null and game.terrain != null and bool(game.terrain.is_water(global_position.x, global_position.z)):
 			speed *= 0.6
@@ -409,14 +443,14 @@ func _ground(delta: float) -> void:
 		if not fighting or fight_moving:
 			rotation.y = lerp_angle(rotation.y, atan2(-dir.x, -dir.z), clampf(delta * 10.0, 0.0, 1.0))
 		_blocked -= delta
-		if _blocked <= 0.0 and is_on_floor() and dist > 3.0:
+		if _blocked <= 0.0 and _probe_t == 4 and is_on_floor() and dist > 3.0:
 			var q2 := PhysicsRayQueryParameters3D.create(global_position + Vector3.UP * 0.4, global_position + Vector3.UP * 0.4 + dir * 0.9, 1)
 			q2.exclude = [get_rid()]
 			if not space.intersect_ray(q2).is_empty():
 				velocity.y = 5.2
 				_blocked = 1.2
 
-	move_and_slide()
+	_move()
 	_ground_safety()
 	_animate_ground()
 	# Stuck detection: if we have barely moved in a while, try somewhere else.

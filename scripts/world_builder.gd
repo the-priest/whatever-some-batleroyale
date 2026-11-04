@@ -174,12 +174,18 @@ func _build_terrain() -> void:
 			mi.extra_cull_margin = 3.0
 			main.add_child(mi)
 
-			var shape := CollisionShape3D.new()
-			var tri := mesh.create_trimesh_shape()
-			tri.backface_collision = true
-			shape.shape = tri
-			body.add_child(shape)
-	stats.colliders += Terrain.CHUNKS * Terrain.CHUNKS
+	# One heightfield for the whole island: far cheaper than triangle meshes
+	# for walking bodies and bullet rays, and built from the same samples as
+	# the render mesh.
+	var hm := HeightMapShape3D.new()
+	hm.map_width = Terrain.RES
+	hm.map_depth = Terrain.RES
+	hm.map_data = terrain.heights
+	var shape := CollisionShape3D.new()
+	shape.shape = hm
+	shape.scale = Vector3(Terrain.STEP, 1.0, Terrain.STEP)
+	body.add_child(shape)
+	stats.colliders += 1
 
 
 func _chunk_mesh(cx: int, cz: int) -> ArrayMesh:

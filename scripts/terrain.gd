@@ -118,6 +118,24 @@ func height_at(x: float, z: float) -> float:
 	return lerpf(lerpf(h00, h10, tx), lerpf(h01, h11, tx), tz)
 
 
+## Height of the rendered triangle under (x, z). Cells are split along the
+## 10-01 diagonal, matching WorldBuilder._chunk_mesh.
+func mesh_height_at(x: float, z: float) -> float:
+	var fx := (x + HALF) / STEP
+	var fz := (z + HALF) / STEP
+	var ix := clampi(int(floor(fx)), 0, RES - 2)
+	var iz := clampi(int(floor(fz)), 0, RES - 2)
+	var tx := clampf(fx - float(ix), 0.0, 1.0)
+	var tz := clampf(fz - float(iz), 0.0, 1.0)
+	var h00 := heights[iz * RES + ix]
+	var h10 := heights[iz * RES + ix + 1]
+	var h01 := heights[(iz + 1) * RES + ix]
+	var h11 := heights[(iz + 1) * RES + ix + 1]
+	if tx + tz <= 1.0:
+		return h00 + (h10 - h00) * tx + (h01 - h00) * tz
+	return h11 + (h01 - h11) * (1.0 - tx) + (h10 - h11) * (1.0 - tz)
+
+
 func normal_at(x: float, z: float) -> Vector3:
 	var e := STEP
 	var hl := height_at(x - e, z)
