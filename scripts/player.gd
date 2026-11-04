@@ -16,7 +16,7 @@ const MAX_BANDAGES := 10
 const MAX_ENERGY := 4
 const MAX_GRENADES := 3
 
-enum Mode { PLANE, FREEFALL, CHUTE, GROUND }
+enum Mode { PLANE, FREEFALL, CHUTE, GROUND, VEHICLE }
 
 const WALK := 5.6
 const SPRINT := 8.4
@@ -255,6 +255,10 @@ func _physics_process(delta: float) -> void:
 			_chute(delta)
 		Mode.GROUND:
 			_ground(delta)
+		Mode.VEHICLE:
+			_seated(delta)
+			_update_weapon(delta)
+			return
 
 	_update_camera(delta)
 	_update_weapon(delta)
@@ -317,7 +321,14 @@ func _chute(delta: float) -> void:
 		_land()
 
 
+## Vault / climb in progress: [from, to, t, duration], or empty.
+var _mantle: Array = []
+
+
 func _ground(delta: float) -> void:
+	if not _mantle.is_empty():
+		_do_mantle(delta)
+		return
 	var input := _vec("move_left", "move_right", "move_forward", "move_back")
 	var crouch := _ap("crouch")
 	_sprint_lock = maxf(0.0, _sprint_lock - delta)
@@ -346,6 +357,8 @@ func _ground(delta: float) -> void:
 	else:
 		velocity.y -= GRAVITY * delta
 		_coyote = maxf(0.0, _coyote - delta)
+	if _ajp("jump") and not in_water and velocity.y > -6.0 and _try_mantle():
+		return
 	if _ajp("jump") and _coyote > 0.0 and not in_water:
 		velocity.y = JUMP
 		_coyote = 0.0
@@ -449,6 +462,98 @@ func _ground(delta: float) -> void:
 		_try_fire()
 	elif not has_gun() and _ajp("fire"):
 		notice.emit("NO WEAPON  —  PRESS F TO PICK ONE UP")
+
+
+## Riding in a jeep: the body sits in the seat, the game drives the camera.
+var vehicle: Vehicle = null
+var seat := -1
+
+
+func _seated(_delta: float) -> void:
+	if vehicle == null or not is_instance_valid(vehicle):
+		mode = Mode.GROUND
+		vehicle = null
+		return
+	var xf := vehicle.seat_transform(seat)
+	global_position = xf.origin - xf.basis.y * 0.55
+	velocity = vehicle.linear_velocity
+
+
+## PUBG-style vault: a low obstacle in front, a top to stand on and room
+## for your body up there -> climb over it.
+func _try_mantle() -> bool:
+	var space := get_world_3d().direct_space_state
+	var fwd := Basis(Vector3.UP, yaw) * Vector3(0, 0, -1)
+	var feet := global_position
+	var ex: Array[RID] = [get_rid()]
+	var q := PhysicsRayQueryParameters3D.create(feet + Vector3.UP * 0.55, feet + Vector3.UP * 0.55 + fwd * 1.15, 1 | 4)
+	q.exclude = ex
+	var wall := space.intersect_ray(q)
+	if wall.is_empty():
+		q = PhysicsRayQueryParameters3D.create(feet + Vector3.UP * 1.25, feet + Vector3.UP * 1.25 + fwd * 1.15, 1 | 4)
+		q.exclude = ex
+		wall = space.intersect_ray(q)
+		if wall.is_empty():
+			return false
+	var n: Vector3 = wall.get("normal", -fwd)
+	if absf(n.y) > 0.5:
+		return false
+	var dist: float = (Vector3(wall["position"]) - feet).dot(fwd)
+	var probe := feet + fwd * (dist + 0.4) + Vector3.UP * 2.4
+	var dq := PhysicsRayQueryParameters3D.create(probe, probe - Vector3.UP * 2.3, 1 | 4)
+	dq.exclude = ex
+	var top := space.intersect_ray(dq)
+	if top.is_empty():
+		return false
+	var h: float = float(top["position"].y) - feet.y
+	if h < 0.45 or h > 2.05:
+		return false
+	if Vector3(top.get("normal", Vector3.UP)).y < 0.7:
+		return false
+	# Room to stand (or crouch) up there.
+	var cap := CapsuleShape3D.new()
+	cap.radius = 0.32
+	cap.height = 1.5
+	var sq := PhysicsShapeQueryParameters3D.new()
+	sq.shape = cap
+	sq.transform = Transform3D(Basis.IDENTITY, Vector3(top["position"]) + Vector3.UP * 0.85)
+	sq.collision_mask = 1 | 4
+	sq.exclude = ex
+	if not space.intersect_shape(sq, 1).is_empty():
+		return false
+	# Nothing over your head on the way up.
+	var hq := PhysicsRayQueryParameters3D.create(feet + Vector3.UP * 1.6, feet + Vector3.UP * (1.7 + h), 1 | 4)
+	hq.exclude = ex
+	if not space.intersect_ray(hq).is_empty():
+		return false
+	var to := Vector3(top["position"]) + fwd * 0.25 + Vector3.UP * 0.06
+	_mantle = [feet, to, 0.0, 0.28 + h * 0.2]
+	velocity = Vector3.ZERO
+	cancel_heal()
+	add_trauma(0.12)
+	land_dip = 0.35
+	if game != null and game.sfx != null:
+		game.sfx.play_2d("gear_rattle", -6.0, 0.1)
+		game.sfx.play_2d("step_stone_%d" % (randi() % 4 + 1), -6.0, 0.05)
+	return true
+
+
+func _do_mantle(delta: float) -> void:
+	var from: Vector3 = _mantle[0]
+	var to: Vector3 = _mantle[1]
+	var dur: float = _mantle[3]
+	var t: float = minf(1.0, float(_mantle[2]) + delta / dur)
+	_mantle[2] = t
+	# Up first, then over the top.
+	var up := smoothstep(0.0, 0.7, t)
+	var over := smoothstep(0.35, 1.0, t)
+	var p := Vector3(lerpf(from.x, to.x, over), lerpf(from.y, to.y + 0.08, up), lerpf(from.z, to.z, over))
+	global_position = p
+	velocity = Vector3.ZERO
+	if t >= 1.0:
+		_mantle = []
+		global_position = to
+		_was_on_floor = true
 
 
 func _check_ground_contact() -> void:

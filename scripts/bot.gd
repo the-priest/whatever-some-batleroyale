@@ -90,6 +90,9 @@ var net_index := -1
 var friendly := false
 var net_pitch := 0.0
 var net_kills := 0
+## A remote human riding in a jeep: drawn in the seat, not at the snapshot.
+var seated_in: Vehicle = null
+var seated_slot := -1
 var net_damage := 0.0
 var _net_pos := Vector3.ZERO
 var _net_yaw := 0.0
@@ -639,6 +642,17 @@ func _puppet_tick(delta: float) -> void:
 		return
 	if not _net_seen:
 		return
+	if seated_in != null and is_instance_valid(seated_in) and not seated_in.wrecked:
+		var xf := seated_in.seat_transform(seated_slot)
+		global_position = xf.origin - xf.basis.y * 0.55
+		rotation.y = xf.basis.get_euler().y
+		velocity = seated_in.linear_velocity
+		visible = true
+		chute_node.visible = false
+		_play("Crouch_Idle")
+		if body != null:
+			body.set_arms("")
+		return
 	var prev := global_position
 	var k := clampf(delta * 14.0, 0.0, 1.0)
 	if global_position.distance_to(_net_pos) > 25.0:
@@ -892,7 +906,7 @@ func _find_enemy() -> Node3D:
 		return null
 	var candidates: Array = []
 	var p = game.player
-	if p != null and p.alive and (p.mode == Player.Mode.GROUND or p.mode == Player.Mode.CHUTE):
+	if p != null and p.alive and (p.mode == Player.Mode.GROUND or p.mode == Player.Mode.CHUTE or p.mode == Player.Mode.VEHICLE):
 		candidates.append(p)
 	for g in ["bots", "humans"]:
 		for b in get_tree().get_nodes_in_group(g):

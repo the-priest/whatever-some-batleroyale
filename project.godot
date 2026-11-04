@@ -28,10 +28,20 @@ import/fbx2gltf/enabled=false
 common/physics_ticks_per_second=60
 
 [rendering]
-renderer/rendering_method="gl_compatibility"
-renderer/rendering_method.mobile="gl_compatibility"
+renderer/rendering_method="forward_plus"
+renderer/rendering_method.mobile="mobile"
+rendering_device/fallback_to_opengl3=true
+rendering_device/fallback_to_d3d12=true
+anti_aliasing/quality/use_taa=true
+environment/sdfgi/probe_ray_count=2
+environment/sdfgi/frames_to_converge=3
+environment/volumetric_fog/volume_size=96
+environment/volumetric_fog/volume_depth=96
+global_illumination/sdfgi/probe_ray_count=2
+lights_and_shadows/positional_shadow/atlas_size=4096
+mesh_lod/lod_change/threshold_pixels=1.0
 textures/default_filters/anisotropic_filtering_level=3
-anti_aliasing/quality/msaa_3d=2
+anti_aliasing/quality/msaa_3d=0
 lights_and_shadows/directional_shadow/size=4096
 lights_and_shadows/directional_shadow/soft_shadow_filter_quality=3
 environment/defaults/default_clear_color=Color(0.62, 0.78, 0.9, 1)

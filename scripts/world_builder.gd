@@ -29,6 +29,13 @@ var _road_grid: Dictionary = {}
 var _chunk_pads: Array = []
 
 var falls_sound_pos := Vector3.ZERO
+## Parking spots for jeeps: [Vector3 position, float yaw].
+var vehicle_spawns: Array = []
+
+var sun: DirectionalLight3D
+var fill_light: DirectionalLight3D
+var environment: Environment
+var world_env: WorldEnvironment
 
 var stats := {
 	"trees": 0, "ground": 0, "rocks": 0, "houses": 0, "loot": 0, "colliders": 0,
@@ -68,6 +75,7 @@ func build(p_seed: int) -> void:
 	tick.call("rocks")
 	_build_wild_loot()
 	_build_spawn_points()
+	_build_vehicle_spawns()
 	_build_distant_islands()
 	_build_clouds()
 	_build_minimap()
@@ -82,7 +90,7 @@ func build(p_seed: int) -> void:
 # ---------------------------------------------------------------- environment
 
 func _build_lighting() -> void:
-	var sun := DirectionalLight3D.new()
+	sun = DirectionalLight3D.new()
 	sun.name = "Sun"
 	sun.rotation_degrees = Vector3(-46.0, -34.0, 0.0)
 	sun.light_color = Color(1.0, 0.955, 0.87)
@@ -105,6 +113,7 @@ func _build_lighting() -> void:
 	fill.light_energy = 0.32
 	fill.shadow_enabled = false
 	add_child(fill)
+	fill_light = fill
 
 	var we := WorldEnvironment.new()
 	we.name = "WorldEnvironment"
@@ -155,6 +164,8 @@ func _build_lighting() -> void:
 
 	we.environment = env
 	add_child(we)
+	environment = env
+	world_env = we
 
 
 # ------------------------------------------------------------------- terrain
@@ -625,7 +636,7 @@ func _scatter_trees() -> void:
 
 	var placements: Array[Dictionary] = []
 	var grid: Dictionary = {}
-	var attempts := 120000
+	var attempts := 210000
 	for i in attempts:
 		var x := rng.randf_range(-Terrain.HALF + 12.0, Terrain.HALF - 12.0)
 		var z := rng.randf_range(-Terrain.HALF + 12.0, Terrain.HALF - 12.0)
@@ -637,11 +648,13 @@ func _scatter_trees() -> void:
 		if _near_village(x, z, 38.0) or _road_distance(x, z) < 3.0:
 			continue
 		var forest := terrain.forest_density(x, z)
-		var chance := smoothstep(0.36, 0.72, forest) * 0.85 + 0.06
-		chance = clampf(chance, 0.0, 0.62)
+		# Real woods where the forest map is high, open meadows elsewhere.
+		var chance := smoothstep(0.40, 0.70, forest) * 0.95 + 0.025
+		chance = clampf(chance, 0.0, 0.92)
 		if rng.randf() > chance:
 			continue
-		var cell := "%d_%d" % [int(x / 6.0), int(z / 6.0)]
+		var spacing := 4.4 if forest > 0.62 else 6.5
+		var cell := "%d_%d_%d" % [int(x / spacing), int(z / spacing), int(spacing)]
 		if grid.has(cell):
 			continue
 		grid[cell] = true
@@ -747,9 +760,11 @@ func _scatter_ground_cover() -> void:
 				break
 		if chosen == "":
 			continue
-		# Flowers are happiest in the open, tall grass in the trees.
+		# Flowers are happiest in the open; the forest floor is ferns and bush.
 		if chosen == "Flower_4_Group" and forest > 0.6:
 			continue
+		if forest > 0.62 and rng.randf() < 0.55:
+			chosen = "Fern_1" if rng.randf() < 0.6 else "Bush_Common"
 		var cf: Dictionary = {}
 		for k in kinds:
 			if k.name == chosen:
@@ -933,6 +948,37 @@ func _build_spawn_points() -> void:
 		if _near_village(c.x, c.y, 6.0):
 			continue
 		spawn_points.append(Vector3(c.x, terrain.height_at(c.x, c.y) + 0.2, c.y))
+
+
+## Jeeps parked on the verge of roads, nose along the road.
+func _build_vehicle_spawns() -> void:
+	var vrng := RandomNumberGenerator.new()
+	vrng.seed = rng.seed + 79
+	for r in villages.roads:
+		if r.get("bridge", false):
+			continue
+		var a: Vector2 = r.a
+		var b: Vector2 = r.b
+		var len := a.distance_to(b)
+		if len < 40.0:
+			continue
+		var dir := (b - a) / len
+		var s := vrng.randf_range(10.0, 60.0)
+		while s < len - 10.0:
+			var side := 1.0 if vrng.randf() < 0.5 else -1.0
+			var p := a + dir * s + dir.orthogonal() * side * (float(r.w) + 2.6)
+			s += vrng.randf_range(110.0, 220.0)
+			if terrain.slope_at(p.x, p.y) > 0.22 or terrain.is_water(p.x, p.y):
+				continue
+			var clear := true
+			for h in villages.houses:
+				if (h.center as Vector2).distance_to(p) < float(h.radius) + 3.5:
+					clear = false
+					break
+			if not clear:
+				continue
+			var yaw := atan2(-dir.x, -dir.y) + (PI if vrng.randf() < 0.5 else 0.0)
+			vehicle_spawns.append([Vector3(p.x, terrain.height_at(p.x, p.y), p.y), yaw])
 
 
 ## Coarse buckets of settlements, POIs and landmark yards, and of road

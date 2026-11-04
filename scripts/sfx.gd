@@ -4,7 +4,7 @@ extends Node
 # Small pooled positional audio player. Streams are optional: if a file is
 # missing the call is silently ignored, so the game runs without audio assets.
 
-const POOL := 24
+const POOL := 40
 const DIR := "res://assets/audio/gen/"
 
 var players: Array[AudioStreamPlayer3D] = []
@@ -73,7 +73,14 @@ func play_at(name: String, pos: Vector3, db := 0.0, pitch_jitter := 0.08) -> voi
 	p.stream = s
 	p.global_position = pos
 	p.volume_db = db
-	if name.begins_with("shot_") or name == "explosion":
+	if name.ends_with("_far") or name.begins_with("tail_"):
+		# Distant gunfire and echoes: the game already scaled them by
+		# distance, so keep them audible across the island.
+		p.unit_size = 400.0
+		p.max_distance = 1500.0
+		p.attenuation_filter_cutoff_hz = 20500.0
+		p.attenuation_filter_db = 0.0
+	elif name.begins_with("shot_") or name == "explosion":
 		# Gunfire carries across the island and loses its top end with distance.
 		p.unit_size = 45.0
 		p.max_distance = 950.0

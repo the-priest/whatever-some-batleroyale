@@ -2,6 +2,9 @@ class_name HUD
 extends CanvasLayer
 
 signal play_pressed
+signal music_changed(menu_volume: float, match_volume: float)
+signal music_skip
+signal graphics_changed(quality: int)
 signal chat_sent(text: String)
 signal chat_closed
 signal map_clicked(world: Vector2, button: int)
@@ -98,6 +101,14 @@ var lbl_fov: Label
 var size_slider: HSlider
 var lbl_size: Label
 var sens_slider: HSlider
+var music_menu_slider: HSlider
+var lbl_gfx: Label
+var gfx_button: Button
+var gfx_quality := 2
+var music_match_slider: HSlider
+var lbl_music_menu: Label
+var lbl_music_match: Label
+var _now_playing: Label
 var vol_slider: HSlider
 var lbl_sens: Label
 var lbl_vol: Label
@@ -843,10 +854,10 @@ func _build_pause() -> void:
 	col.set_anchors_preset(Control.PRESET_CENTER)
 	col.offset_left = -170
 	col.offset_right = 170
-	col.offset_top = -200
-	col.offset_bottom = 200
+	col.offset_top = -300
+	col.offset_bottom = 300
 	col.alignment = BoxContainer.ALIGNMENT_CENTER
-	col.add_theme_constant_override("separation", 10)
+	col.add_theme_constant_override("separation", 8)
 	pause_panel.add_child(col)
 
 	_pause_title = _lv("PAUSED", 44, WHITE)
@@ -874,6 +885,48 @@ func _build_pause() -> void:
 	vol_slider.custom_minimum_size = Vector2(300, 22)
 	vol_slider.value_changed.connect(func(_v): _settings_changed())
 	col.add_child(vol_slider)
+
+	lbl_gfx = _lv("GRAPHICS", 12, MUTED)
+	col.add_child(lbl_gfx)
+	gfx_button = _button("HIGH", false)
+	gfx_button.custom_minimum_size = Vector2(300, 36)
+	gfx_button.add_theme_font_size_override("font_size", 14)
+	gfx_button.pressed.connect(func():
+		sfx_click()
+		gfx_quality = (gfx_quality + 1) % 4
+		_settings_labels()
+		graphics_changed.emit(gfx_quality))
+	col.add_child(gfx_button)
+
+	lbl_music_menu = _lv("MENU MUSIC", 12, MUTED)
+	col.add_child(lbl_music_menu)
+	music_menu_slider = HSlider.new()
+	music_menu_slider.min_value = 0.0
+	music_menu_slider.max_value = 1.0
+	music_menu_slider.step = 0.05
+	music_menu_slider.value = 0.7
+	music_menu_slider.custom_minimum_size = Vector2(300, 22)
+	music_menu_slider.value_changed.connect(func(_v): _music_changed())
+	col.add_child(music_menu_slider)
+	lbl_music_match = _lv("MATCH MUSIC", 12, MUTED)
+	col.add_child(lbl_music_match)
+	var mrow := HBoxContainer.new()
+	mrow.add_theme_constant_override("separation", 8)
+	music_match_slider = HSlider.new()
+	music_match_slider.min_value = 0.0
+	music_match_slider.max_value = 1.0
+	music_match_slider.step = 0.05
+	music_match_slider.value = 0.35
+	music_match_slider.custom_minimum_size = Vector2(230, 22)
+	music_match_slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	music_match_slider.value_changed.connect(func(_v): _music_changed())
+	mrow.add_child(music_match_slider)
+	var skipb := _button("NEXT ▶", false)
+	skipb.custom_minimum_size = Vector2(62, 30)
+	skipb.add_theme_font_size_override("font_size", 11)
+	skipb.pressed.connect(func(): sfx_click(); music_skip.emit())
+	mrow.add_child(skipb)
+	col.add_child(mrow)
 
 	lbl_fov = _lv("FIELD OF VIEW", 12, MUTED)
 	col.add_child(lbl_fov)
@@ -927,7 +980,49 @@ func _settings_changed() -> void:
 	settings_changed.emit(sens_slider.value, vol_slider.value, fov_slider.value, int(size_slider.value))
 
 
+func _music_changed() -> void:
+	_settings_labels()
+	music_changed.emit(music_menu_slider.value, music_match_slider.value)
+
+
+func set_music(menu_v: float, match_v: float) -> void:
+	music_menu_slider.set_value_no_signal(menu_v)
+	music_match_slider.set_value_no_signal(match_v)
+	_settings_labels()
+
+
+## "Now playing" card that slides in for a few seconds.
+func now_playing(title: String) -> void:
+	if _now_playing == null:
+		_now_playing = _lv("", 13, WHITE)
+		_now_playing.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+		_now_playing.offset_left = -520
+		_now_playing.offset_right = -28
+		_now_playing.offset_top = -30
+		_now_playing.offset_bottom = -10
+		_now_playing.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		_now_playing.z_index = 40
+		root.add_child(_now_playing)
+	_now_playing.text = "♪   %s   ·   BLOCK ROYALE OST" % title
+	_now_playing.modulate.a = 0.0
+	var tw := _now_playing.create_tween()
+	tw.tween_property(_now_playing, "modulate:a", 1.0, 0.6)
+	tw.tween_interval(4.5)
+	tw.tween_property(_now_playing, "modulate:a", 0.0, 1.2)
+
+
+func set_graphics(q: int) -> void:
+	gfx_quality = q
+	_settings_labels()
+
+
 func _settings_labels() -> void:
+	if gfx_button != null:
+		var hint: String = ["  ·  FAST", "  ·  BALANCED", "  ·  SSIL · REFLECTIONS · VOLUMETRICS", "  ·  SDFGI RAY-MARCHED GI · RTX 2060+"][gfx_quality]
+		gfx_button.text = "◀   %s%s   ▶" % [Graphics.NAMES[gfx_quality], hint]
+	if lbl_music_menu != null:
+		lbl_music_menu.text = "MENU MUSIC   %s" % ("OFF" if music_menu_slider.value <= 0.001 else "%d%%" % int(music_menu_slider.value * 100.0))
+		lbl_music_match.text = "MATCH MUSIC   %s" % ("OFF" if music_match_slider.value <= 0.001 else "%d%%" % int(music_match_slider.value * 100.0))
 	lbl_sens.text = "MOUSE SENSITIVITY   %.2f" % sens_slider.value
 	lbl_vol.text = "VOLUME   %d%%" % int(vol_slider.value * 100.0)
 	lbl_fov.text = "FIELD OF VIEW   %d°" % int(fov_slider.value)
@@ -1973,3 +2068,56 @@ func show_scoreboard(v: bool, title := "", rows: Array = [], footer := "") -> vo
 func set_ping_text(t: String, col: Color) -> void:
 	lbl_ping.text = t
 	lbl_ping.add_theme_color_override("font_color", col)
+
+
+
+# ---------------------------------------------------------------- vehicle --
+var _veh_panel: Control
+var _veh_speed: Label
+var _veh_unit: Label
+var _veh_hp_fill: ColorRect
+var _veh_hint: Label
+
+
+func set_vehicle(v: bool, kmh := 0.0, hp_frac := 1.0, driver := true) -> void:
+	if _veh_panel == null:
+		if not v:
+			return
+		_veh_panel = Control.new()
+		_veh_panel.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+		_veh_panel.offset_left = -150
+		_veh_panel.offset_right = 150
+		_veh_panel.offset_top = -132
+		_veh_panel.offset_bottom = -28
+		_veh_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		root.add_child(_veh_panel)
+		var bg := _panel(0.85)
+		bg.position = Vector2(0, 0)
+		bg.size = Vector2(300, 104)
+		_veh_panel.add_child(bg)
+		_veh_speed = _lv("0", 44, WHITE)
+		_veh_speed.add_theme_font_override("font", font_mono)
+		_veh_speed.position = Vector2(0, 4)
+		_veh_speed.size = Vector2(210, 50)
+		_veh_speed.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		_veh_panel.add_child(_veh_speed)
+		_veh_unit = _lv("KM/H", 13, MUTED)
+		_veh_unit.position = Vector2(218, 28)
+		_veh_panel.add_child(_veh_unit)
+		var bar := _bar(6, Color(0.95, 0.62, 0.22))
+		bar.position = Vector2(20, 64)
+		bar.size = Vector2(260, 6)
+		_veh_hp_fill = bar.get_meta("fill")
+		_veh_panel.add_child(bar)
+		_veh_hint = _lv("", 11, MUTED)
+		_veh_hint.position = Vector2(0, 78)
+		_veh_hint.size = Vector2(300, 18)
+		_veh_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_veh_panel.add_child(_veh_hint)
+	_veh_panel.visible = v
+	if not v:
+		return
+	_veh_speed.text = str(int(round(kmh)))
+	_veh_hp_fill.anchor_right = clampf(hp_frac, 0.0, 1.0)
+	_veh_hp_fill.color = Color(0.95, 0.62, 0.22) if hp_frac > 0.35 else DANGER
+	_veh_hint.text = "SPACE  HANDBRAKE   ·   F  GET OUT" if driver else "PASSENGER   ·   F  GET OUT"

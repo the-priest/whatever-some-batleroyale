@@ -83,6 +83,10 @@ var _last_best: LootPickup = null
 var _lit_loot: Array = []
 var _wind: AudioStreamPlayer3D = null
 var net: Net
+var music: Music
+var music_menu := 0.7
+var music_match := 0.35
+var graphics_quality := 2
 var lobby: LobbyUI
 ## Remote humans in the current LAN match: peer id -> puppet.
 var humans: Dictionary = {}
@@ -92,6 +96,13 @@ var _net_dummy: Node
 var _net_setup_ok := false
 ## True while a text box (chat) owns the keyboard.
 var input_locked := false
+var vehicles: Array = []
+var _match_vehicles: Array = []
+var _veh_cam_yaw := 0.0
+var _veh_last_yaw := 0.0
+var _veh_idle_t := 0.0
+## Tests drive the jeep themselves.
+var _drive_scripted := false
 ## Map / world markers per player id: {pos, t}.
 var waypoints: Dictionary = {}
 var _social_t := 0.0
@@ -118,6 +129,20 @@ func _ready() -> void:
 	hud.settings_changed.connect(_on_settings_changed)
 	hud.loadout_changed.connect(_on_loadout_changed)
 	hud.show_menu("GENERATING ISLAND ...")
+	music = Music.new()
+	music.name = "Music"
+	add_child(music)
+	music.track_started.connect(func(t): hud.now_playing(t))
+	hud.music_changed.connect(func(a, b):
+		music_menu = a
+		music_match = b
+		music.set_volumes(a, b)
+		_save_settings())
+	hud.music_skip.connect(func(): music.skip())
+	hud.graphics_changed.connect(func(q):
+		graphics_quality = q
+		_apply_graphics()
+		_save_settings())
 	_load_settings()
 	net = Net.new()
 	net.name = "Net"
@@ -171,6 +196,10 @@ func _ready() -> void:
 		_run_perf()
 	elif OS.get_cmdline_user_args().has("--shot"):
 		_run_shot()
+	elif OS.get_cmdline_user_args().has("--mantle"):
+		_run_mantle_test()
+	elif OS.get_cmdline_user_args().has("--drive"):
+		_run_drive_test()
 	elif OS.get_cmdline_user_args().has("--nethost"):
 		_run_net_test(true)
 	elif OS.get_cmdline_user_args().has("--netjoin"):
@@ -205,6 +234,7 @@ func _build_world() -> void:
 	add_child(world)
 	world.build(seed_value)
 	terrain = world.terrain
+	_apply_graphics()
 	print("[game] world seed %d built in %d ms, loot=%d" % [seed_value, Time.get_ticks_msec() - t0, world.loot_points.size()])
 
 
@@ -238,6 +268,9 @@ func _load_settings() -> void:
 		loadout_secondary = str(cfg.get_value("loadout", "secondary", loadout_secondary))
 		loadout_optic = str(cfg.get_value("loadout", "optic", loadout_optic))
 		loadout_enabled = bool(cfg.get_value("loadout", "enabled", loadout_enabled))
+		music_menu = float(cfg.get_value("audio", "music_menu", music_menu))
+		music_match = float(cfg.get_value("audio", "music_match", music_match))
+		graphics_quality = clampi(int(cfg.get_value("video", "quality", graphics_quality)), 0, 3)
 	if not Weapons.DEFS.has(loadout_primary):
 		loadout_primary = "carbine"
 	if not Weapons.DEFS.has(loadout_secondary):
@@ -245,6 +278,10 @@ func _load_settings() -> void:
 	match_size = clampi(match_size, 10, 100)
 	MAX_BOTS = match_size - 1
 	hud.set_settings(mouse_sens, volume, fov, match_size)
+	hud.set_music(music_menu, music_match)
+	hud.set_graphics(graphics_quality)
+	if music != null:
+		music.set_volumes(music_menu, music_match)
 	hud.set_loadout(loadout_primary, loadout_secondary, loadout_optic, loadout_enabled)
 	_apply_settings()
 
@@ -280,7 +317,10 @@ func _save_settings() -> void:
 	var cfg := ConfigFile.new()
 	cfg.set_value("input", "sensitivity", mouse_sens)
 	cfg.set_value("audio", "volume", volume)
+	cfg.set_value("audio", "music_menu", music_menu)
+	cfg.set_value("audio", "music_match", music_match)
 	cfg.set_value("video", "fov", fov)
+	cfg.set_value("video", "quality", graphics_quality)
 	cfg.set_value("match", "players", match_size)
 	cfg.set_value("loadout", "primary", loadout_primary)
 	cfg.set_value("loadout", "secondary", loadout_secondary)
@@ -465,6 +505,8 @@ func _start_match() -> void:
 	survive_time = 0.0
 	zone_acc = 0.0
 	winner = false
+	_match_vehicles = _choose_vehicles()
+	_spawn_vehicles(_match_vehicles)
 	if net != null and net.active:
 		_net_setup_ok = true
 		_net_send_setup()
@@ -511,6 +553,14 @@ func _spawn_loot(kind: String, id: String, pos: Vector3, mag := -1, reserve := -
 
 func _cleanup_match() -> void:
 	_net_setup_ok = false
+	if player != null and player.mode == Player.Mode.VEHICLE:
+		player.vehicle = null
+		player.mode = Player.Mode.PLANE
+	for v in vehicles:
+		if is_instance_valid(v):
+			v.queue_free()
+	vehicles.clear()
+	hud.set_vehicle(false)
 	waypoints.clear()
 	hud.waypoints = []
 	hud.tags = []
@@ -690,6 +740,9 @@ func _process(delta: float) -> void:
 			_update_world_sim(delta)
 	if phase in ["plane", "playing", "end"]:
 		_update_social(delta)
+	var want_match: bool = phase in ["plane", "playing"]
+	if music != null and music.in_match != want_match:
+		music.set_in_match(want_match)
 	_update_mouse_capture()
 
 
@@ -821,6 +874,7 @@ func _update_play(delta: float) -> void:
 	if player == null or not is_instance_valid(player):
 		return
 	_update_airborne_bots()
+	_update_driving(delta)
 	if zone != null and not zone.is_processing() and (player.landed or match_time > 50.0) and not net_is_client():
 		zone.set_process(true)
 	hud.set_crosshair_visible(player.mode == Player.Mode.GROUND and player.has_gun() and player.aim_blend < 0.6)
@@ -832,7 +886,7 @@ func _update_play(delta: float) -> void:
 		elif not zone.warning:
 			zone_was_warning = false
 		_hud_zone()
-	hud.set_storm(zone != null and player.alive and zone.is_outside(player.global_position) and player.mode == Player.Mode.GROUND)
+	hud.set_storm(zone != null and player.alive and zone.is_outside(player.global_position) and (player.mode == Player.Mode.GROUND or player.mode == Player.Mode.VEHICLE))
 
 	_hud_player()
 	_update_prompt()
@@ -854,7 +908,7 @@ func _update_world_sim(delta: float) -> void:
 		return
 	zone_acc -= 1.0
 	var dps := zone.damage_per_second()
-	if phase == "playing" and player.alive and zone.is_outside(player.global_position) and player.mode == Player.Mode.GROUND:
+	if phase == "playing" and player.alive and zone.is_outside(player.global_position) and (player.mode == Player.Mode.GROUND or player.mode == Player.Mode.VEHICLE):
 		player.take_damage(dps, Vector3.ZERO, false, null)
 		hud.show_notice("YOU ARE IN THE STORM  —  FOLLOW THE ARROW ON THE COMPASS", 1.4)
 	if net_is_client():
@@ -956,7 +1010,11 @@ func _update_prompt() -> void:
 		hud.set_prompt("")
 		return
 	var best := _nearest_loot(player.global_position, 3.0)
-	if best != null:
+	var car := _nearest_vehicle(player.global_position, 4.0)
+	if car != null and (best == null or best.global_position.distance_to(player.global_position) > 1.6):
+		var seat := car.free_seat()
+		hud.set_prompt("JEEP IS FULL" if seat < 0 else ("F   DRIVE" if seat == 0 else "F   RIDE AS PASSENGER"))
+	elif best != null:
 		var why := best.block_reason(player)
 		hud.set_prompt(best.prompt_text() if why == "" else why)
 	else:
@@ -1086,6 +1144,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		hud.open_chat()
 		get_viewport().set_input_as_handled()
 		return
+	if event.is_action_pressed("interact") and phase == "playing" and player != null and player.mode == Player.Mode.VEHICLE:
+		_exit_vehicle()
+		get_viewport().set_input_as_handled()
+		return
 	if event.is_action_pressed("marker") and phase == "playing" and player != null and player.alive:
 		_place_marker_from_view()
 		return
@@ -1160,6 +1222,8 @@ func _on_player_damaged(amount: float, from_dir: Vector3) -> void:
 func _on_player_died(killer: String) -> void:
 	if phase == "end":
 		return
+	if player.mode == Player.Mode.VEHICLE:
+		_leave_seat()
 	if net_on():
 		var k = player.last_killer
 		var kk := node_key(k)
@@ -1328,6 +1392,10 @@ func try_pickup(p: Player) -> void:
 	if p == null or p.mode != Player.Mode.GROUND:
 		return
 	var best := _nearest_loot(p.global_position, 3.2)
+	var car := _nearest_vehicle(p.global_position, 4.0)
+	if car != null and (best == null or best.global_position.distance_to(p.global_position) > 1.6):
+		_enter_vehicle(car)
+		return
 	if best == null:
 		return
 	var why := best.block_reason(p)
@@ -1547,7 +1615,72 @@ func plane_seat_position() -> Vector3:
 
 
 func play_sfx_at(name: String, pos: Vector3, vol := 0.0) -> void:
+	if name.begins_with("shot_"):
+		_play_gunshot(name.substr(5), pos, vol)
+		return
 	sfx.play_at(name, pos, vol, 0.07)
+
+
+const SOUND_SPEED := 343.0
+var _listener_env := "field"
+var _listener_env_t := 0.0
+
+
+## Where the listener is decides how gunfire echoes: open field (long
+## rolling tail), forest (diffuse), town (tight slap-back) or indoors
+## (short, loud, boomy).
+func _update_listener_env() -> void:
+	var cam := get_viewport().get_camera_3d()
+	if cam == null or terrain == null:
+		return
+	var p := cam.global_position
+	var q := PhysicsRayQueryParameters3D.create(p, p + Vector3.UP * 12.0, 1)
+	if player != null:
+		q.exclude = [player.get_rid()]
+	if not get_world_3d().direct_space_state.intersect_ray(q).is_empty():
+		_listener_env = "indoor"
+	elif world != null and world._near_village(p.x, p.z, 40.0):
+		_listener_env = "town"
+	elif terrain.forest_density(p.x, p.z) > 0.6:
+		_listener_env = "forest"
+	else:
+		_listener_env = "field"
+
+
+## A shot as heard from here: the close crack fades into a distant boom
+## with distance, arrives late (sound travels 343 m/s) and the surroundings
+## answer with their own echo.
+func _play_gunshot(cls: String, pos: Vector3, vol: float) -> void:
+	var cam := get_viewport().get_camera_3d()
+	var ear := cam.global_position if cam != null else pos
+	var d := ear.distance_to(pos)
+	if d > 1400.0:
+		return
+	_listener_env_t -= 0.0
+	if Time.get_ticks_msec() - int(_listener_env_t) > 500:
+		_listener_env_t = Time.get_ticks_msec()
+		_update_listener_env()
+	var close_k := clampf(1.0 - (d - 60.0) / 180.0, 0.0, 1.0)
+	var delay := d / SOUND_SPEED
+	var variant := "shot_%s_%d" % [cls, randi() % 4 + 1]
+	if sfx.stream(variant) == null:
+		variant = "shot_" + cls
+	if close_k > 0.0:
+		_delayed_sfx(variant, pos, vol + linear_to_db(maxf(close_k, 0.001)), delay, 0.04)
+		# Environment tail: louder indoors, carried further outdoors.
+		var tail_db: float = {"indoor": 0.0, "town": -5.0, "forest": -7.0, "field": -6.0}.get(_listener_env, -6.0)
+		_delayed_sfx("tail_" + _listener_env, pos, vol + float(tail_db) + linear_to_db(maxf(close_k, 0.05)), delay + 0.02, 0.06)
+	if close_k < 1.0:
+		var far := "shot_%s_far" % cls
+		var far_db := vol + 2.0 - clampf((d - 150.0) / 1250.0, 0.0, 1.0) * 14.0 + linear_to_db(maxf(1.0 - close_k, 0.001))
+		_delayed_sfx(far, pos, far_db, delay, 0.08)
+
+
+func _delayed_sfx(name: String, pos: Vector3, db: float, delay: float, jitter: float) -> void:
+	if delay < 0.03:
+		sfx.play_at(name, pos, db, jitter)
+		return
+	get_tree().create_timer(delay, false).timeout.connect(func(): sfx.play_at(name, pos, db, jitter))
 
 
 func clamp_airborne(pos: Vector3, vel: Vector3, delta: float) -> Vector3:
@@ -2606,7 +2739,7 @@ func _net_send_setup() -> void:
 	var setup := {
 		"seed": seed_value, "squad": net.squad, "plane": [plane_start, plane_end],
 		"loot": loot, "bots": bot_names, "humans": list, "total": total_players,
-		"loadout": loadout_enabled,
+		"loadout": loadout_enabled, "vehicles": _match_vehicles,
 	}
 	net.send_setup(setup)
 
@@ -2663,6 +2796,7 @@ func net_start_match(setup: Dictionary) -> void:
 	zone.set_process(false)
 	zone.phase_changed.connect(_on_zone_phase)
 	zone_was_warning = false
+	_spawn_vehicles(setup.get("vehicles", []))
 	total_players = int(setup.get("total", names.size() + 1))
 	alive = total_players
 	loadout_enabled = bool(setup.get("loadout", loadout_enabled))
@@ -2733,7 +2867,7 @@ func net_player_state() -> Variant:
 			st = Bot.State.FALL
 		Player.Mode.CHUTE:
 			st = Bot.State.CHUTE
-		Player.Mode.GROUND:
+		Player.Mode.GROUND, Player.Mode.VEHICLE:
 			st = Bot.State.GROUND
 	if not player.alive:
 		st = Bot.State.DEAD
@@ -2749,7 +2883,8 @@ func net_player_state() -> Variant:
 	if player.has_gun():
 		flags |= Bot.NF_ARMED
 	return [player.global_position, player.yaw, player.pitch, st, flags, player.current_id() if player.has_gun() else "", player.vest_level, player.helmet_level,
-		player.hp, player_kills, damage_dealt]
+		player.hp, player_kills, damage_dealt,
+		player.vehicle.net_id if player.mode == Player.Mode.VEHICLE and player.vehicle != null else -1, player.seat]
 
 
 func net_apply_player_state(sender: int, st: Array) -> void:
@@ -2759,6 +2894,8 @@ func net_apply_player_state(sender: int, st: Array) -> void:
 	var yaw: float = st[1]
 	# The player's yaw faces down -Z of its basis like a bot's.
 	(h as Bot).apply_net(st[0], yaw, int(st[3]), int(st[4]), str(st[5]), int(st[6]), int(st[7]), float(st[2]))
+	if st.size() >= 13:
+		_seat_remote(h as Bot, int(st[11]), int(st[12]))
 	if st.size() >= 11:
 		(h as Bot).hp = float(st[8])
 		(h as Bot).net_kills = int(st[9])
@@ -3069,6 +3206,27 @@ func _run_net_test(as_host: bool) -> void:
 				if d < bd:
 					bd = d
 					near = b
+		if i == 14 and not as_host and not vehicles.is_empty():
+			var jeep: Vehicle = vehicles[0]
+			player.global_position = jeep.global_position + jeep.global_basis.x * 2.4 + Vector3(0, 0.5, 0)
+			await get_tree().physics_frame
+			try_pickup(player)
+			_drive_scripted = true
+			print("[net] client in jeep mode=", player.mode, " owner=", jeep.owner_peer)
+		if i >= 14 and i < 24 and not as_host and player.mode == Player.Mode.VEHICLE:
+			player.vehicle.throttle = 1.0
+			player.vehicle.steer_in = 0.3
+		if i == 24 and not as_host and player.mode == Player.Mode.VEHICLE:
+			player.vehicle.throttle = 0.0
+			print("[net] client jeep at ", player.vehicle.global_position.round(), " speed ", int(player.vehicle.speed * 3.6))
+			_exit_vehicle()
+		if as_host and i in [10, 16, 22, 26] and not vehicles.is_empty():
+			var hj: Vehicle = vehicles[0]
+			var seated := ""
+			for id in humans:
+				if humans[id].seated_in != null:
+					seated = "seat %d" % humans[id].seated_slot
+			print("[net] host sees jeep0 at ", hj.global_position.round(), " owner=", hj.owner_peer, " frozen=", hj.freeze, " client ", seated)
 		if i == 50 and not as_host and near != null:
 			print("[net] client shooting ", near.bot_name, " at ", int(bd), " m")
 			net_route_hit(near, 500.0, near.global_position + Vector3(0, 1.6, 0), true, player)
@@ -3289,3 +3447,416 @@ func _spectate_label() -> void:
 		hud.set_spectate("SPECTATING  %s%s" % [b.bot_name, extra])
 	else:
 		hud.set_spectate("")
+
+
+
+# ================================================================ vehicles ==
+
+## Pick parking spots for this match and park jeeps on them.
+func _choose_vehicles() -> Array:
+	var spots: Array = world.vehicle_spawns.duplicate()
+	spots.shuffle()
+	var out: Array = []
+	for e in spots.slice(0, mini(34, spots.size())):
+		out.append([e[0], e[1], randi() % Vehicle.PALETTE.size()])
+	return out
+
+
+func _spawn_vehicles(list: Array) -> void:
+	for i in list.size():
+		var e: Array = list[i]
+		var v := Vehicle.new()
+		v.setup(self, i, int(e[2]))
+		v.position = Vector3(e[0]) + Vector3(0, 0.35, 0)
+		v.rotation.y = float(e[1])
+		add_child(v)
+		v.owner_peer = 1
+		v.set_puppet(net_is_client())
+		vehicles.append(v)
+
+
+func _nearest_vehicle(pos: Vector3, max_d: float) -> Vehicle:
+	var best: Vehicle = null
+	var bd := max_d
+	for v in vehicles:
+		if not is_instance_valid(v) or (v as Vehicle).wrecked:
+			continue
+		var d := pos.distance_to((v as Vehicle).global_position + Vector3(0, 0.8, 0))
+		if d < bd:
+			bd = d
+			best = v
+	return best
+
+
+func _enter_vehicle(v: Vehicle) -> void:
+	var seat := v.free_seat()
+	if seat < 0:
+		hud.show_notice("JEEP IS FULL", 1.4)
+		return
+	v.seats[seat] = player
+	player.vehicle = v
+	player.seat = seat
+	player.mode = Player.Mode.VEHICLE
+	player.cancel_heal()
+	player.reloading = false
+	player.add_collision_exception_with(v)
+	v.add_collision_exception_with(player)
+	_veh_cam_yaw = 0.0
+	_veh_last_yaw = player.yaw
+	_veh_idle_t = 0.0
+	menu_cam.global_position = player.camera.global_position
+	menu_cam.fov = 72.0
+	menu_cam.make_current()
+	sfx.play_at("car_door", v.global_position, -2.0)
+	hud.set_prompt("")
+	if seat == 0:
+		v.handbrake = false
+		_claim_vehicle(v)
+		hud.show_notice("W / S  DRIVE   ·   A / D  STEER   ·   SPACE  HANDBRAKE   ·   F  GET OUT", 3.0)
+	else:
+		hud.show_notice("PASSENGER   ·   F  GET OUT", 2.0)
+
+
+func _claim_vehicle(v: Vehicle) -> void:
+	if not net_on() or v.owner_peer == net.my_id():
+		v.set_puppet(false)
+		return
+	var vel := v._net_vel
+	v.owner_peer = net.my_id()
+	v.set_puppet(false)
+	v.linear_velocity = vel
+	net.send_vehicle_owner(v.net_id)
+
+
+## Out of the seat without placing the body (death, explosion).
+func _leave_seat() -> void:
+	var v: Vehicle = player.vehicle
+	if v != null and is_instance_valid(v):
+		if player.seat >= 0 and v.seats[player.seat] == player:
+			v.seats[player.seat] = null
+		player.remove_collision_exception_with(v)
+		v.remove_collision_exception_with(player)
+		if player.seat == 0:
+			v.throttle = 0.0
+			v.steer_in = 0.0
+	player.vehicle = null
+	player.seat = -1
+	player.mode = Player.Mode.GROUND
+	hud.set_vehicle(false)
+
+
+func _exit_vehicle() -> void:
+	var v: Vehicle = player.vehicle
+	if v == null or not is_instance_valid(v):
+		_leave_seat()
+		return
+	var seat := player.seat
+	var side := -1.0 if seat % 2 == 0 else 1.0
+	var sz: float = (Vehicle.SEATS[maxi(seat, 0)] as Vector3).z
+	var out := v.global_transform * Vector3(side * 2.0, 1.2, sz)
+	var vel := v.linear_velocity
+	var car_yaw := v.global_basis.get_euler().y
+	_leave_seat()
+	var g := ground_at(out + Vector3.UP * 2.0)
+	player.global_position = g + Vector3(0, 0.15, 0)
+	player.velocity = vel * 0.6
+	player.yaw = car_yaw + _veh_cam_yaw
+	player.camera.make_current()
+	sfx.play_at("car_door", v.global_position, -2.0)
+	# Bailing out at speed hurts.
+	if vel.length() > 14.0:
+		player.take_damage((vel.length() - 14.0) * 4.0, player.global_position, false, null)
+
+
+## Driver input, the chase camera and the speedometer.
+func _update_driving(delta: float) -> void:
+	if player.mode != Player.Mode.VEHICLE:
+		return
+	var v: Vehicle = player.vehicle
+	if v == null or not is_instance_valid(v):
+		_leave_seat()
+		player.camera.make_current()
+		return
+	if player.seat == 0 and not input_locked and not _drive_scripted:
+		var fwd := (1.0 if Input.is_action_pressed("move_forward") else 0.0) - (1.0 if Input.is_action_pressed("move_back") else 0.0)
+		v.throttle = fwd
+		v.steer_in = (1.0 if Input.is_action_pressed("move_right") else 0.0) - (1.0 if Input.is_action_pressed("move_left") else 0.0)
+		v.handbrake = Input.is_action_pressed("jump")
+	elif player.seat == 0 and not _drive_scripted:
+		v.throttle = 0.0
+		v.steer_in = 0.0
+	# Camera: mouse orbits, then eases back behind the jeep.
+	var dy := wrapf(player.yaw - _veh_last_yaw, -PI, PI)
+	_veh_last_yaw = player.yaw
+	_veh_cam_yaw = wrapf(_veh_cam_yaw + dy, -PI, PI)
+	_veh_idle_t = 0.0 if absf(dy) > 0.0005 else _veh_idle_t + delta
+	if _veh_idle_t > 1.4 and absf(v.speed) > 3.0:
+		_veh_cam_yaw = lerp_angle(_veh_cam_yaw, 0.0, clampf(delta * 1.6, 0.0, 1.0))
+	var car_yaw := v.global_basis.get_euler().y
+	var pitch := clampf(player.pitch, -0.75, 0.4)
+	var b := Basis(Vector3.UP, car_yaw + _veh_cam_yaw) * Basis(Vector3.RIGHT, pitch - 0.1)
+	var focus := v.global_position + Vector3(0, 1.8, 0)
+	var dist := 7.4 + clampf(absf(v.speed) / 30.0, 0.0, 1.0) * 1.6
+	var want := focus + b * Vector3(0, 0.4, dist)
+	var q := PhysicsRayQueryParameters3D.create(focus, want, 1)
+	q.exclude = [v.get_rid()]
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	if not hit.is_empty():
+		want = Vector3(hit["position"]) + (focus - Vector3(hit["position"])).normalized() * 0.5
+	menu_cam.global_position = menu_cam.global_position.lerp(want, clampf(delta * 12.0, 0.0, 1.0))
+	menu_cam.look_at(focus + b * Vector3(0, 0, -6.0) * 0.0 + Vector3(0, 0.2, 0), Vector3.UP)
+	menu_cam.fov = lerpf(menu_cam.fov, fov - 6.0 + clampf(absf(v.speed) / 30.0, 0.0, 1.0) * 12.0, clampf(delta * 3.0, 0.0, 1.0))
+	hud.set_vehicle(true, absf(v.speed) * 3.6, v.hp / Vehicle.MAX_HP, player.seat == 0)
+	hud.set_crosshair_visible(false)
+
+
+## Something blew up a jeep: hurt whoever was in or near it.
+func vehicle_exploded(v: Vehicle, source: Node) -> void:
+	var pos := v.global_position
+	if player != null and player.alive:
+		if player.vehicle == v:
+			_leave_seat()
+			player.camera.make_current()
+			player.global_position = ground_at(pos + Vector3(2.0, 2.0, 0)) + Vector3(0, 0.2, 0)
+			player.take_damage(240.0, pos, false, source if source != null and is_instance_valid(source) else null)
+		else:
+			var d := player.global_position.distance_to(pos)
+			if d < 8.0:
+				player.take_damage((1.0 - d / 8.0) * 110.0, pos, false, source if source != null and is_instance_valid(source) else null)
+	if net_is_client():
+		return
+	for b in bots:
+		if is_instance_valid(b) and (b as Bot).alive:
+			var d2: float = (b as Bot).global_position.distance_to(pos)
+			if d2 < 8.0:
+				(b as Bot).take_damage((1.0 - d2 / 8.0) * 120.0, pos, false, source if source != null and is_instance_valid(source) else null)
+
+
+func net_vehicle_hit(v: Vehicle, amount: float) -> void:
+	if net_on():
+		net.send_vehicle_hit(v.net_id, amount)
+
+
+func net_vehicle_destroyed(v: Vehicle) -> void:
+	if net_on():
+		net.send_vehicle_destroyed(v.net_id)
+
+
+func _vehicle(id: int) -> Vehicle:
+	if id >= 0 and id < vehicles.size() and is_instance_valid(vehicles[id]):
+		return vehicles[id]
+	return null
+
+
+## Snapshots of the jeeps this machine simulates.
+func net_vehicle_states(full: bool) -> Array:
+	var out: Array = []
+	for v in vehicles:
+		if not is_instance_valid(v) or not (v as Vehicle).is_local() or (v as Vehicle).wrecked:
+			continue
+		var vv := v as Vehicle
+		if full or vv.seats[0] != null or vv.linear_velocity.length() > 0.2:
+			out.append(vv.net_state())
+	return out
+
+
+func net_apply_vehicle_states(list: Array) -> void:
+	if not _net_setup_ok:
+		return
+	for st in list:
+		var v := _vehicle(int(st[0]))
+		if v != null and not v.is_local():
+			v.apply_net_state(st)
+
+
+func net_vehicle_owner(id: int, peer_id: int) -> void:
+	var v := _vehicle(id)
+	if v == null:
+		return
+	v.owner_peer = peer_id
+	v.set_puppet(peer_id != net.my_id())
+	# If we were driving it, someone took the wheel: hop to another seat.
+	if peer_id != net.my_id() and player.vehicle == v and player.seat == 0:
+		_exit_vehicle()
+
+
+func net_vehicle_hit_received(id: int, amount: float) -> void:
+	var v := _vehicle(id)
+	if v != null and v.is_local():
+		v.apply_damage(amount, null)
+
+
+func net_vehicle_destroyed_received(id: int) -> void:
+	var v := _vehicle(id)
+	if v != null:
+		v.explode(null)
+
+
+## Remote humans riding in jeeps (from their state packets).
+func _seat_remote(h: Bot, vid: int, slot: int) -> void:
+	var v := _vehicle(vid) if vid >= 0 else null
+	if h.seated_in != null and is_instance_valid(h.seated_in) and (h.seated_in != v or h.seated_slot != slot):
+		if h.seated_slot >= 0 and h.seated_in.seats[h.seated_slot] == h:
+			h.seated_in.seats[h.seated_slot] = null
+		h.remove_collision_exception_with(h.seated_in)
+		h.seated_in.remove_collision_exception_with(h)
+		h.seated_in = null
+		h.seated_slot = -1
+	if v != null and slot >= 0 and h.seated_in == null:
+		h.seated_in = v
+		h.seated_slot = slot
+		v.seats[slot] = h
+		h.add_collision_exception_with(v)
+		v.add_collision_exception_with(h)
+
+
+
+## Headless jeep test: settle, accelerate, steer, roadkill, explode.
+func _run_drive_test() -> void:
+	_start_match()
+	await get_tree().physics_frame
+	_land_player_now()
+	print("[drive] spawns=", world.vehicle_spawns.size(), " jeeps=", vehicles.size())
+	var v: Vehicle = vehicles[0]
+	# Test on the flattened plaza of a town, pointed down its main street.
+	for pad in world.villages.village_pads:
+		if pad.type == "town":
+			var c: Vector2 = pad.center
+			var d := Vector2(cos(float(pad.axis)), sin(float(pad.axis)))
+			var start2 := c - d * (float(pad.radius) - 4.0)
+			v.global_position = Vector3(start2.x, float(pad.pad) + 0.4, start2.y)
+			v.rotation = Vector3(0, atan2(-d.x, -d.y), 0)
+			v.linear_velocity = Vector3.ZERO
+			v.angular_velocity = Vector3.ZERO
+			break
+	player.global_position = v.global_position + v.global_basis.x * 2.5 + Vector3(0, 1, 0)
+	for i in 120:
+		await get_tree().physics_frame
+	var up := v.global_basis.y.y
+	var gy: float = terrain.height_at(v.global_position.x, v.global_position.z)
+	print("[drive] settled: up=%.2f height_above_ground=%.2f grounded=%d speed=%.2f" % [up, v.global_position.y - gy, v._grounded, v.speed])
+	try_pickup(player)
+	_drive_scripted = true
+	print("[drive] entered mode=", player.mode, " seat=", player.seat)
+	var start := v.global_position
+	var t := 0.0
+	var top := 0.0
+	var nxt := 0.0
+	while t < 6.0:
+		v.throttle = 1.0
+		v.steer_in = 0.0
+		await get_tree().physics_frame
+		t += get_physics_process_delta_time()
+		top = maxf(top, v.speed)
+		if t >= nxt:
+			nxt += 1.0
+			print("[drive]   t=%.0f speed=%.1f m/s grounded=%d comp=%s slip=%.2f up=%.2f vel=%s" % [t, v.speed, v._grounded, str(v._compress), v._slip, v.global_basis.y.y, str(v.linear_velocity.round())])
+	print("[drive] after 6s full throttle: speed=%.1f km/h top=%.1f km/h moved=%.0f m up=%.2f hp=%.0f" % [v.speed * 3.6, top * 3.6, start.distance_to(v.global_position), v.global_basis.y.y, v.hp])
+	var yaw0 := v.global_basis.get_euler().y
+	t = 0.0
+	while t < 2.0:
+		v.throttle = 0.6
+		v.steer_in = 1.0
+		await get_tree().physics_frame
+		t += get_physics_process_delta_time()
+	print("[drive] turn right 2s: yaw change=%.0f deg up=%.2f slip=%.2f" % [rad_to_deg(wrapf(v.global_basis.get_euler().y - yaw0, -PI, PI)), v.global_basis.y.y, v._slip])
+	t = 0.0
+	while t < 1.5:
+		v.throttle = 0.0
+		v.steer_in = -1.0
+		v.handbrake = true
+		await get_tree().physics_frame
+		t += get_physics_process_delta_time()
+	v.handbrake = false
+	print("[drive] handbrake: speed=%.1f km/h slip=%.2f up=%.2f" % [v.speed * 3.6, v._slip, v.global_basis.y.y])
+	# Roadkill: put a bot in the path and floor it.
+	var victim: Bot = null
+	for b in bots:
+		if is_instance_valid(b) and b.alive:
+			victim = b
+			break
+	if victim != null:
+		for pad in world.villages.village_pads:
+			if pad.type == "town":
+				var c: Vector2 = pad.center
+				var d := Vector2(cos(float(pad.axis)), sin(float(pad.axis)))
+				var start2 := c - d * (float(pad.radius) - 4.0)
+				v.global_position = Vector3(start2.x, float(pad.pad) + 0.4, start2.y)
+				v.rotation = Vector3(0, atan2(-d.x, -d.y), 0)
+				v.linear_velocity = Vector3.ZERO
+				v.angular_velocity = Vector3.ZERO
+				break
+		for i in 30:
+			await get_tree().physics_frame
+		victim.state = Bot.State.GROUND
+		victim.global_position = v.global_position - v.global_basis.z * 22.0 + Vector3(0, 0.5, 0)
+		victim.set_physics_process(false)
+		victim.velocity = Vector3.ZERO
+		t = 0.0
+		while t < 3.0 and victim.alive:
+			v.throttle = 1.0
+			v.steer_in = 0.0
+			var to := victim.global_position - v.global_position
+			v.steer_in = clampf(to.normalized().dot(v.global_basis.x) * 3.0, -1.0, 1.0)
+			await get_tree().physics_frame
+			t += get_physics_process_delta_time()
+		print("[drive] roadkill: victim alive=", victim.alive, " hp=", int(victim.hp), " dist=", int(victim.global_position.distance_to(v.global_position)), " speed=", int(v.speed * 3.6), " victim_layer=", victim.collision_layer, " contacts=", v.get_contact_count())
+	_exit_vehicle()
+	print("[drive] exited mode=", player.mode, " cam_is_player=", player.camera.current)
+	v.apply_damage(5000.0, null)
+	await get_tree().physics_frame
+	print("[drive] destroyed wrecked=", v.wrecked, " player_hp=", int(player.hp))
+	print("[drive] done")
+	get_tree().quit()
+
+
+
+## Apply the graphics preset to the world's lights, environment and foliage.
+func _apply_graphics() -> void:
+	if world == null:
+		return
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--quality="):
+			graphics_quality = clampi(int(arg.substr(10)), 0, 3)
+	Graphics.apply(graphics_quality, world.environment, world.sun, world.fill_light, get_viewport(), world.world_env)
+	var k := Graphics.draw_scale(graphics_quality)
+	for n in world.find_children("*", "MultiMeshInstance3D", true, false):
+		var mmi := n as MultiMeshInstance3D
+		if not mmi.has_meta("vr"):
+			mmi.set_meta("vr", mmi.visibility_range_end)
+		var base: float = mmi.get_meta("vr")
+		if base > 0.0:
+			mmi.visibility_range_end = base * k
+	print("[gfx] renderer=%s quality=%s" % [RenderingServer.get_current_rendering_method(), Graphics.NAMES[graphics_quality]])
+
+
+
+func _run_mantle_test() -> void:
+	_start_match()
+	await get_tree().physics_frame
+	_land_player_now()
+	for i in 30:
+		await get_tree().physics_frame
+	for h in [0.6, 1.1, 1.6, 2.6]:
+		var fwd := Basis(Vector3.UP, player.yaw) * Vector3(0, 0, -1)
+		var feet := player.global_position
+		var body := StaticBody3D.new()
+		var cs := CollisionShape3D.new()
+		var bs := BoxShape3D.new()
+		bs.size = Vector3(2.0, h, 1.2)
+		cs.shape = bs
+		body.add_child(cs)
+		add_child(body)
+		body.global_position = feet + fwd * 1.2 + Vector3.UP * (h * 0.5)
+		body.rotation.y = player.yaw
+		await get_tree().physics_frame
+		var ok := player._try_mantle()
+		for i in 60:
+			await get_tree().physics_frame
+		print("[mantle] obstacle %.1f m: vaulted=%s  height gained=%.2f  forward=%.2f" % [h, ok, player.global_position.y - feet.y, (player.global_position - feet).dot(fwd)])
+		body.queue_free()
+		player.global_position = feet
+		player.velocity = Vector3.ZERO
+		for i in 20:
+			await get_tree().physics_frame
+	get_tree().quit()

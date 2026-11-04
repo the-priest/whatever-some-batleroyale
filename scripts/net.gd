@@ -53,6 +53,8 @@ var _state_t := 0.0
 var _shots: Array = []
 var _loot_out: Array = []
 var _loot_seq := 0
+var _veh_t := 0.0
+var _veh_fast := 0.0
 
 
 func _ready() -> void:
@@ -530,6 +532,16 @@ func _tick_match(delta: float) -> void:
 	if not _loot_out.is_empty():
 		_loot_spawned.rpc(_loot_out)
 		_loot_out = []
+	_veh_t -= delta
+	var full := _veh_t <= 0.0
+	if full:
+		_veh_t = 1.0
+	_veh_fast -= delta
+	if _veh_fast <= 0.0 or full:
+		_veh_fast = 1.0 / 20.0
+		var vs: Array = game.net_vehicle_states(full)
+		if not vs.is_empty():
+			_vstate.rpc(vs)
 
 
 @rpc("authority", "call_remote", "unreliable_ordered")
@@ -634,6 +646,42 @@ func send_loot_taken(id: int) -> void:
 func _loot_taken(id: int) -> void:
 	if game != null:
 		game.net_loot_taken(id)
+
+
+@rpc("any_peer", "call_remote", "unreliable_ordered")
+func _vstate(list: Array) -> void:
+	if game != null:
+		game.net_apply_vehicle_states(list)
+
+
+func send_vehicle_owner(id: int) -> void:
+	_vowner.rpc(id)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _vowner(id: int) -> void:
+	if game != null:
+		game.net_vehicle_owner(id, multiplayer.get_remote_sender_id())
+
+
+func send_vehicle_hit(id: int, amount: float) -> void:
+	_vhit.rpc(id, amount)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _vhit(id: int, amount: float) -> void:
+	if game != null:
+		game.net_vehicle_hit_received(id, amount)
+
+
+func send_vehicle_destroyed(id: int) -> void:
+	_vdestroyed.rpc(id)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _vdestroyed(id: int) -> void:
+	if game != null:
+		game.net_vehicle_destroyed_received(id)
 
 
 func send_airdrop(p: Vector2, ground: float) -> void:

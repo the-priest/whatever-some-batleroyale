@@ -15,7 +15,7 @@ const DEFS := {
 		"damage": 47.0, "rpm": 600.0, "mag": 30, "reserve": 210, "auto": true, "pellets": 1,
 		"spread": 1.4, "ads_spread": 0.24, "recoil": 1.25, "kick": 0.032, "pat": 1.0,
 		"range": 160.0, "velocity": 600.0, "reload": 2.5, "head": 2.30, "zoom": 1.25,
-		"ads_time": 0.22, "bloom": 0.22, "bloom_max": 1.4, "sound": "rifle", "tier": 2, "len": 0.88,
+		"ads_time": 0.22, "bloom": 0.22, "bloom_max": 1.4, "sound": "ak", "tier": 2, "len": 0.88,
 	},
 	"carbine": {
 		"name": "CR-4 CARBINE", "short": "CR-4", "cls": "ar", "cal": "5.56", "model": "res://assets/guns/q/scarl.glb",
@@ -608,7 +608,7 @@ static func _gun_material(src: Material) -> Material:
 	var warm := col.r > col.b * 1.25
 	if lum < 0.25 and not warm:
 		# Gunmetal: lift the near-black so it does not vanish, satin sheen.
-		m.albedo_color = col.lerp(Color(0.15, 0.155, 0.16), 0.35)
+		m.albedo_color = col.lerp(Color(0.2, 0.205, 0.21), 0.45)
 		m.metallic = 0.35
 		m.roughness = 0.38
 	elif warm:
@@ -620,6 +620,10 @@ static func _gun_material(src: Material) -> Material:
 	m.rim_enabled = true
 	m.rim = 0.25
 	m.rim_tint = 0.3
+	# Keep the gun readable in deep shade (first person sits right in it).
+	m.emission_enabled = true
+	m.emission = m.albedo_color.lightened(0.3)
+	m.emission_energy_multiplier = 0.12
 	_mat_cache[key] = m
 	return m
 

@@ -195,6 +195,14 @@ func _resolve_hit(b: Dictionary, hit: Dictionary) -> void:
 	# Squad mates: friendly fire is off, the round just stops.
 	if damageable and col.get("friendly") == true and shooter is Player:
 		damageable = false
+	if col is Vehicle:
+		# Jeeps ring and spark; no hitmarker for shooting metal.
+		if not bool(b.get("visual", false)):
+			var vd := float(d["damage"]) * float(b["mult"])
+			(col as Vehicle).take_damage(vd, pos, false, shooter if is_instance_valid(shooter) else null)
+		elif game != null:
+			game.spawn_impact(pos, hit.get("normal", Vector3.UP), col, false)
+		return
 	if damageable and bool(b.get("visual", false)):
 		# Someone else's bullet: their machine works out the damage.
 		if game != null:
