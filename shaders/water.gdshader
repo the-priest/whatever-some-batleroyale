@@ -38,7 +38,10 @@ void fragment() {
 	col = mix(col, sky_tint, fres * 0.5);
 
 	ALBEDO = col;
-	ALPHA = clamp(alpha_base + fres * 0.14, 0.0, 1.0);
+	// Far water (and everything seen from the plane) is opaque, so the edge of
+	// the modelled sea floor never shows through.
+	float far_opaque = smoothstep(120.0, 420.0, dist);
+	ALPHA = clamp(mix(alpha_base + fres * 0.14, 1.0, far_opaque), 0.0, 1.0);
 	ROUGHNESS = mix(0.18, 0.04, 1.0 - detail);
 	SPECULAR = 0.7;
 	METALLIC = 0.0;

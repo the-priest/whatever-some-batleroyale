@@ -5,7 +5,7 @@ extends Node3D
 # Built from primitives: rounded fuselage, tapered high wing, nacelles with
 # spinning props, swept tail, windows and an open rear ramp. -Z is forward.
 
-var speed := 26.0
+var speed := 38.0
 var start := Vector3(-520, 190, -430)
 var finish := Vector3(360, 182, 470)
 var t := 0.0

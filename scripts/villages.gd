@@ -11,7 +11,10 @@ const WALL_HEIGHT := 3.123
 const DOOR_WIDTH := 1.30
 
 const TOWN_NAMES := ["MOSSFORD", "HOLLOWMERE", "BRIARWICK", "STONEHELM", "ASHVALE", "THORNBY",
-	"KESTREL BAY", "OLDHAVEN", "DUNMORE", "REDWATER"]
+	"OLDHAVEN", "DUNMORE", "REDWATER", "FENWICK", "GREYMARSH", "WILLOWDEEP", "CROWHOLLOW",
+	"LARKSPUR", "MILLBROOK", "WESTERHOLT", "BRAMBLEGATE", "SALTCOMBE", "ELMSTEAD", "COLDHARBOUR"]
+## Batches are split into cells so distant settlements can be culled.
+const BATCH_CELL := 250.0
 
 ## Footprints that have a matching roof piece in the kit.
 const LOTS := [
@@ -27,6 +30,7 @@ var roads: Array[Dictionary] = []
 var loot_points: Array[Dictionary] = []
 var towers: Array[Dictionary] = []
 var poi_pads: Array[Dictionary] = []
+var landmarks: Landmarks
 
 var _cache: Dictionary = {}
 var _batches: Dictionary = {}
@@ -44,6 +48,10 @@ func build(p_terrain: Terrain, p_seed: int) -> void:
 	_build_village_extras()
 	_plan_towers()
 	_plan_ruins()
+	landmarks = Landmarks.new()
+	landmarks.name = "Landmarks"
+	add_child(landmarks)
+	landmarks.build(terrain, self, p_seed)
 	_commit_batches()
 	_commit_colliders()
 	print("[villages] %d villages, %d houses, %d towers, %d ruins, %d pieces, %d loot points, %d colliders" % [
@@ -52,40 +60,63 @@ func build(p_terrain: Terrain, p_seed: int) -> void:
 
 
 func _plan_villages() -> void:
-	# Settlements are placed per seed: three street towns, four villages and a
-	# handful of farmsteads, spread out over flat-enough land.
-	var specs: Array = ["town", "town", "town", "village", "village", "village", "village",
-		"farm", "farm", "farm", "farm", "farm", "farm"]
-	var size := {"town": 44.0, "village": 30.0, "farm": 15.0}
-	var spacing := {"town": 175.0, "village": 120.0, "farm": 75.0}
+	# Settlements are placed per seed: street towns, villages and farmsteads
+	# spread over flat-enough land, clear of the landmarks and the river.
+	var specs: Array = []
+	for i in 6:
+		specs.append("town")
+	for i in 9:
+		specs.append("village")
+	for i in 14:
+		specs.append("farm")
+	var size := {"town": 58.0, "village": 32.0, "farm": 15.0}
+	var spacing := {"town": 300.0, "village": 190.0, "farm": 110.0}
 	var rng2 := RandomNumberGenerator.new()
 	rng2.seed = rng.seed + 11
+	var forced: Array = []
+	# Highfalls: a hamlet on the plateau top, by the lake.
+	for off in [Vector2(-60, -55), Vector2(-75, 10), Vector2(10, -80), Vector2(-40, 70), Vector2(70, -40)]:
+		var c: Vector2 = Terrain.PLATEAU_C + off
+		if terrain.height_at(c.x, c.y) > Terrain.PLATEAU_H - 3.0 and c.distance_to(Terrain.LAKE_C) > Terrain.LAKE_R + 50.0 \
+				and terrain.roughness(c.x, c.y, 22.0) < 6.0:
+			forced.append(["village", c, "HIGHFALLS"])
+			break
+	# The east isle gets a village of its own.
+	for i in 12:
+		var a := TAU * float(i) / 12.0
+		var c := Terrain.EAST_C + Vector2(cos(a), sin(a)) * 130.0
+		if terrain.height_at(c.x, c.y) > 5.0 and not terrain.is_reserved(c, 40.0) and terrain.roughness(c.x, c.y, 22.0) < 9.0:
+			forced.append(["village", c, "EASTMARCH"])
+			break
 	var name_i := 0
-	for type in specs:
+	for e in forced + specs:
+		var type: String = e if e is String else e[0]
 		var radius: float = size[type]
 		var site := Vector2.INF
-		for attempt in 400:
-			var a := rng2.randf() * TAU
-			var r := sqrt(rng2.randf()) * (370.0 - radius)
-			var c := Vector2(cos(a), sin(a)) * r
-			if terrain.height_at(c.x, c.y) < 4.0 or terrain.slope_at(c.x, c.y) > 0.3:
-				continue
-			if terrain.roughness(c.x, c.y, radius * 0.7) > maxf(6.0, radius * 0.3):
-				continue
-			var ok := true
-			for v in village_pads:
-				if c.distance_to(v.center) < maxf(float(spacing[type]), float(v.spacing)) * (0.5 if type == "farm" or v.type == "farm" else 1.0) + radius + float(v.radius) - 40.0:
-					ok = false
+		var town_name := ""
+		if e is Array:
+			site = e[1]
+			town_name = e[2]
+		else:
+			for attempt in 500:
+				var c := terrain.random_land_point(rng2, 4.0, 0.3)
+				if terrain.is_reserved(c, radius + 10.0):
+					continue
+				if terrain.roughness(c.x, c.y, radius * 0.7) > maxf(6.0, radius * 0.3):
+					continue
+				var ok := true
+				for v in village_pads:
+					if c.distance_to(v.center) < maxf(float(spacing[type]), float(v.spacing)) * (0.5 if type == "farm" or v.type == "farm" else 1.0) + radius + float(v.radius) - 40.0:
+						ok = false
+						break
+				if ok:
+					site = c
 					break
-			if ok:
-				site = c
-				break
 		if site == Vector2.INF:
 			continue
 		var pad := terrain.flatten_circle(site.x, site.y, radius, radius * 0.8)
 		var axis := rng2.randf() * PI
-		var town_name := ""
-		if type != "farm":
+		if type != "farm" and town_name == "":
 			town_name = TOWN_NAMES[name_i % TOWN_NAMES.size()]
 			name_i += 1
 		village_pads.append({"center": site, "pad": pad, "name": town_name, "radius": radius,
@@ -95,9 +126,19 @@ func _plan_villages() -> void:
 			"town":
 				_plan_street(site, pad, radius, axis)
 			"village":
-				_plan_ring(site, pad, rng.randi_range(4, 6), 9.0, radius - 4.0)
+				_plan_ring(site, pad, rng.randi_range(5, 8), 9.0, radius - 4.0)
 			"farm":
 				_plan_ring(site, pad, rng.randi_range(1, 2), 3.0, radius - 3.0)
+	# The settlement on Kestrel Bay takes the bay's name.
+	var best := -1
+	var best_d := 420.0
+	for i in village_pads.size():
+		var d: float = village_pads[i].center.distance_to(Terrain.BAY_C)
+		if village_pads[i].type != "farm" and d < best_d:
+			best_d = d
+			best = i
+	if best >= 0:
+		village_pads[best].name = "KESTREL BAY"
 	_plan_roads()
 
 
@@ -126,8 +167,23 @@ func _plan_street(site: Vector2, pad: float, radius: float, axis: float) -> void
 			if c.distance_to(site) + hr > radius - 1.0:
 				continue
 			_add_house(c, w, d, -axis, pad, site + dir * along)
-	# Side street across the plaza for bigger towns.
-	roads.append({"a": site - perp * (radius * 0.6), "b": site + perp * (radius * 0.6), "w": 2.8})
+	# Cross street through the plaza, lined with houses in the bigger towns.
+	roads.append({"a": site - perp * (radius * 0.75), "b": site + perp * (radius * 0.75), "w": 3.0})
+	var m := int((radius * 0.75 - 8.0) / 12.0)
+	for k in range(-m, m + 1):
+		var along := float(k) * 12.0
+		if absf(along) < 12.0:
+			continue
+		for side in [-1.0, 1.0]:
+			if rng.randf() > 0.8:
+				continue
+			var lot: Vector2i = LOTS[rng.randi() % LOTS.size()]
+			var w := float(mini(lot.x, lot.y))
+			var d := float(maxi(lot.x, lot.y))
+			var c: Vector2 = site + perp * along + dir * side * (6.0 + d * 0.5)
+			if c.distance_to(site) + maxf(w, d) * 0.5 > radius - 1.0:
+				continue
+			_add_house(c, w, d, -axis + PI * 0.5, pad, site + perp * along)
 
 
 ## Houses scattered around a centre, doors facing it.
@@ -166,7 +222,8 @@ func _add_house(c: Vector2, w: float, d: float, yaw_house: float, pad: float, fa
 	return true
 
 
-## Dirt roads between neighbouring settlements (each links to its nearest two).
+## Dirt roads between neighbouring settlements (each links to its nearest
+## two). Roads that would cross the river detour over a ford or Kingsbridge.
 func _plan_roads() -> void:
 	var done := {}
 	for i in village_pads.size():
@@ -179,14 +236,95 @@ func _plan_roads() -> void:
 		for e in near.slice(0, 2):
 			var j: int = e[1]
 			var key := "%d_%d" % [mini(i, j), maxi(i, j)]
-			if done.has(key) or float(e[0]) > 330.0:
+			if done.has(key) or float(e[0]) > 460.0:
+				continue
+			var b: Vector2 = village_pads[j].center
+			if _island_of(a) != _island_of(b):
 				continue
 			done[key] = true
-			# A gentle bend through a midpoint so roads do not look ruled.
-			var b: Vector2 = village_pads[j].center
-			var mid := (a + b) * 0.5 + (b - a).orthogonal().normalized() * rng.randf_range(-25.0, 25.0)
-			roads.append({"a": a, "b": mid, "w": 2.6})
-			roads.append({"a": mid, "b": b, "w": 2.6})
+			_road_between(a, b)
+	# Skyreach Bridge joins the islands.
+	var ta := _nearest_pad(terrain.bridge_a, 0)
+	var tb := _nearest_pad(terrain.bridge_b, 1)
+	if ta != Vector2.INF:
+		_road_between(ta, terrain.bridge_a)
+	if tb != Vector2.INF:
+		_road_between(terrain.bridge_b, tb)
+	roads.append({"a": terrain.bridge_a, "b": terrain.bridge_b, "w": 3.0, "bridge": true})
+	# A track up to the castle gate and to the trail heads of Highfalls.
+	for target in [terrain.castle_c] + terrain.trails:
+		var t := _nearest_pad(target, 0)
+		if t != Vector2.INF and t.distance_to(target) < 520.0:
+			_road_between(t, target)
+
+
+func _island_of(p: Vector2) -> int:
+	return 1 if p.distance_to(Terrain.EAST_C) < p.distance_to(Terrain.MAIN_C) and p.x > 560.0 else 0
+
+
+func _nearest_pad(p: Vector2, island: int) -> Vector2:
+	var best := Vector2.INF
+	var bd := 1e9
+	for v in village_pads:
+		var c: Vector2 = v.center
+		if _island_of(c) != island:
+			continue
+		var d := c.distance_to(p)
+		if d < bd and not _crosses_river(c, p):
+			bd = d
+			best = c
+	return best
+
+
+func _crosses_river(a: Vector2, b: Vector2) -> bool:
+	var n := int(a.distance_to(b) / 8.0) + 1
+	for i in n + 1:
+		var p := a.lerp(b, float(i) / float(n))
+		var q := terrain.river_query(p)
+		if q.x < terrain.river_profile(q.y).x + 1.0:
+			return true
+	return false
+
+
+## A gently bent road, routed over a river crossing when it has to be.
+func _road_between(a: Vector2, b: Vector2) -> void:
+	if not _crosses_river(a, b):
+		_bent_road(a, b)
+		return
+	var best := []
+	var best_len := 1e9
+	var crossings: Array = []
+	for f in terrain.fords:
+		crossings.append([f, terrain.river_across(f), 22.0, false])
+	var gq := terrain.river_query(terrain.gorge_bridge)
+	var gp := terrain.river_profile(gq.y)
+	crossings.append([terrain.gorge_bridge, terrain.gorge_bridge_dir, gp.x + gp.y + 8.0, true])
+	for c in crossings:
+		var p: Vector2 = c[0]
+		var d: Vector2 = c[1]
+		var r: float = c[2]
+		var e0 := p - d * r
+		var e1 := p + d * r
+		if a.distance_to(e1) < a.distance_to(e0):
+			var t := e0
+			e0 = e1
+			e1 = t
+		var len := a.distance_to(e0) + e0.distance_to(e1) + e1.distance_to(b)
+		if len < best_len:
+			best_len = len
+			best = [e0, e1, c[3]]
+	if best.is_empty() or best_len > a.distance_to(b) * 1.9:
+		return
+	_bent_road(a, best[0])
+	roads.append({"a": best[0], "b": best[1], "w": 2.6, "bridge": best[2]})
+	_bent_road(best[1], b)
+
+
+func _bent_road(a: Vector2, b: Vector2) -> void:
+	# A gentle bend through a midpoint so roads do not look ruled.
+	var mid := (a + b) * 0.5 + (b - a).orthogonal().normalized() * rng.randf_range(-25.0, 25.0)
+	roads.append({"a": a, "b": mid, "w": 2.6})
+	roads.append({"a": mid, "b": b, "w": 2.6})
 
 
 ## Distance from a point to the nearest road centre line.
@@ -362,9 +500,10 @@ func _place(key: String, bottom_center: Vector3, yaw: float, _align := true, piv
 		# Use the mesh's own origin, nudged by `pivot`, instead of re-centring it.
 		offset = pivot
 	var xform := Transform3D(basis, bottom_center + basis * offset)
-	if not _batches.has(key):
-		_batches[key] = []
-	_batches[key].append(xform)
+	var bkey := "%s|%d_%d" % [key, int(floor(bottom_center.x / BATCH_CELL)), int(floor(bottom_center.z / BATCH_CELL))]
+	if not _batches.has(bkey):
+		_batches[bkey] = []
+	_batches[bkey].append(xform)
 	_stat.pieces += 1
 
 
@@ -438,11 +577,12 @@ func _find_mesh(node: Node) -> MeshInstance3D:
 
 
 func _commit_batches() -> void:
-	for key in _batches:
+	for bkey in _batches:
+		var key: String = bkey.split("|")[0]
 		var data := _model(key)
 		if data.is_empty():
 			continue
-		var transforms: Array = _batches[key]
+		var transforms: Array = _batches[bkey]
 		var mm := MultiMesh.new()
 		mm.transform_format = MultiMesh.TRANSFORM_3D
 		mm.mesh = data.mesh
@@ -450,12 +590,12 @@ func _commit_batches() -> void:
 		for i in transforms.size():
 			mm.set_instance_transform(i, transforms[i])
 		var mmi := MultiMeshInstance3D.new()
-		mmi.name = "V_" + key
+		mmi.name = "V_" + bkey.replace("|", "_")
 		mmi.multimesh = mm
 		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-		# One batch spans the whole island, so no distance cut-off: Godot would
-		# measure it from the batch centre and hide whole villages at random.
-		mmi.visibility_range_end = 0.0
+		# Range is measured to the batch centre, so it must cover the cell's
+		# half-diagonal.
+		mmi.visibility_range_end = 1300.0 + BATCH_CELL * 0.75
 		add_child(mmi)
 
 
@@ -464,7 +604,6 @@ func _commit_colliders() -> void:
 	body.name = "VillageCollision"
 	body.collision_layer = 1
 	body.collision_mask = 0
-	add_child(body)
 	for c in _colliders:
 		var shape := CollisionShape3D.new()
 		var box := BoxShape3D.new()
@@ -472,6 +611,7 @@ func _commit_colliders() -> void:
 		shape.shape = box
 		shape.transform = c.xform
 		body.add_child(shape)
+	add_child(body)
 
 
 # ------------------------------------------------------------ lookout towers --
@@ -481,20 +621,20 @@ func _plan_towers() -> void:
 	var cands: Array = []
 	var rng2 := RandomNumberGenerator.new()
 	rng2.seed = rng.seed + 31
-	for i in 500:
-		var a := rng2.randf() * TAU
-		var r := sqrt(rng2.randf()) * 360.0
-		var c := Vector2(cos(a), sin(a)) * r
+	for i in 1500:
+		var c := terrain.random_land_point(rng2, 8.0, 0.32)
 		var h := terrain.height_at(c.x, c.y)
+		if terrain.is_reserved(c, 12.0):
+			continue
 		if h < 8.0 or terrain.slope_at(c.x, c.y) > 0.32 or terrain.roughness(c.x, c.y, 5.0) > 3.5:
 			continue
 		cands.append([h + rng2.randf() * 4.0, c])
 	cands.sort_custom(func(a, b): return a[0] > b[0])
 	for e in cands:
-		if towers.size() >= 5:
+		if towers.size() >= 12:
 			break
 		var c: Vector2 = e[1]
-		if _too_close(c, 75.0, 150.0):
+		if _too_close(c, 90.0, 220.0):
 			continue
 		var pad := terrain.flatten_circle(c.x, c.y, 5.5, 9.0)
 		towers.append({"center": c, "pad": pad})
@@ -607,17 +747,17 @@ func _plan_ruins() -> void:
 	var rng2 := RandomNumberGenerator.new()
 	rng2.seed = rng.seed + 57
 	var placed := 0
-	for i in 400:
-		if placed >= 14:
+	for i in 2000:
+		if placed >= 30:
 			break
-		var a := rng2.randf() * TAU
-		var r := sqrt(rng2.randf()) * 380.0
-		var c := Vector2(cos(a), sin(a)) * r
+		var c := terrain.random_land_point(rng2, 3.0, 0.22)
+		if terrain.is_reserved(c, 14.0):
+			continue
 		if terrain.height_at(c.x, c.y) < 3.0 or terrain.slope_at(c.x, c.y) > 0.22:
 			continue
 		if terrain.roughness(c.x, c.y, 8.0) > 3.0:
 			continue
-		if _too_close(c, 60.0, 70.0):
+		if _too_close(c, 70.0, 110.0):
 			continue
 		var pad := terrain.flatten_circle(c.x, c.y, 8.0, 10.0)
 		poi_pads.append({"center": c, "radius": 11.0, "type": "ruin"})

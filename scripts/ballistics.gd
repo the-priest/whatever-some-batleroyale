@@ -72,8 +72,11 @@ func _release(b: Dictionary) -> void:
 ## Launch one bullet. `visual_from` is where the tracer appears to start (the
 ## muzzle) while the true path starts at `from` (the eye), so what you aim at is
 ## what you hit; the tracer converges onto the real path within a few metres.
-func fire(shooter: Node, from: Vector3, dir: Vector3, weapon_id: String, visual_from: Vector3, shot_id: int, dmg_mult := 1.0) -> void:
+func fire(shooter: Node, from: Vector3, dir: Vector3, weapon_id: String, visual_from: Vector3, shot_id: int, dmg_mult := 1.0, visual := false) -> void:
 	var d: Dictionary = Weapons.def(weapon_id)
+	# In a LAN game, real shots are mirrored to everyone else as visual ones.
+	if not visual and game != null and game.has_method("net_shot_fired"):
+		game.net_shot_fired(shooter, from, dir, weapon_id, visual_from, shot_id)
 	if bullets.size() >= MAX_BULLETS:
 		_release(bullets.pop_front())
 	var speed := float(d.get("velocity", 500.0))
@@ -97,6 +100,7 @@ func fire(shooter: Node, from: Vector3, dir: Vector3, weapon_id: String, visual_
 		"mult": dmg_mult,
 		"cracked": false,
 		"trail": 0.0,
+		"visual": visual,
 	}
 	bullets.append(b)
 	_place_tracer(b)
@@ -187,7 +191,16 @@ func _resolve_hit(b: Dictionary, hit: Dictionary) -> void:
 	var pos: Vector3 = hit["position"]
 	var d: Dictionary = Weapons.def(b["id"])
 	var shooter: Node = b["shooter"]
-	if col != null and col.has_method("take_damage") and bool(col.get("alive")) and col != shooter:
+	var damageable: bool = col != null and col.has_method("take_damage") and bool(col.get("alive")) and col != shooter
+	# Squad mates: friendly fire is off, the round just stops.
+	if damageable and col.get("friendly") == true and shooter is Player:
+		damageable = false
+	if damageable and bool(b.get("visual", false)):
+		# Someone else's bullet: their machine works out the damage.
+		if game != null:
+			game.spawn_blood(pos)
+		return
+	if damageable:
 		var headshot := false
 		if col.has_method("head_y"):
 			headshot = pos.y >= float(col.call("head_y"))

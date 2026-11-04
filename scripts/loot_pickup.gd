@@ -28,6 +28,8 @@ var tier := 1
 var mag_override := -1
 var reserve_override := -1
 var dropped := false
+## Same id on every machine in a LAN game.
+var net_id := 0
 
 
 func setup(p_kind: String, p_id: String, p_amount: int = 1) -> void:
@@ -279,18 +281,27 @@ func pickup(player: Player) -> bool:
 	if not player.take_loot(self):
 		return false
 	taken = true
+	_announce_taken()
 	_pop()
 	return true
 
 
-func consume() -> void:
+func consume(announce := true) -> void:
 	taken = true
 	var parent := get_parent()
 	if parent != null:
 		var pool = parent.get("loot_pool")
 		if pool is Array:
 			(pool as Array).erase(self)
+	if announce:
+		_announce_taken()
 	_pop()
+
+
+func _announce_taken() -> void:
+	var parent := get_parent()
+	if parent != null and parent.has_method("net_loot_removed"):
+		parent.net_loot_removed(self)
 
 
 func _pop() -> void:

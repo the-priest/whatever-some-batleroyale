@@ -28,7 +28,7 @@ const JUMP := 5.0
 const EYE := 1.62
 const CROUCH_EYE := 1.05
 const TERMINAL := -58.0
-const CHUTE_FALL := -9.0
+const CHUTE_FALL := -7.5
 
 var mode: int = Mode.PLANE
 var game: Node = null
@@ -110,6 +110,7 @@ var _was_on_floor := true
 var _fall_speed := 0.0
 var _sprint_lock := 0.0
 var _optic_id := ""
+var _freefall_t := 0.0
 var _shot_seq := 0
 var _pending_hits: Dictionary = {}
 var meds := 0
@@ -258,7 +259,7 @@ func _freefall(delta: float) -> void:
 	var wish := basis_yaw * Vector3(input.x, 0.0, input.y)
 	var dive := 1.0 + (0.55 if Input.is_action_pressed("move_forward") else 0.0)
 	freefall_speed = move_toward(freefall_speed, TERMINAL * dive, 90.0 * delta)
-	var target := wish * (26.0 if not Input.is_action_pressed("sprint") else 34.0)
+	var target := wish * (32.0 if not Input.is_action_pressed("sprint") else 42.0)
 	velocity.x = move_toward(velocity.x, target.x, 30.0 * delta)
 	velocity.z = move_toward(velocity.z, target.z, 30.0 * delta)
 	velocity.y = freefall_speed
@@ -267,12 +268,14 @@ func _freefall(delta: float) -> void:
 	move_and_slide()
 	# Wind buffet that builds with fall speed.
 	trauma = maxf(trauma, clampf(-velocity.y / 62.0, 0.0, 1.0) * 0.42)
-	if Input.is_action_just_pressed("jump"):
+	_freefall_t += delta
+	# The Space press that jumped out of the plane must not also pull the cord.
+	if Input.is_action_just_pressed("jump") and _freefall_t > 0.6:
 		open_chute()
 	# Auto-deploy as a safety net so a first-time player does not splat while sightseeing.
 	if mode == Mode.FREEFALL and game != null and game.terrain != null:
 		var agl: float = global_position.y - float(game.terrain.height_at(global_position.x, global_position.z))
-		if agl < 68.0 and agl > -2.0:
+		if agl < 110.0 and agl > -2.0:
 			open_chute()
 	_check_ground_contact()
 
@@ -281,10 +284,16 @@ func _chute(delta: float) -> void:
 	var input := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
 	var basis_yaw := Basis(Vector3.UP, yaw)
 	var wish := basis_yaw * Vector3(input.x, 0.0, input.y)
-	var target := wish * 11.0
+	# Ram-air canopy: W pushes the nose down for speed, S flares to stretch
+	# the glide.
+	var fwd_in := -input.y
+	var target := wish * (14.0 + maxf(0.0, fwd_in) * 4.0)
+	var sink := CHUTE_FALL - maxf(0.0, fwd_in) * 2.5 + maxf(0.0, -fwd_in) * 2.0
 	velocity.x = move_toward(velocity.x, target.x, 8.0 * delta)
 	velocity.z = move_toward(velocity.z, target.z, 8.0 * delta)
-	velocity.y = move_toward(velocity.y, CHUTE_FALL, 30.0 * delta)
+	velocity.y = move_toward(velocity.y, sink, 30.0 * delta)
+	if game != null and game.has_method("clamp_airborne"):
+		velocity = game.clamp_airborne(global_position, velocity, delta)
 	move_and_slide()
 	chute_mesh.rotation.y = sin(Time.get_ticks_msec() * 0.001) * 0.1
 	if is_on_floor():
@@ -1301,6 +1310,8 @@ func throw_grenade() -> void:
 	g.global_position = camera.global_position + dir * 0.6 + Vector3(0, -0.1, 0)
 	g.linear_velocity = dir * 17.0 + Vector3(0, 3.5, 0) + velocity * 0.5
 	g.angular_velocity = Vector3(randf_range(-8, 8), randf_range(-8, 8), randf_range(-8, 8))
+	if game.has_method("net_grenade_thrown"):
+		game.net_grenade_thrown(g.global_position, g.linear_velocity)
 	kick_vel += Vector3(0.0, -0.6, 0.4)
 	equip_t = 0.35
 	_sfx("equip", -4.0)
@@ -1385,7 +1396,13 @@ func shake(_amt: float) -> void:
 
 
 func display_name() -> String:
+	if game != null and game.net != null and game.net.active:
+		return game.net.my_name
 	return "YOU"
+
+
+func crouching() -> bool:
+	return mode == Mode.GROUND and Input.is_action_pressed("crouch")
 
 
 func reset_for_match() -> void:
@@ -1471,6 +1488,7 @@ func set_plane_mode() -> void:
 
 
 func jump_from_plane() -> void:
+	_freefall_t = 0.0
 	add_trauma(0.35)
 	mode = Mode.FREEFALL
 	freefall_speed = -8.0

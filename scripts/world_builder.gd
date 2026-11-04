@@ -22,6 +22,13 @@ var _nature_cache: Dictionary = {}
 var _terrain_material: ShaderMaterial
 var _mat_water: ShaderMaterial
 var road_image: Image
+## Spatial index for "is this near a settlement / road" checks during scatter.
+const GRID := 50.0
+var _pad_grid: Dictionary = {}
+var _road_grid: Dictionary = {}
+var _chunk_pads: Array = []
+
+var falls_sound_pos := Vector3.ZERO
 
 var stats := {
 	"trees": 0, "ground": 0, "rocks": 0, "houses": 0, "loot": 0, "colliders": 0,
@@ -33,7 +40,11 @@ func build(p_seed: int) -> void:
 	var started := Time.get_ticks_msec()
 	rng.seed = p_seed
 	terrain = Terrain.new(p_seed)
+	print("[world] terrain generated in %d ms" % (Time.get_ticks_msec() - started))
 
+	var marks: Array = []
+	var tick := func(label: String) -> void:
+		marks.append("%s %d" % [label, Time.get_ticks_msec() - started])
 	_build_lighting()
 	villages = Villages.new()
 	villages.name = "Villages"
@@ -41,18 +52,28 @@ func build(p_seed: int) -> void:
 	villages.build(terrain, p_seed)
 	loot_points.append_array(villages.loot_points)
 	stats.houses = villages._stat.houses
-
+	tick.call("villages")
+	_build_grids()
 	_build_terrain()
+	tick.call("terrain")
 	_build_water()
+	_build_inland_water()
 	_scatter_trees()
+	tick.call("trees")
 	_scatter_ground_cover()
+	tick.call("cover")
 	_fill_gaps()
+	tick.call("gaps")
 	_scatter_rocks()
+	tick.call("rocks")
 	_build_wild_loot()
 	_build_spawn_points()
 	_build_distant_islands()
 	_build_clouds()
 	_build_minimap()
+	_build_water_audio()
+	tick.call("minimap")
+	print("[world] timing: ", ", ".join(marks))
 	stats.loot = loot_points.size()
 	stats.build_ms = Time.get_ticks_msec() - started
 	print("[world] built in %d ms — %s" % [stats.build_ms, str(stats)])
@@ -96,8 +117,8 @@ func _build_lighting() -> void:
 	sky_mat.sky_curve = 0.13
 	sky_mat.sky_energy_multiplier = 1.05
 	# Below the horizon is open sea, so the sky's "ground" matches the water.
-	sky_mat.ground_bottom_color = Color(0.10, 0.26, 0.34)
-	sky_mat.ground_horizon_color = Color(0.56, 0.71, 0.84)
+	sky_mat.ground_bottom_color = Color(0.36, 0.52, 0.64)
+	sky_mat.ground_horizon_color = Color(0.60, 0.73, 0.87)
 	sky_mat.ground_curve = 0.08
 	sky_mat.sun_angle_max = 22.0
 	sky_mat.sun_curve = 0.12
@@ -116,7 +137,7 @@ func _build_lighting() -> void:
 	env.fog_enabled = true
 	env.fog_light_color = Color(0.62, 0.74, 0.88)
 	env.fog_light_energy = 0.95
-	env.fog_density = 0.0009
+	env.fog_density = 0.00032
 	env.fog_sky_affect = 0.15
 	env.fog_aerial_perspective = 0.3
 
@@ -147,6 +168,7 @@ func _build_terrain() -> void:
 	_terrain_material.set_shader_parameter("tex_rock", load("res://assets/textures/tex_rock.png"))
 	_terrain_material.set_shader_parameter("tex_macro", load("res://assets/textures/tex_macro.png"))
 	_terrain_material.set_shader_parameter("road_mask", _build_road_mask())
+	_terrain_material.set_shader_parameter("map_half", Terrain.HALF)
 
 	var body := StaticBody3D.new()
 	body.name = "TerrainCollision"
@@ -195,14 +217,27 @@ func _chunk_mesh(cx: int, cz: int) -> ArrayMesh:
 	var verts: Array[Vector3] = []
 	var normals: Array[Vector3] = []
 	var colors: Array[Color] = []
+	var canopy: Array[float] = []
+	# Only the settlements that can touch this chunk tint its ground.
+	_chunk_pads.clear()
+	var span := float(cells) * Terrain.STEP
+	var cc := Vector2(origin_x + span * 0.5, origin_z + span * 0.5)
+	for v in villages.village_pads:
+		if (v.center as Vector2).distance_to(cc) < span * 0.75 + float(v.radius) + 4.0:
+			_chunk_pads.append(v)
 	for iz in cells + 1:
 		for ix in cells + 1:
 			var x := origin_x + float(ix) * Terrain.STEP
 			var z := origin_z + float(iz) * Terrain.STEP
 			var h := terrain.height_at(x, z)
+			var n := terrain.normal_at(x, z)
 			verts.append(Vector3(x, h, z))
-			normals.append(terrain.normal_at(x, z))
-			colors.append(_ground_weights(x, z, h, terrain.normal_at(x, z)))
+			normals.append(n)
+			colors.append(_ground_weights(x, z, h, n))
+			var cw := 0.0
+			if h > Terrain.WATER_LEVEL + 1.2 and 1.0 - n.y < 0.5:
+				cw = smoothstep(0.36, 0.72, terrain.forest_density(x, z))
+			canopy.append(cw)
 
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -214,29 +249,33 @@ func _chunk_mesh(cx: int, cz: int) -> ArrayMesh:
 			var i10 := i00 + 1
 			var i01 := i00 + row
 			var i11 := i01 + 1
-			_add_tri(st, verts, normals, colors, [i00, i10, i01])
-			_add_tri(st, verts, normals, colors, [i10, i11, i01])
+			_add_tri(st, verts, normals, colors, canopy, [i00, i10, i01])
+			_add_tri(st, verts, normals, colors, canopy, [i10, i11, i01])
 	st.index()
 	return st.commit()
 
 
-func _add_tri(st: SurfaceTool, verts: Array[Vector3], normals: Array[Vector3], colors: Array[Color], idx: Array) -> void:
+func _add_tri(st: SurfaceTool, verts: Array[Vector3], normals: Array[Vector3], colors: Array[Color], canopy: Array[float], idx: Array) -> void:
 	for i in idx:
 		st.set_color(colors[i])
 		st.set_normal(normals[i])
 		st.set_uv(Vector2(verts[i].x, verts[i].z) * 0.02)
+		st.set_uv2(Vector2(canopy[i], 0.0))
 		st.add_vertex(verts[i])
 
 
 func _ground_weights(x: float, z: float, h: float, n: Vector3) -> Color:
 	var slope := 1.0 - n.y
 	var sand := smoothstep(3.6, 1.2, h)
-	var rock := smoothstep(0.30, 0.52, slope) * 0.9 + smoothstep(33.0, 45.0, h) * 0.55
+	# Pebble shore round the plateau lake.
+	if Vector2(x, z).distance_to(Terrain.LAKE_C) < Terrain.LAKE_R + 45.0:
+		sand = maxf(sand, smoothstep(terrain.lake_level + 2.4, terrain.lake_level + 0.6, h))
+	var rock := smoothstep(0.30, 0.52, slope) * 0.9
 	var macro := terrain.macro.get_noise_2d(x, z) * 0.5 + 0.5
 	var dirt := 0.0
 	# Village pads: keep the worn-earth ring but let it fade out instead of
 	# ending in a hard 0.8 disc. Widened 30 -> 34 so the edge is softer.
-	for v in villages.village_pads:
+	for v in _chunk_pads:
 		var c: Vector2 = v.center
 		var d := Vector2(x, z).distance_to(c)
 		var vr: float = v.radius
@@ -261,7 +300,7 @@ func _ground_weights(x: float, z: float, h: float, n: Vector3) -> Color:
 	return Color(grass / total, sand / total, rock / total, dirt / total)
 
 
-const ROAD_RES := 1024
+const ROAD_RES := 2048
 
 
 ## Crisp dirt roads: segments rasterised into a mask the terrain shader blends.
@@ -269,6 +308,8 @@ func _build_road_mask() -> ImageTexture:
 	var img := Image.create(ROAD_RES, ROAD_RES, false, Image.FORMAT_L8)
 	var k := float(ROAD_RES) / Terrain.SIZE
 	for r in villages.roads:
+		if r.get("bridge", false):
+			continue
 		var a: Vector2 = r.a
 		var b: Vector2 = r.b
 		var w: float = r.w
@@ -317,7 +358,7 @@ func _build_water() -> void:
 		nt.noise = fn
 		_mat_water.set_shader_parameter("normal_a" if i == 0 else "normal_b", nt)
 	var plane := PlaneMesh.new()
-	plane.size = Vector2(16000.0, 16000.0)
+	plane.size = Vector2(24000.0, 24000.0)
 	plane.subdivide_width = 1
 	plane.subdivide_depth = 1
 	var mi := MeshInstance3D.new()
@@ -327,6 +368,206 @@ func _build_water() -> void:
 	mi.position.y = Terrain.WATER_LEVEL
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mi)
+
+
+## Plateau lake, its outlet, the waterfall and the plunge pool's foam, mist
+## and roar.
+func _build_inland_water() -> void:
+	var lake := SurfaceTool.new()
+	lake.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var lc := Terrain.LAKE_C
+	var lr := Terrain.LAKE_R + 22.0
+	var y := terrain.lake_level
+	var segs := 48
+	for i in segs:
+		var a0 := TAU * float(i) / float(segs)
+		var a1 := TAU * float(i + 1) / float(segs)
+		lake.set_normal(Vector3.UP)
+		lake.add_vertex(Vector3(lc.x, y, lc.y))
+		lake.add_vertex(Vector3(lc.x + cos(a1) * lr, y, lc.y + sin(a1) * lr))
+		lake.add_vertex(Vector3(lc.x + cos(a0) * lr, y, lc.y + sin(a0) * lr))
+	# Outlet channel to the lip.
+	var ca := terrain.channel_a
+	var cb := terrain.channel_b
+	var side := (cb - ca).normalized().orthogonal() * 8.0
+	var q := [ca - side, ca + side, cb + side, cb - side]
+	for idx in [[0, 2, 1], [0, 3, 2]]:
+		for j in idx:
+			var v: Vector2 = q[j]
+			lake.set_normal(Vector3.UP)
+			lake.add_vertex(Vector3(v.x, y, v.y))
+	var lmi := MeshInstance3D.new()
+	lmi.name = "Lake"
+	lmi.mesh = lake.commit()
+	lmi.material_override = _mat_water
+	lmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(lmi)
+
+	# Streak texture shared by the falls and the foam.
+	var nt := NoiseTexture2D.new()
+	nt.width = 256
+	nt.height = 256
+	nt.seamless = true
+	var fn := FastNoiseLite.new()
+	fn.noise_type = FastNoiseLite.TYPE_CELLULAR
+	fn.frequency = 0.035
+	fn.fractal_type = FastNoiseLite.FRACTAL_FBM
+	fn.fractal_octaves = 3
+	fn.seed = 404
+	nt.noise = fn
+
+	# The fall: free-falling where the cliff drops away faster than the water,
+	# clinging to the rock where it does not.
+	var dir := terrain.falls_dir
+	var lip := Vector2(terrain.falls_top.x, terrain.falls_top.z)
+	var top := terrain.falls_top.y + 0.15
+	var perp := dir.orthogonal()
+	var pts: Array[Vector3] = []
+	var s := -3.0
+	while s < 90.0:
+		var p := lip + dir * s
+		var ground := terrain.height_at(p.x, p.y)
+		var free := top - 0.24 * maxf(0.0, s) * maxf(0.0, s)
+		var yy := maxf(free, ground + 0.7) if s > 0.0 else top
+		pts.append(Vector3(p.x, yy, p.y))
+		if yy <= Terrain.WATER_LEVEL + 0.3:
+			break
+		s += 0.75 if free > ground else 1.5
+	var mat := ShaderMaterial.new()
+	mat.shader = load("res://shaders/waterfall.gdshader")
+	mat.set_shader_parameter("streaks", nt)
+	for layer in 2:
+		var st := SurfaceTool.new()
+		st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		var acc := 0.0
+		var prev_l := Vector3.ZERO
+		var prev_r := Vector3.ZERO
+		var prev_v := 0.0
+		for i in pts.size():
+			var p: Vector3 = pts[i]
+			if i > 0:
+				acc += p.distance_to(pts[i - 1])
+			var f := float(i) / float(maxi(1, pts.size() - 1))
+			var hw := lerpf(5.0, 8.5, f) * (1.0 if layer == 0 else 1.25)
+			var off := Vector3(dir.x, 0.0, dir.y) * (0.0 if layer == 0 else 0.5)
+			var l := p - Vector3(perp.x, 0, perp.y) * hw + off
+			var r := p + Vector3(perp.x, 0, perp.y) * hw + off
+			var v := acc / 6.0
+			if i > 0:
+				var n := (Vector3(dir.x, 0.0, dir.y) * -1.0).normalized()
+				for tri in [[prev_l, prev_v, 0.0], [r, v, 1.0], [prev_r, prev_v, 1.0], [prev_l, prev_v, 0.0], [l, v, 0.0], [r, v, 1.0]]:
+					st.set_normal(n)
+					st.set_uv(Vector2(float(tri[2]), float(tri[1])))
+					st.add_vertex(tri[0])
+			prev_l = l
+			prev_r = r
+			prev_v = v
+		var mi := MeshInstance3D.new()
+		mi.name = "Waterfall_%d" % layer
+		mi.mesh = st.commit()
+		var m: ShaderMaterial = mat if layer == 0 else (mat.duplicate() as ShaderMaterial)
+		if layer == 1:
+			m.set_shader_parameter("opacity", 0.45)
+			m.set_shader_parameter("foam_bias", 0.35)
+			m.set_shader_parameter("speed", 1.1)
+		mi.material_override = m
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(mi)
+
+	# Plunge pool foam and mist.
+	var bottom: Vector3 = pts[pts.size() - 1]
+	var foam := MeshInstance3D.new()
+	var fp := PlaneMesh.new()
+	fp.size = Vector2(34, 34)
+	foam.mesh = fp
+	var fm := ShaderMaterial.new()
+	fm.shader = load("res://shaders/foam.gdshader")
+	fm.set_shader_parameter("streaks", nt)
+	foam.material_override = fm
+	foam.position = Vector3(bottom.x, Terrain.WATER_LEVEL + 0.06, bottom.z)
+	foam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(foam)
+	var mist := CPUParticles3D.new()
+	mist.name = "FallsMist"
+	mist.amount = 36
+	mist.lifetime = 4.0
+	mist.preprocess = 4.0
+	mist.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	mist.emission_sphere_radius = 7.0
+	mist.direction = Vector3(dir.x, 1.0, dir.y)
+	mist.spread = 40.0
+	mist.initial_velocity_min = 1.5
+	mist.initial_velocity_max = 4.0
+	mist.gravity = Vector3(0, 0.25, 0)
+	mist.scale_amount_min = 5.0
+	mist.scale_amount_max = 11.0
+	var curve := Curve.new()
+	curve.add_point(Vector2(0.0, 0.4))
+	curve.add_point(Vector2(1.0, 1.0))
+	mist.scale_amount_curve = curve
+	var grad := Gradient.new()
+	grad.set_color(0, Color(1, 1, 1, 0.0))
+	grad.set_color(1, Color(1, 1, 1, 0.0))
+	grad.add_point(0.25, Color(1, 1, 1, 0.32))
+	mist.color_ramp = grad
+	var qm := QuadMesh.new()
+	qm.size = Vector2.ONE
+	var pm := StandardMaterial3D.new()
+	pm.albedo_texture = _cloud_texture()
+	pm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	pm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	pm.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	pm.vertex_color_use_as_albedo = true
+	qm.material = pm
+	mist.mesh = qm
+	mist.position = bottom + Vector3(0, 2.0, 0)
+	mist.visibility_aabb = AABB(Vector3(-40, -10, -40), Vector3(80, 60, 80))
+	add_child(mist)
+	falls_sound_pos = bottom + Vector3(0, 6.0, 0)
+
+
+## The falls roar from far off; the river babbles along its banks.
+func _build_water_audio() -> void:
+	var falls := _loop_stream("waterfall_loop")
+	if falls != null:
+		var p := AudioStreamPlayer3D.new()
+		p.name = "FallsAudio"
+		p.stream = falls
+		p.unit_size = 38.0
+		p.max_distance = 420.0
+		p.volume_db = 2.0
+		p.position = falls_sound_pos
+		p.autoplay = true
+		add_child(p)
+	var river := _loop_stream("river_loop")
+	if river == null:
+		return
+	var s := 80.0
+	while s < terrain.river_len - 60.0:
+		var c := terrain._river_point(s)
+		if terrain.height_at(c.x, c.y) < Terrain.WATER_LEVEL:
+			var p := AudioStreamPlayer3D.new()
+			p.stream = river
+			p.unit_size = 9.0
+			p.max_distance = 110.0
+			p.volume_db = -6.0
+			p.position = Vector3(c.x, Terrain.WATER_LEVEL + 1.0, c.y)
+			p.autoplay = true
+			add_child(p)
+		s += 140.0
+
+
+func _loop_stream(name: String) -> AudioStream:
+	var path := "res://assets/audio/gen/%s.wav" % name
+	if not ResourceLoader.exists(path):
+		return null
+	var st: AudioStream = load(path)
+	if st is AudioStreamWAV:
+		var w := st as AudioStreamWAV
+		w.loop_mode = AudioStreamWAV.LOOP_FORWARD
+		w.loop_begin = 0
+		w.loop_end = int(w.get_length() * w.mix_rate)
+	return st
 
 
 # ------------------------------------------------------------------- scatter
@@ -384,7 +625,7 @@ func _scatter_trees() -> void:
 
 	var placements: Array[Dictionary] = []
 	var grid: Dictionary = {}
-	var attempts := 9000
+	var attempts := 120000
 	for i in attempts:
 		var x := rng.randf_range(-Terrain.HALF + 12.0, Terrain.HALF - 12.0)
 		var z := rng.randf_range(-Terrain.HALF + 12.0, Terrain.HALF - 12.0)
@@ -393,7 +634,7 @@ func _scatter_trees() -> void:
 			continue
 		if terrain.slope_at(x, z) > 0.52:
 			continue
-		if _near_village(x, z, 38.0) or villages.road_distance(x, z) < 3.0:
+		if _near_village(x, z, 38.0) or _road_distance(x, z) < 3.0:
 			continue
 		var forest := terrain.forest_density(x, z)
 		var chance := smoothstep(0.36, 0.72, forest) * 0.85 + 0.06
@@ -433,7 +674,6 @@ func _scatter_trees() -> void:
 	trunk_body.name = "TreeCollision"
 	trunk_body.collision_layer = 1
 	trunk_body.collision_mask = 0
-	add_child(trunk_body)
 
 	for key in groups:
 		var parts: PackedStringArray = key.split("|")
@@ -453,7 +693,7 @@ func _scatter_trees() -> void:
 		mmi.name = "T_" + key
 		mmi.multimesh = mm
 		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-		mmi.visibility_range_end = 430.0 + TREE_HALF_DIAG
+		mmi.visibility_range_end = 650.0 + TREE_HALF_DIAG
 		add_child(mmi)
 		stats.trees += list.size()
 
@@ -468,6 +708,9 @@ func _scatter_trees() -> void:
 			shape.position = it.pos + Vector3(0, 2.2 * sc, 0)
 			trunk_body.add_child(shape)
 			stats.colliders += 1
+	# Into the tree only once every shape is attached: adding shapes to a live
+	# body rebuilds its compound shape each time.
+	add_child(trunk_body)
 
 
 func _scatter_ground_cover() -> void:
@@ -483,7 +726,7 @@ func _scatter_ground_cover() -> void:
 	for k in kinds:
 		buckets[k.name] = []
 
-	for i in 12000:
+	for i in 60000:
 		var x := rng.randf_range(-Terrain.HALF + 8.0, Terrain.HALF - 8.0)
 		var z := rng.randf_range(-Terrain.HALF + 8.0, Terrain.HALF - 8.0)
 		var h := terrain.height_at(x, z)
@@ -491,7 +734,7 @@ func _scatter_ground_cover() -> void:
 			continue
 		if terrain.slope_at(x, z) > 0.5:
 			continue
-		if _near_village(x, z, 14.0) or villages.road_distance(x, z) < 1.0:
+		if _near_village(x, z, 14.0) or _road_distance(x, z) < 1.0:
 			continue
 		var forest := terrain.forest_density(x, z)
 		var r := rng.randf()
@@ -571,7 +814,7 @@ func _scatter_rocks() -> void:
 	var groups: Dictionary = {}
 	for k in kinds:
 		groups[k] = []
-	for i in 1300:
+	for i in 7000:
 		var x := rng.randf_range(-Terrain.HALF + 8.0, Terrain.HALF - 8.0)
 		var z := rng.randf_range(-Terrain.HALF + 8.0, Terrain.HALF - 8.0)
 		var h := terrain.height_at(x, z)
@@ -594,8 +837,8 @@ func _scatter_rocks() -> void:
 		})
 	# Boulders: big enough to hide behind, scattered through the open fields
 	# where cover is otherwise scarce.
-	for i in 900:
-		if groups["Rock_Medium_1"].size() + groups["Rock_Medium_2"].size() > 420:
+	for i in 5000:
+		if groups["Rock_Medium_1"].size() + groups["Rock_Medium_2"].size() > 2400:
 			break
 		var x := rng.randf_range(-Terrain.HALF + 20.0, Terrain.HALF - 20.0)
 		var z := rng.randf_range(-Terrain.HALF + 20.0, Terrain.HALF - 20.0)
@@ -654,7 +897,6 @@ func _scatter_rocks() -> void:
 		body.name = "RockCollision_" + k
 		body.collision_layer = 1
 		body.collision_mask = 0
-		add_child(body)
 		var aabb: AABB = data.aabb
 		for it in list:
 			var sc: float = it.scale
@@ -668,57 +910,98 @@ func _scatter_rocks() -> void:
 			cs.transform = Transform3D(b, Vector3(it.pos) + b * (aabb.get_center() * sc))
 			body.add_child(cs)
 			stats.colliders += 1
+		add_child(body)
 
 
 func _build_wild_loot() -> void:
-	# A few weapons out in the open so a bad drop still has a chance.
-	for i in 26:
-		var spot := _random_land_point(30.0, 380.0)
-		if spot == Vector3.ZERO:
+	# Weapons out in the open so a bad drop still has a chance.
+	var lrng := RandomNumberGenerator.new()
+	lrng.seed = rng.seed + 77
+	for i in 230:
+		var c := terrain.random_land_point(lrng, Terrain.WATER_LEVEL + 1.4, 0.35)
+		if _near_village(c.x, c.y, 6.0):
 			continue
-		loot_points.append({"pos": spot + Vector3(0, 0.08, 0), "kind": "weapon", "village": false})
-	for i in 34:
-		var spot := _random_land_point(20.0, 400.0)
-		if spot == Vector3.ZERO:
-			continue
-		loot_points.append({"pos": spot + Vector3(0, 0.08, 0), "kind": "gear", "village": false})
+		loot_points.append({"pos": Vector3(c.x, terrain.height_at(c.x, c.y) + 0.08, c.y),
+			"kind": "weapon" if i % 5 < 2 else "gear", "village": false})
 
 
 func _build_spawn_points() -> void:
-	for i in 40:
-		var spot := _random_land_point(0.0, 300.0)
-		if spot == Vector3.ZERO:
+	var srng := RandomNumberGenerator.new()
+	srng.seed = rng.seed + 78
+	for i in 60:
+		var c := terrain.random_land_point(srng, Terrain.WATER_LEVEL + 1.4, 0.35)
+		if _near_village(c.x, c.y, 6.0):
 			continue
-		if _near_village(spot.x, spot.z, 6.0):
-			continue
-		spawn_points.append(spot + Vector3(0, 0.2, 0))
+		spawn_points.append(Vector3(c.x, terrain.height_at(c.x, c.y) + 0.2, c.y))
 
 
-func _random_land_point(min_dist: float, max_dist: float) -> Vector3:
-	for attempt in 60:
-		var ang := rng.randf() * TAU
-		var dist := rng.randf_range(min_dist, max_dist)
-		var x := cos(ang) * dist
-		var z := sin(ang) * dist
-		var h := terrain.height_at(x, z)
-		if h < Terrain.WATER_LEVEL + 1.4:
-			continue
-		if terrain.slope_at(x, z) > 0.35:
-			continue
-		return Vector3(x, h, z)
-	return Vector3.ZERO
+## Coarse buckets of settlements, POIs and landmark yards, and of road
+## segments, so scatter checks only look at what is nearby.
+func _build_grids() -> void:
+	var add := func(grid: Dictionary, c: Vector2, reach: float, item: Variant) -> void:
+		var x0 := int(floor((c.x - reach) / GRID))
+		var x1 := int(floor((c.x + reach) / GRID))
+		var z0 := int(floor((c.y - reach) / GRID))
+		var z1 := int(floor((c.y + reach) / GRID))
+		for gz in range(z0, z1 + 1):
+			for gx in range(x0, x1 + 1):
+				var k := Vector2i(gx, gz)
+				if not grid.has(k):
+					grid[k] = []
+				grid[k].append(item)
+	for v in villages.village_pads:
+		add.call(_pad_grid, v.center, float(v.radius) + 45.0, {"center": v.center, "radius": float(v.radius), "kind": "village"})
+	for p in villages.poi_pads:
+		add.call(_pad_grid, p.center, float(p.radius) + 12.0, {"center": p.center, "radius": float(p.radius), "kind": "poi"})
+	for a in villages.landmarks.clear_areas:
+		add.call(_pad_grid, a.center, float(a.radius) + 12.0, {"center": a.center, "radius": float(a.radius), "kind": "poi"})
+	for r in villages.roads:
+		var a: Vector2 = r.a
+		var b: Vector2 = r.b
+		var w: float = r.w
+		var n := int(a.distance_to(b) / (GRID * 0.5)) + 1
+		var seen := {}
+		for i in n + 1:
+			var p := a.lerp(b, float(i) / float(n))
+			var k := Vector2i(int(floor(p.x / GRID)), int(floor(p.y / GRID)))
+			for dz in range(-1, 2):
+				for dx in range(-1, 2):
+					var kk := k + Vector2i(dx, dz)
+					if seen.has(kk):
+						continue
+					seen[kk] = true
+					if not _road_grid.has(kk):
+						_road_grid[kk] = []
+					_road_grid[kk].append(r)
+
+
+func _road_distance(x: float, z: float) -> float:
+	var k := Vector2i(int(floor(x / GRID)), int(floor(z / GRID)))
+	if not _road_grid.has(k):
+		return 1e9
+	var p := Vector2(x, z)
+	var best := 1e9
+	for r in _road_grid[k]:
+		var a: Vector2 = r.a
+		var b: Vector2 = r.b
+		var ab := b - a
+		var t := clampf((p - a).dot(ab) / maxf(0.001, ab.length_squared()), 0.0, 1.0)
+		best = minf(best, p.distance_to(a + ab * t) - float(r.w))
+	return best
 
 
 func _near_village(x: float, z: float, radius: float) -> bool:
-	for v in villages.village_pads:
-		var c: Vector2 = v.center
-		# `radius` is tuned for a standard 31 m village; scale for towns/farms.
-		if Vector2(x, z).distance_to(c) < radius + float(v.radius) - 31.0:
-			return true
-	# Towers and ruins keep a clear yard of their own.
-	for p in villages.poi_pads:
-		var c: Vector2 = p.center
-		if Vector2(x, z).distance_to(c) < float(p.radius) + minf(radius, 6.0):
+	var k := Vector2i(int(floor(x / GRID)), int(floor(z / GRID)))
+	if not _pad_grid.has(k):
+		return false
+	var p := Vector2(x, z)
+	for it in _pad_grid[k]:
+		var c: Vector2 = it.center
+		if it.kind == "village":
+			# `radius` is tuned for a standard 31 m village; scale for towns/farms.
+			if p.distance_to(c) < radius + float(it.radius) - 31.0:
+				return true
+		elif p.distance_to(c) < float(it.radius) + minf(radius, 6.0):
 			return true
 	return false
 
@@ -736,11 +1019,11 @@ func _build_distant_islands() -> void:
 	sand.roughness = 1.0
 	for i in 9:
 		var ang := TAU * float(i) / 9.0 + rng.randf_range(-0.2, 0.2)
-		var dist := rng.randf_range(900.0, 1500.0)
-		var height := rng.randf_range(30.0, 90.0)
-		var radius := rng.randf_range(120.0, 260.0)
+		var dist := rng.randf_range(2100.0, 3000.0)
+		var height := rng.randf_range(50.0, 150.0)
+		var radius := rng.randf_range(200.0, 420.0)
 		var c := Vector3(cos(ang) * dist, 0.0, sin(ang) * dist)
-		var parts := rng.randi_range(2, 4)
+		var parts := rng.randi_range(3, 6)
 		for j in parts:
 			var cone := CylinderMesh.new()
 			var r := radius * rng.randf_range(0.45, 0.9)
@@ -760,8 +1043,8 @@ func _build_distant_islands() -> void:
 			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 			add_child(mi)
 		var beach := CylinderMesh.new()
-		beach.top_radius = radius * 1.08
-		beach.bottom_radius = radius * 1.15
+		beach.top_radius = radius * 0.86
+		beach.bottom_radius = radius * 0.95
 		beach.height = 3.0
 		beach.radial_segments = 32
 		var bi := MeshInstance3D.new()
@@ -803,11 +1086,11 @@ func _build_clouds() -> void:
 	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 	mat.disable_receive_shadows = true
 	mat.vertex_color_use_as_albedo = true
-	for i in 26:
-		var dist := rng.randf_range(150.0, 1100.0)
+	for i in 64:
+		var dist := rng.randf_range(200.0, 2600.0)
 		var ang := rng.randf() * TAU
-		var base := Vector3(cos(ang) * dist, rng.randf_range(150.0, 230.0), sin(ang) * dist)
-		var size := rng.randf_range(50.0, 110.0)
+		var base := Vector3(cos(ang) * dist, rng.randf_range(330.0, 460.0), sin(ang) * dist)
+		var size := rng.randf_range(60.0, 140.0)
 		# A cloud is a cluster of overlapping puffs.
 		for j in rng.randi_range(4, 7):
 			var s := Sprite3D.new()
@@ -822,43 +1105,64 @@ func _build_clouds() -> void:
 
 
 func _build_minimap() -> void:
-	var res := 512
-	var img := Image.create(res, res, false, Image.FORMAT_RGBA8)
-	for py in res:
-		for px in res:
-			var x := (float(px) / float(res - 1) - 0.5) * Terrain.SIZE
-			var z := (float(py) / float(res - 1) - 0.5) * Terrain.SIZE
-			var h := terrain.height_at(x, z)
-			var n := terrain.normal_at(x, z)
-			var slope := 1.0 - n.y
+	# Shade straight from the height samples (one pixel per 6 m grid point),
+	# then upscale and draw roads and buildings at full resolution on top.
+	var n := Terrain.RES
+	var img := Image.create(n, n, false, Image.FORMAT_RGBA8)
+	var hs := terrain.heights
+	var light := Vector3(-0.6, 0.75, -0.5).normalized()
+	for iz in n:
+		var z := -Terrain.HALF + float(iz) * Terrain.STEP
+		for ix in n:
+			var x := -Terrain.HALF + float(ix) * Terrain.STEP
+			var h: float = hs[iz * n + ix]
+			var hl: float = hs[iz * n + maxi(ix - 1, 0)]
+			var hr: float = hs[iz * n + mini(ix + 1, n - 1)]
+			var hd: float = hs[maxi(iz - 1, 0) * n + ix]
+			var hu: float = hs[mini(iz + 1, n - 1) * n + ix]
+			var nrm := Vector3(hl - hr, 2.0 * Terrain.STEP, hd - hu).normalized()
+			var slope := 1.0 - nrm.y
+			var wl := terrain.water_surface_at(x, z)
 			var c: Color
-			if h < Terrain.WATER_LEVEL:
-				var depth := clampf((Terrain.WATER_LEVEL - h) / 9.0, 0.0, 1.0)
-				c = Color(0.13, 0.30, 0.40).lerp(Color(0.07, 0.18, 0.28), depth)
-			elif h < Terrain.WATER_LEVEL + 1.8:
+			if h < wl:
+				var depth := clampf((wl - h) / 9.0, 0.0, 1.0)
+				c = Color(0.16, 0.36, 0.46).lerp(Color(0.07, 0.18, 0.28), depth)
+			elif h < wl + 1.6:
 				c = Color(0.78, 0.72, 0.55)
-			elif slope > 0.42:
-				c = Color(0.42, 0.41, 0.38)
+			elif slope > 0.45:
+				c = Color(0.46, 0.44, 0.40)
 			else:
-				var hv := clampf((h - 2.0) / 40.0, 0.0, 1.0)
-				c = Color(0.31, 0.44, 0.22).lerp(Color(0.46, 0.53, 0.30), hv)
-			var shade := 1.0 + (terrain.macro.get_noise_2d(x, z)) * 0.06
-			if h >= Terrain.WATER_LEVEL:
-				# Hillshade from the north-west so ridges and high ground read.
-				var light := Vector3(-0.6, 0.75, -0.5).normalized()
-				var ndl := clampf(n.dot(light), 0.0, 1.0)
-				shade *= 0.55 + ndl * 0.6
-				# Faint contour every 8 m.
-				if fmod(h, 8.0) < 0.45 and h > 3.0:
-					shade *= 0.88
-				# Forest tint.
+				var hv := clampf((h - 2.0) / 70.0, 0.0, 1.0)
+				c = Color(0.31, 0.44, 0.22).lerp(Color(0.50, 0.55, 0.33), hv)
 				if terrain.forest_density(x, z) > 0.62:
-					c = c.lerp(Color(0.18, 0.32, 0.16), 0.35)
-				var rd := road_at(x, z)
-				if rd > 0.3:
-					c = c.lerp(Color(0.62, 0.52, 0.38), 0.85)
-			c = Color(c.r * shade, c.g * shade, c.b * shade, 1.0)
-			img.set_pixel(px, py, c)
+					c = c.lerp(Color(0.17, 0.31, 0.15), 0.4)
+			if h >= wl:
+				var shade := 0.55 + clampf(nrm.dot(light), 0.0, 1.0) * 0.6
+				if fmod(h, 10.0) < 0.6 and h > 3.0 and slope < 0.45:
+					shade *= 0.9
+				c = Color(c.r * shade, c.g * shade, c.b * shade)
+			img.set_pixel(ix, iz, Color(c.r, c.g, c.b, 1.0))
+	var res := 1024
+	img.resize(res, res, Image.INTERPOLATE_BILINEAR)
+	# Roads.
+	var k := float(res) / Terrain.SIZE
+	var road_col := Color(0.64, 0.54, 0.40)
+	for r in villages.roads:
+		var a: Vector2 = r.a
+		var b: Vector2 = r.b
+		var w: float = r.w + (1.0 if r.get("bridge", false) else 0.4)
+		var col: Color = Color(0.78, 0.74, 0.66) if r.get("bridge", false) else road_col
+		var steps := int(a.distance_to(b) * k) + 1
+		for i in steps + 1:
+			var p := a.lerp(b, float(i) / float(steps))
+			var px := (p + Vector2.ONE * Terrain.HALF) * k
+			var rad := maxf(1.0, w * k)
+			for oy in range(int(-rad), int(rad) + 1):
+				for ox in range(int(-rad), int(rad) + 1):
+					var qx := int(px.x) + ox
+					var qy := int(px.y) + oy
+					if qx >= 0 and qy >= 0 and qx < res and qy < res and ox * ox + oy * oy <= rad * rad + 0.5:
+						img.set_pixel(qx, qy, col)
 	# Buildings as small dark blocks, like a real map.
 	for h in villages.houses:
 		var hc: Vector2 = h.center
@@ -868,6 +1172,11 @@ func _build_minimap() -> void:
 	for p in villages.poi_pads:
 		if p.type == "ruin":
 			_map_rect(img, res, p.center, Vector2(4.0, 3.0), Color(0.45, 0.42, 0.38))
+	var lm := Color(0.30, 0.27, 0.25)
+	_map_rect(img, res, terrain.castle_c, Vector2(24.0, 24.0), lm)
+	_map_rect(img, res, terrain.temple_c, Vector2(16.0, 16.0), lm)
+	_map_rect(img, res, terrain.lighthouse_c, Vector2(4.0, 4.0), Color(0.85, 0.82, 0.78))
+	_map_rect(img, res, terrain.henge_c, Vector2(5.0, 5.0), Color(0.6, 0.58, 0.55))
 	minimap_texture = ImageTexture.create_from_image(img)
 
 

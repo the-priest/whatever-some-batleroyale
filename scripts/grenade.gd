@@ -10,6 +10,8 @@ const DAMAGE := 125.0
 
 var game: Node = null
 var thrower: Node = null
+## Mirrored from another machine: explodes for show, damage happens there.
+var visual := false
 var _t := 0.0
 var _done := false
 
@@ -60,12 +62,14 @@ func _explode() -> void:
 	var pos := global_position
 	var space := get_world_3d().direct_space_state
 	var victims: Array = []
-	if game != null:
+	if game != null and not visual:
 		if game.player != null:
 			victims.append(game.player)
 		for b in game.bots:
 			if is_instance_valid(b):
 				victims.append(b)
+		for h in get_tree().get_nodes_in_group("humans"):
+			victims.append(h)
 	for v in victims:
 		if not bool(v.get("alive")):
 			continue

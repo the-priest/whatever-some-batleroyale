@@ -43,7 +43,8 @@ var ballistics: Ballistics
 var menu_cam: Camera3D
 
 var phase := "boot"      # boot | menu | plane | playing | end
-var match_size := 50
+var match_size := 64
+const PLANE_ALT := 520.0
 var MAX_BOTS := 49
 var lobby_ready := false
 var seed_value := 20261101
@@ -81,6 +82,14 @@ var _loot_label_t := 0.0
 var _last_best: LootPickup = null
 var _lit_loot: Array = []
 var _wind: AudioStreamPlayer3D = null
+var net: Net
+var lobby: LobbyUI
+## Remote humans in the current LAN match: peer id -> puppet.
+var humans: Dictionary = {}
+var loot_by_id: Dictionary = {}
+var _next_loot_id := 1
+var _net_dummy: Node
+var _net_setup_ok := false
 
 
 func _ready() -> void:
@@ -104,6 +113,27 @@ func _ready() -> void:
 	hud.loadout_changed.connect(_on_loadout_changed)
 	hud.show_menu("GENERATING ISLAND ...")
 	_load_settings()
+	net = Net.new()
+	net.name = "Net"
+	net.game = self
+	add_child(net)
+	lobby = LobbyUI.new()
+	lobby.setup(hud, net)
+	hud.root.add_child(lobby)
+	lobby.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	lobby.z_index = 30
+	lobby.host_pressed.connect(func(_n): _net_host())
+	lobby.join_pressed.connect(func(a, _n): net.join(a))
+	lobby.start_pressed.connect(_net_host_start)
+	lobby.leave_pressed.connect(_net_leave)
+	lobby.squad_toggled.connect(func(v): net.set_squad(v))
+	hud.host_lan_pressed.connect(_net_host)
+	hud.join_lan_pressed.connect(func(): lobby.show_join())
+	net.multiplayer.connected_to_server.connect(func(): lobby.show_lobby())
+	net.left_session.connect(_on_left_session)
+	_net_dummy = Node.new()
+	_net_dummy.set_script(load("res://scripts/net_name.gd"))
+	add_child(_net_dummy)
 
 	menu_cam = Camera3D.new()
 	menu_cam.fov = 68.0
@@ -118,17 +148,7 @@ func _ready() -> void:
 	lobby_ready = true
 	phase = "menu"
 	_show_menu()
-	hud.set_minimap(world.minimap_texture)
-	var places: Array = []
-	for v in world.villages.village_pads:
-		if str(v.name) != "":
-			places.append([v.name, v.center, "town"])
-	for t in world.villages.towers:
-		places.append(["LOOKOUT", t.center, "tower"])
-	for p in world.villages.poi_pads:
-		if p.type == "ruin":
-			places.append(["RUINS", p.center, "ruin"])
-	hud.set_places(places)
+	_refresh_places()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	if OS.get_cmdline_user_args().has("--smoke"):
 		_run_smoke()
@@ -140,6 +160,26 @@ func _ready() -> void:
 		_run_perf()
 	elif OS.get_cmdline_user_args().has("--shot"):
 		_run_shot()
+	elif OS.get_cmdline_user_args().has("--nethost"):
+		_run_net_test(true)
+	elif OS.get_cmdline_user_args().has("--netjoin"):
+		_run_net_test(false)
+
+
+func _refresh_places() -> void:
+	hud.set_minimap(world.minimap_texture)
+	var places: Array = []
+	for v in world.villages.village_pads:
+		if str(v.name) != "":
+			places.append([v.name, v.center, "town"])
+	for t in world.villages.towers:
+		places.append(["LOOKOUT", t.center, "tower"])
+	for p in world.villages.poi_pads:
+		if p.type == "ruin":
+			places.append(["RUINS", p.center, "ruin"])
+	for l in world.villages.landmarks.labels:
+		places.append([l[0], l[1], "landmark"])
+	hud.set_places(places)
 
 
 func _show_menu() -> void:
@@ -180,7 +220,7 @@ func _load_settings() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(SETTINGS_PATH) == OK:
 		mouse_sens = float(cfg.get_value("input", "sensitivity", 1.0))
-		match_size = int(cfg.get_value("match", "players", 50))
+		match_size = int(cfg.get_value("match", "players", 64))
 		volume = float(cfg.get_value("audio", "volume", 0.8))
 		fov = float(cfg.get_value("video", "fov", 82.0))
 		loadout_primary = str(cfg.get_value("loadout", "primary", loadout_primary))
@@ -191,7 +231,7 @@ func _load_settings() -> void:
 		loadout_primary = "carbine"
 	if not Weapons.DEFS.has(loadout_secondary):
 		loadout_secondary = "pistol"
-	match_size = clampi(match_size, 10, 60)
+	match_size = clampi(match_size, 10, 100)
 	MAX_BOTS = match_size - 1
 	hud.set_settings(mouse_sens, volume, fov, match_size)
 	hud.set_loadout(loadout_primary, loadout_secondary, loadout_optic, loadout_enabled)
@@ -267,6 +307,9 @@ func _resume() -> void:
 func _quit_to_menu() -> void:
 	hud.show_pause(false)
 	get_tree().paused = false
+	if net != null and net.active and net.hosting and net.match_running:
+		net.match_running = false
+		net._abort.rpc()
 	_cleanup_match()
 	player.process_mode = Node.PROCESS_MODE_DISABLED
 	player.alive = false
@@ -276,12 +319,20 @@ func _quit_to_menu() -> void:
 	menu_cam.make_current()
 	_show_menu()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	if net != null and net.active:
+		lobby.show_lobby()
 
 
 # -------------------------------------------------------------------- match --
 func _start_match() -> void:
 	if not lobby_ready:
 		return
+	# In a LAN game only the host starts matches; clients follow its setup.
+	if net != null and net.active and not net.hosting:
+		return
+	if net != null and net.active:
+		lobby.close()
+		humans.clear()
 	sfx.play_ui("ui_click", -6.0)
 	hud.hide_menu()
 	hud.hide_end()
@@ -294,9 +345,10 @@ func _start_match() -> void:
 	# Flight path across the island, offset so it does not always cross centre.
 	var ang := randf() * TAU
 	var dir := Vector3(cos(ang), 0.0, sin(ang))
-	var side := Vector3(-dir.z, 0.0, dir.x) * randf_range(-110.0, 110.0)
-	plane_start = -dir * 600.0 + side + Vector3(0, 198.0, 0)
-	plane_end = dir * 600.0 + side + Vector3(0, 188.0, 0)
+	var side := Vector3(-dir.z, 0.0, dir.x) * randf_range(-320.0, 320.0)
+	var mid := Vector3(Zone.MAP_MID.x, 0.0, Zone.MAP_MID.y)
+	plane_start = mid - dir * 1450.0 + side + Vector3(0, PLANE_ALT + 8.0, 0)
+	plane_end = mid + dir * 1450.0 + side + Vector3(0, PLANE_ALT, 0)
 	plane = DropPlane.new()
 	plane.name = "Plane"
 	add_child(plane)
@@ -342,8 +394,7 @@ func _start_match() -> void:
 	var route_len2 := maxf(1.0, route.x * route.x + route.z * route.z)
 	for i in range(MAX_BOTS):
 		var b := Bot.new()
-		var target := _random_ground_point(390.0)
-		var jump_t := randf_range(0.05, 0.90)
+		var target := _bot_drop_point()
 		# Spread the lobby out: no two landing spots within 45 m.
 		for tries in 12:
 			var clash := false
@@ -353,7 +404,8 @@ func _start_match() -> void:
 					break
 			if not clash:
 				break
-			target = _random_ground_point(390.0)
+			target = _bot_drop_point()
+		var jump_t := _route_fraction(target)
 		if weapon_spots.size() > 0 and randf() < 0.3:
 			var best_spot: Vector3
 			var best_cost := 1.0e9
@@ -385,12 +437,14 @@ func _start_match() -> void:
 	zone.name = "Zone"
 	zone.terrain = terrain
 	add_child(zone)
-	zone.start(430.0)
+	zone.start(1250.0)
 	zone.set_process(false)
 	zone.phase_changed.connect(_on_zone_phase)
 	zone_was_warning = false
 
 	alive = MAX_BOTS + 1
+	if net != null and net.active:
+		alive += net.roster.size() - 1
 	total_players = alive
 	player_kills = 0
 	damage_dealt = 0.0
@@ -398,6 +452,13 @@ func _start_match() -> void:
 	survive_time = 0.0
 	zone_acc = 0.0
 	winner = false
+	if net != null and net.active:
+		_net_setup_ok = true
+		_net_send_setup()
+	_after_match_setup()
+
+
+func _after_match_setup() -> void:
 	last_hud_alive = -1
 	end_cam_target = null
 	hud.set_gameplay_visible(true)
@@ -413,22 +474,40 @@ func _start_match() -> void:
 	_attach_plane_audio()
 
 
-func _spawn_loot(kind: String, id: String, pos: Vector3, mag := -1, reserve := -1) -> LootPickup:
+func _spawn_loot(kind: String, id: String, pos: Vector3, mag := -1, reserve := -1, net_id := 0, announce := true) -> LootPickup:
 	var l := LootPickup.new()
 	l.setup(kind, id, 1)
 	l.mag_override = mag
 	l.reserve_override = reserve
 	l.position = pos
+	if net_id == 0:
+		if net != null and net.active and _net_setup_ok:
+			net_id = net.new_loot_id()
+		else:
+			net_id = _next_loot_id
+			_next_loot_id += 1
+	l.net_id = net_id
 	add_child(l)
 	loot_pool.append(l)
+	loot_by_id[net_id] = l
+	# Loot that appears mid-match (drops, crates, airdrops) is announced.
+	if announce and net_on():
+		net.queue_loot([net_id, kind, id, pos, mag, reserve, false])
 	return l
 
 
 func _cleanup_match() -> void:
+	_net_setup_ok = false
 	for l in loot_pool:
 		if is_instance_valid(l):
 			l.queue_free()
 	loot_pool.clear()
+	loot_by_id.clear()
+	_next_loot_id = 1
+	for id in humans:
+		if is_instance_valid(humans[id]):
+			humans[id].queue_free()
+	humans.clear()
 	for b in bots:
 		if is_instance_valid(b):
 			b.queue_free()
@@ -499,18 +578,43 @@ func _weighted_weapon() -> String:
 	return "pistol"
 
 
-func _random_ground_point(max_r: float) -> Vector3:
-	for i in range(40):
+## A walkable dry spot within `max_r` of `center` (the whole map when the
+## radius is large).
+func _random_ground_point(max_r: float, center := Zone.MAP_MID) -> Vector3:
+	for i in range(80):
 		var a := randf() * TAU
 		var r := sqrt(randf()) * max_r
-		var x := cos(a) * r
-		var z := sin(a) * r
+		var x := center.x + cos(a) * r
+		var z := center.y + sin(a) * r
 		if terrain == null:
 			return Vector3(x, 40, z)
 		var h := terrain.height_at(x, z)
-		if h > 1.4 and terrain.slope_at(x, z) < 0.45:
+		if h > terrain.water_surface_at(x, z) + 0.5 and terrain.slope_at(x, z) < 0.45:
 			return Vector3(x, h, z)
-	return Vector3(0, 60, 0)
+	var c := Vector2(terrain.castle_c) if terrain != null else Vector2.ZERO
+	return Vector3(c.x, (terrain.castle_h if terrain != null else 60.0), c.y)
+
+
+## Where a bot wants to land: mostly within glide range of the flight path,
+## like players who jump when the plane passes somewhere they like.
+func _bot_drop_point() -> Vector3:
+	var route := plane_end - plane_start
+	for i in 30:
+		var p := _random_ground_point(1250.0)
+		var t := _route_fraction(p)
+		var rp := plane_start + route * t
+		var off := Vector2(p.x - rp.x, p.z - rp.z).length()
+		if off < 650.0 or randf() < 0.08:
+			return p
+	return _random_ground_point(1250.0)
+
+
+## Fraction along the flight path closest to a point, kept off the very ends.
+func _route_fraction(p: Vector3) -> float:
+	var route := plane_end - plane_start
+	var len2 := maxf(1.0, route.x * route.x + route.z * route.z)
+	var t := ((p.x - plane_start.x) * route.x + (p.z - plane_start.z) * route.z) / len2
+	return clampf(t + randf_range(-0.03, 0.03), 0.04, 0.94)
 
 
 ## What the ground under a point is made of, for footsteps.
@@ -549,12 +653,7 @@ func _process(delta: float) -> void:
 	match phase:
 		"menu":
 			menu_t += delta
-			menu_angle += delta * 0.045
-			var r := 300.0
-			var cam_pos := Vector3(cos(menu_angle) * r, 138.0 + sin(menu_t * 0.25) * 10.0, sin(menu_angle) * r)
-			menu_cam.global_position = cam_pos
-			menu_cam.look_at(Vector3(0, 18.0, 0), Vector3.UP)
-			menu_cam.fov = lerpf(menu_cam.fov, 62.0, delta * 0.8)
+			_menu_flyby(delta)
 		"plane":
 			_follow_plane_cam(delta)
 			_update_airborne_bots()
@@ -687,7 +786,7 @@ func _update_airborne_bots() -> void:
 	for b in bots:
 		if not is_instance_valid(b):
 			continue
-		if b.state == Bot.State.PLANE and prog >= float(b.get_meta("jump_at", 0.5)):
+		if b.state == Bot.State.PLANE and not b.puppet and prog >= float(b.get_meta("jump_at", 0.5)):
 			b.jump_from_plane()
 
 
@@ -700,11 +799,11 @@ func _update_play(delta: float) -> void:
 	if player == null or not is_instance_valid(player):
 		return
 	_update_airborne_bots()
-	if zone != null and not zone.is_processing() and (player.landed or match_time > 50.0):
+	if zone != null and not zone.is_processing() and (player.landed or match_time > 50.0) and not net_is_client():
 		zone.set_process(true)
 	hud.set_crosshair_visible(player.mode == Player.Mode.GROUND and player.has_gun() and player.aim_blend < 0.6)
 	_update_world_sim(delta)
-	if zone != null and zone.is_processing():
+	if zone != null and (zone.is_processing() or net_is_client()):
 		if zone.warning and not zone_was_warning:
 			zone_was_warning = true
 			sfx.play_ui("zone_warn", -8.0)
@@ -719,14 +818,14 @@ func _update_play(delta: float) -> void:
 	_update_progress()
 	hud.set_crosshair_spread(_crosshair_spread())
 
-	if alive <= 1 and player.alive and phase == "playing":
+	if alive <= 1 and player.alive and phase == "playing" and not net_on():
 		_win()
 
 
 ## Zone damage for everyone; keeps running behind the end screen so the
 ## spectated fight still plays out.
 func _update_world_sim(delta: float) -> void:
-	if zone == null or not zone.is_processing():
+	if zone == null or (not zone.is_processing() and not net_is_client()):
 		return
 	zone_acc += delta
 	if zone_acc < 1.0:
@@ -736,6 +835,8 @@ func _update_world_sim(delta: float) -> void:
 	if phase == "playing" and player.alive and zone.is_outside(player.global_position) and player.mode == Player.Mode.GROUND:
 		player.take_damage(dps, Vector3.ZERO, false, null)
 		hud.show_notice("YOU ARE IN THE STORM  —  FOLLOW THE ARROW ON THE COMPASS", 1.4)
+	if net_is_client():
+		return
 	for b in bots:
 		if is_instance_valid(b) and b.alive and b.state == Bot.State.GROUND and zone.is_outside(b.global_position):
 			b.take_damage(dps, b.global_position, false, null)
@@ -749,7 +850,7 @@ func _on_zone_phase(p: int, warning: bool) -> void:
 		sfx.play_ui("zone_warn", -6.0)
 	elif not zone.finished:
 		hud.show_notice("NEXT SAFE ZONE MARKED  —  PRESS M FOR THE MAP", 3.0)
-		if p == 1 or p == 3:
+		if p in [1, 2, 4, 5] and not net_is_client():
 			_spawn_airdrop()
 
 
@@ -869,10 +970,19 @@ func _update_minimap() -> void:
 		if is_instance_valid(a):
 			marks.append(a.global_position)
 	var zc := zone.center if zone != null else Vector2.ZERO
-	var zr := zone.radius if zone != null else 430.0
+	var zr := zone.radius if zone != null else 1250.0
 	var nc := zone.next_center() if zone != null else zc
 	var nr := zone.next_radius() if zone != null else zr
 	hud.update_minimap(player.global_position, zc, zr, nc, nr, marks)
+	if not humans.is_empty() and net != null and net.squad:
+		var m: Array = []
+		for id in humans:
+			var h = humans[id]
+			if h != null and is_instance_valid(h) and (h as Bot).alive:
+				m.append([(h as Bot).bot_name, Vector2(h.global_position.x, h.global_position.z)])
+		hud.set_mates(m)
+	else:
+		hud.set_mates([])
 
 
 func _update_mouse_capture() -> void:
@@ -884,6 +994,32 @@ func _update_mouse_capture() -> void:
 	elif phase == "menu" or phase == "end":
 		if Input.mouse_mode != Input.MOUSE_MODE_VISIBLE:
 			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+## Menu backdrop: slow drifting shots of the island's landmarks.
+const MENU_SHOTS := ["castle", "falls", "bridge", "lighthouse", "temple", "plateau", "gorge", "henge"]
+var _menu_shot := -1
+var _menu_shot_t := 0.0
+var _menu_pose: Array = []
+
+
+func _menu_flyby(delta: float) -> void:
+	if terrain == null:
+		return
+	_menu_shot_t -= delta
+	if _menu_shot < 0 or _menu_shot_t <= 0.0:
+		_menu_shot = (_menu_shot + 1) % MENU_SHOTS.size()
+		_menu_shot_t = 13.0
+		_menu_pose = _landmark_pose(MENU_SHOTS[_menu_shot])
+	var pos: Vector3 = _menu_pose[0]
+	var look: Vector3 = _menu_pose[1]
+	# Orbit slowly around the subject and rise a little.
+	var k := 13.0 - _menu_shot_t
+	var off := pos - look
+	off = off.rotated(Vector3.UP, k * 0.018)
+	menu_cam.global_position = look + off + Vector3(0, k * 0.35, 0)
+	menu_cam.look_at(look, Vector3.UP)
+	menu_cam.fov = 58.0
 
 
 func _update_end_cam(delta: float) -> void:
@@ -921,7 +1057,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		if phase == "plane" and player != null and player.mode == Player.Mode.PLANE:
 			_player_jump(false)
 		elif phase == "end":
-			_start_match()
+			if net != null and net.active and not net.hosting:
+				hud.show_notice("WAITING FOR THE HOST TO START THE NEXT MATCH", 2.0)
+			else:
+				_start_match()
 		return
 	if phase == "end" and event.is_action_pressed("pause"):
 		_quit_to_menu()
@@ -976,13 +1115,21 @@ func _on_player_damaged(amount: float, from_dir: Vector3) -> void:
 func _on_player_died(killer: String) -> void:
 	if phase == "end":
 		return
+	if net_on():
+		var k = player.last_killer
+		var kk := node_key(k)
+		var wpn := ""
+		if k is Bot and is_instance_valid(k) and (k as Bot).weapon_id != "":
+			wpn = str(Weapons.def((k as Bot).weapon_id)["short"])
+		net.report_death(kk, _name_for_key(kk) if kk != "" else ("THE STORM" if killer == "THE STORM" else killer), wpn)
 	phase = "end"
 	player.alive = false
 	hud.pause_allowed = false
 	hud.set_storm(false)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	var placement := maxi(1, alive)
-	alive = maxi(0, alive - 1)
+	if not net_on():
+		alive = maxi(0, alive - 1)
 	_stop_ambience()
 	hud.killfeed("%s   >   YOU" % killer, HUD.DANGER)
 	hud.show_death(killer, placement, _stats())
@@ -1005,6 +1152,16 @@ func _on_notice(text: String) -> void:
 
 func _on_bot_eliminated(victim: Bot, killer: String) -> void:
 	alive = maxi(0, alive - 1)
+	if net_on() and net.hosting:
+		var src0 = victim.last_killer_node
+		var kkey := node_key(src0)
+		var wpn := ""
+		if src0 is Bot and is_instance_valid(src0) and (src0 as Bot).weapon_id != "":
+			wpn = str(Weapons.def((src0 as Bot).weapon_id)["short"])
+		elif src0 == player and player.has_gun():
+			wpn = str(Weapons.def(player.current_id())["short"])
+		net.send_elim({"victim": "b%d" % bots.find(victim), "victim_name": victim.bot_name, "killer": kkey,
+			"killer_name": net.my_name if src0 == player else killer, "weapon": wpn, "alive": alive})
 	if OS.get_cmdline_user_args().has("--sim"):
 		var src = victim.last_killer_node
 		var dist := -1.0
@@ -1040,7 +1197,9 @@ func _on_bot_eliminated(victim: Bot, killer: String) -> void:
 			hud.set_spectate("SPECTATING  %s" % (src as Bot).bot_name)
 		else:
 			hud.set_spectate("")
-	if alive <= 1 and player != null and player.alive and phase == "playing":
+	if net_on():
+		_net_check_win()
+	elif alive <= 1 and player != null and player.alive and phase == "playing":
 		_win()
 
 
@@ -1160,11 +1319,14 @@ func _spawn_airdrop() -> void:
 		var a := randf() * TAU
 		var p := c + Vector2(cos(a), sin(a)) * sqrt(randf()) * r
 		var h := terrain.height_at(p.x, p.y)
-		if h > Terrain.WATER_LEVEL + 1.0 and terrain.slope_at(p.x, p.y) < 0.4:
+		if h > terrain.water_surface_at(p.x, p.y) + 1.0 and terrain.slope_at(p.x, p.y) < 0.4:
 			var drop := Airdrop.new()
-			drop.setup(self, p, ground_at(Vector3(p.x, h + 20.0, p.y)).y)
+			var gy := ground_at(Vector3(p.x, h + 20.0, p.y)).y
+			drop.setup(self, p, gy)
 			add_child(drop)
 			airdrops.append(drop)
+			if net_on():
+				net.send_airdrop(p, gy)
 			hud.show_big("SUPPLY DROP INCOMING", Color(1.0, 0.45, 0.3), 2.6)
 			hud.show_notice("HIGH-TIER LOOT  —  MARKED ON THE MAP", 3.0)
 			sfx.play_ui("zone_warn", -10.0)
@@ -1172,6 +1334,8 @@ func _spawn_airdrop() -> void:
 
 
 func on_airdrop_landed(drop: Airdrop) -> void:
+	if net_is_client():
+		return
 	var base := drop.global_position
 	var gun: String = AIRDROP_WEAPONS[randi() % AIRDROP_WEAPONS.size()]
 	var items: Array = [["weapon", gun], ["armor", "3"], ["helmet", "3"], ["med", ""], ["scope", "8x" if Weapons.cls(gun) in ["sniper", "dmr"] else "4x"], ["ammo", Weapons.caliber(gun)], ["ammo", Weapons.caliber(gun)]]
@@ -1340,9 +1504,9 @@ func play_sfx_at(name: String, pos: Vector3, vol := 0.0) -> void:
 
 
 func clamp_airborne(pos: Vector3, vel: Vector3, delta: float) -> Vector3:
-	var flat := Vector2(pos.x, pos.z)
+	var flat := Vector2(pos.x, pos.z) - Zone.MAP_MID
 	var d := flat.length()
-	if d > 420.0:
+	if d > 1350.0:
 		var inward := -flat / d
 		vel.x += inward.x * 30.0 * delta
 		vel.z += inward.y * 30.0 * delta
@@ -1352,7 +1516,7 @@ func clamp_airborne(pos: Vector3, vel: Vector3, delta: float) -> Vector3:
 func respawn_player() -> void:
 	if player == null:
 		return
-	var p := _random_ground_point(300.0)
+	var p := _random_ground_point(900.0)
 	player.global_position = p + Vector3(0, 3, 0)
 	player.velocity = Vector3.ZERO
 
@@ -1453,6 +1617,46 @@ func _loop_player(name: String, db: float) -> AudioStreamPlayer3D:
 
 
 # ------------------------------------------------------------------- shots --
+## Camera pose [position, look-at] that frames a landmark nicely.
+func _landmark_pose(name: String) -> Array:
+	var t := terrain
+	var at := func(c: Vector2, h: float, back: Vector2, dist: float, up: float) -> Array:
+		var p := c + back.normalized() * dist
+		var gy := maxf(t.height_at(p.x, p.y), Terrain.WATER_LEVEL)
+		return [Vector3(p.x, gy + up, p.y), Vector3(c.x, h, c.y)]
+	match name:
+		"bridge":
+			var mid := (t.bridge_a + t.bridge_b) * 0.5
+			var perp := (t.bridge_b - t.bridge_a).orthogonal().normalized()
+			return [Vector3(mid.x + perp.x * 190.0, 30.0, mid.y + perp.y * 190.0), Vector3(mid.x, 24.0, mid.y)]
+		"deck":
+			var d := (t.bridge_b - t.bridge_a).normalized()
+			var p := t.bridge_a - d * 6.0
+			return [Vector3(p.x, t.bridge_h + 1.7, p.y), Vector3(t.bridge_b.x, t.bridge_h + 4.0, t.bridge_b.y)]
+		"castle":
+			return at.call(t.castle_c, t.castle_h + 4.0, Vector2(0.6, 1.0), 85.0, 28.0)
+		"falls":
+			var b := Vector2(t.falls_bottom.x, t.falls_bottom.z)
+			return [Vector3(b.x + t.falls_dir.x * 110.0 + 30.0, 22.0, b.y + t.falls_dir.y * 110.0), Vector3(b.x, 40.0, b.y)]
+		"lighthouse":
+			return at.call(t.lighthouse_c, t.lighthouse_h + 12.0, Vector2(-1.0, -0.4), 60.0, 10.0)
+		"henge":
+			return at.call(t.henge_c, t.henge_h + 2.0, Vector2(1.0, 0.5), 38.0, 9.0)
+		"temple":
+			return at.call(t.temple_c, t.temple_h + 8.0, Vector2(-1.0, 0.3), 70.0, 16.0)
+		"oak":
+			return at.call(t.oak_c, t.oak_h + 12.0, Vector2(1.0, 0.6), 55.0, 6.0)
+		"gorge":
+			var g := t.gorge_bridge
+			var fl := t.gorge_bridge_dir.orthogonal()
+			return [Vector3(g.x + fl.x * 70.0, 12.0, g.y + fl.y * 70.0), Vector3(g.x, 8.0, g.y)]
+		"plateau":
+			return [Vector3(Terrain.PLATEAU_C.x + 260.0, 140.0, Terrain.PLATEAU_C.y + 330.0), Vector3(Terrain.PLATEAU_C.x, 60.0, Terrain.PLATEAU_C.y)]
+		"overview":
+			return [Vector3(200.0, 900.0, 1300.0), Vector3(60.0, 0.0, -50.0)]
+	return [Vector3(0, 300, 600), Vector3.ZERO]
+
+
 # Offscreen capture: renders the real scene through the real renderer with no
 # window (headless display driver + vulkan) and writes a PNG. Used to actually
 # look at the game instead of guessing.
@@ -1470,9 +1674,43 @@ func _run_shot() -> void:
 				spot = Vector3(float(parts[0]), 0.0, float(parts[1]))
 		elif a.begins_with("--yaw="):
 			ang = float(a.substr(6))
+	# Free camera: --lm=<landmark> or --cam=x,y,z --look=x,y,z.
+	var cam_pos := Vector3.INF
+	var cam_look := Vector3.ZERO
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--cam="):
+			var c := a.substr(6).split(",")
+			cam_pos = Vector3(float(c[0]), float(c[1]), float(c[2]))
+		elif a.begins_with("--look="):
+			var c := a.substr(7).split(",")
+			cam_look = Vector3(float(c[0]), float(c[1]), float(c[2]))
+		elif a.begins_with("--lm="):
+			var pose := _landmark_pose(a.substr(5))
+			cam_pos = pose[0]
+			cam_look = pose[1]
+	if cam_pos != Vector3.INF:
+		phase = "shot"
+		hud.hide_menu()
+		hud.visible = false
+		menu_cam.global_position = cam_pos
+		menu_cam.look_at(cam_look)
+		menu_cam.make_current()
+		for i in 6:
+			var tf := Time.get_ticks_msec()
+			await get_tree().process_frame
+			print("[shot] frame ", i, " ", Time.get_ticks_msec() - tf, " ms")
+		await RenderingServer.frame_post_draw
+		get_viewport().get_texture().get_image().save_png(out)
+		print("[shot] saved ", out)
+		get_tree().quit()
+		return
 	if OS.get_cmdline_user_args().has("--menu"):
 		if OS.get_cmdline_user_args().has("--loadout"):
 			hud._open_loadout()
+		if OS.get_cmdline_user_args().has("--lobby"):
+			_net_host()
+		if OS.get_cmdline_user_args().has("--join"):
+			lobby.show_join()
 		for i in 30:
 			await get_tree().process_frame
 		await RenderingServer.frame_post_draw
@@ -1967,7 +2205,7 @@ func _run_sim() -> void:
 	player.spawn_protect = 1.0e9
 	var t0 := match_time
 	var last_print := 0.0
-	while alive > 1 and match_time - t0 < 1300.0:
+	while alive > 1 and match_time - t0 < 3300.0:
 		await get_tree().physics_frame
 		if match_time - last_print > 60.0:
 			last_print = match_time
@@ -2135,3 +2373,594 @@ func _shot_state(st: String) -> void:
 				await get_tree().process_frame
 	for i in 25:
 		await get_tree().process_frame
+
+
+# ================================================================ LAN play ==
+
+func _net_host() -> void:
+	if not lobby_ready:
+		return
+	sfx.play_ui("ui_click", -6.0)
+	if net.host():
+		lobby.show_lobby()
+
+
+func _net_leave() -> void:
+	net.leave("")
+	lobby.close()
+	if phase != "menu":
+		_quit_to_menu()
+
+
+func _on_left_session(reason: String) -> void:
+	if phase != "menu":
+		_quit_to_menu()
+	if reason == "CONNECTION FAILED":
+		# Stay on the join screen so another address can be tried.
+		lobby.show_join()
+		lobby._status.text = "COULD NOT REACH THAT HOST  ·  CHECK THE ADDRESS AND THAT YOU ARE ON THE SAME NETWORK"
+		return
+	lobby.close()
+	hud.show_menu(reason)
+
+
+## Host started a match from the lobby.
+func _net_host_start() -> void:
+	if not net.hosting or not lobby_ready:
+		return
+	lobby.close()
+	_start_match()
+
+
+## Client: the host's roster arrived. Make sure we have the host's island.
+func net_lobby_update(seed_v: int, size: int) -> void:
+	match_size = size
+	MAX_BOTS = size - 1
+	if seed_v != seed_value and seed_v != 0:
+		_rebuild_world(seed_v)
+
+
+func _rebuild_world(seed_v: int) -> void:
+	lobby_ready = false
+	seed_value = seed_v
+	hud.show_menu("LOADING THE HOST'S ISLAND ...")
+	if world != null and is_instance_valid(world):
+		world.queue_free()
+	world = null
+	await get_tree().process_frame
+	await get_tree().process_frame
+	_build_world()
+	_refresh_places()
+	lobby_ready = true
+	_show_menu()
+
+
+func net_on() -> bool:
+	return net != null and net.active and net.match_running
+
+
+func net_is_client() -> bool:
+	return net != null and net.active and not net.hosting
+
+
+## Stable network name for anything that can shoot or be shot.
+func node_key(n: Object) -> String:
+	if n == null or not is_instance_valid(n):
+		return ""
+	if n == player:
+		return net.my_key()
+	if n is Bot:
+		var b := n as Bot
+		if b.is_human:
+			return "p%d" % b.peer_id
+		if b.puppet:
+			return "b%d" % b.net_index
+		return "b%d" % bots.find(b)
+	return ""
+
+
+func node_for_key(key: String) -> Node:
+	if key == "":
+		return null
+	if key == net.my_key():
+		return player
+	if key.begins_with("p"):
+		return humans.get(int(key.substr(1)))
+	if key.begins_with("b"):
+		var i := int(key.substr(1))
+		if i >= 0 and i < bots.size() and is_instance_valid(bots[i]):
+			return bots[i]
+	return null
+
+
+func _name_for_key(key: String) -> String:
+	if key == net.my_key():
+		return "YOU"
+	var n := node_for_key(key)
+	if n != null and n.has_method("display_name"):
+		return str(n.call("display_name"))
+	if key.begins_with("p"):
+		return str(net.roster.get(int(key.substr(1)), "PLAYER"))
+	return "THE STORM" if key == "" else "SOMEONE"
+
+
+func _make_human(peer_id: int, pname: String) -> Bot:
+	var h := Bot.new()
+	h.puppet = true
+	h.is_human = true
+	h.peer_id = peer_id
+	h.friendly = net.squad
+	h.setup(pname, Vector2.ZERO, self, peer_id)
+	add_child(h)
+	h.global_position = plane.seat_position() if plane != null else Vector3(0, 300, 0)
+	humans[peer_id] = h
+	return h
+
+
+## Host: package the match that _start_match just set up.
+func _net_send_setup() -> void:
+	var loot: Array = []
+	for l in loot_pool:
+		if is_instance_valid(l):
+			loot.append([l.net_id, l.kind, l.item_id, l.position, l.mag_override, l.reserve_override])
+	var bot_names: Array = []
+	for b in bots:
+		bot_names.append(b.bot_name)
+	var list: Array = []
+	for id in net.roster:
+		list.append([id, net.roster[id]])
+	for id in net.roster:
+		if int(id) != 1:
+			_make_human(int(id), str(net.roster[id]))
+	var setup := {
+		"seed": seed_value, "squad": net.squad, "plane": [plane_start, plane_end],
+		"loot": loot, "bots": bot_names, "humans": list, "total": total_players,
+		"loadout": loadout_enabled,
+	}
+	net.send_setup(setup)
+
+
+## Client: build the host's match locally.
+func net_start_match(setup: Dictionary) -> void:
+	if int(setup.get("seed", seed_value)) != seed_value or not lobby_ready:
+		# Should not happen (the roster carries the seed), but never desync.
+		await _rebuild_world(int(setup["seed"]))
+	lobby.close()
+	sfx.play_ui("ui_click", -6.0)
+	hud.hide_menu()
+	hud.hide_end()
+	hud.clear_killfeed()
+	hud.set_spectate("")
+	_cleanup_match()
+	player.reset_for_match()
+	net.squad = bool(setup.get("squad", true))
+	var path: Array = setup["plane"]
+	plane_start = path[0]
+	plane_end = path[1]
+	plane = DropPlane.new()
+	plane.name = "Plane"
+	add_child(plane)
+	plane.setup(plane_start, plane_end)
+	hud.set_plane_path(plane_start, plane_end)
+	menu_cam.make_current()
+	phase = "plane"
+	player.global_position = plane.seat_position()
+	loot_pool.clear()
+	loot_by_id.clear()
+	for e in setup["loot"]:
+		var l := _spawn_loot(str(e[1]), str(e[2]), e[3], int(e[4]), int(e[5]), int(e[0]), false)
+		l.position = e[3]
+	bots.clear()
+	var names: Array = setup["bots"]
+	for i in names.size():
+		var b := Bot.new()
+		b.puppet = true
+		b.net_index = i
+		b.setup(str(names[i]), Vector2.ZERO, self, i)
+		add_child(b)
+		b.global_position = plane.seat_position()
+		bots.append(b)
+	for e in setup["humans"]:
+		var id := int(e[0])
+		if id != net.my_id():
+			_make_human(id, str(e[1]))
+	zone = Zone.new()
+	zone.name = "Zone"
+	zone.terrain = terrain
+	add_child(zone)
+	zone.start(1250.0)
+	zone.set_process(false)
+	zone.phase_changed.connect(_on_zone_phase)
+	zone_was_warning = false
+	total_players = int(setup.get("total", names.size() + 1))
+	alive = total_players
+	loadout_enabled = bool(setup.get("loadout", loadout_enabled))
+	player_kills = 0
+	damage_dealt = 0.0
+	match_time = 0.0
+	survive_time = 0.0
+	zone_acc = 0.0
+	winner = false
+	_net_setup_ok = true
+	_after_match_setup()
+
+
+func net_abort() -> void:
+	if phase != "menu":
+		_quit_to_menu()
+	hud.show_menu("THE HOST ENDED THE MATCH")
+	lobby.show_lobby()
+
+
+## Host -> clients, ~12 times a second.
+func net_snapshot() -> Array:
+	var bp := PackedFloat32Array()
+	for b in bots:
+		if is_instance_valid(b):
+			(b as Bot).net_pack(bp)
+		else:
+			bp.append_array(PackedFloat32Array([0, -500, 0, 0, float(Bot.State.DEAD), 0, -1, 0]))
+	var zp := zone.net_pack() if zone != null else PackedFloat32Array()
+	var misc := PackedFloat32Array([plane.t if plane != null and is_instance_valid(plane) else 1.0, float(alive), float(total_players), match_time])
+	return [bp, zp, misc]
+
+
+func net_apply_snapshot(bp: PackedFloat32Array, zp: PackedFloat32Array, misc: PackedFloat32Array) -> void:
+	if not _net_setup_ok:
+		return
+	var n := mini(bots.size(), bp.size() / 8)
+	for i in n:
+		var b = bots[i]
+		if b == null or not is_instance_valid(b):
+			continue
+		var o := i * 8
+		var flags := int(bp[o + 5])
+		if (flags & Bot.NF_ALIVE) == 0:
+			continue
+		var wi := int(bp[o + 6])
+		var gear := int(bp[o + 7])
+		(b as Bot).apply_net(Vector3(bp[o], bp[o + 1], bp[o + 2]), bp[o + 3], int(bp[o + 4]), flags,
+			Weapons.ORDER[wi] if wi >= 0 and wi < Weapons.ORDER.size() else "", gear / 10, gear % 10)
+	if zone != null and zp.size() > 0:
+		zone.net_apply(zp)
+	if misc.size() >= 4:
+		if plane != null and is_instance_valid(plane):
+			plane.t = maxf(plane.t, misc[0])
+		alive = int(misc[1])
+		total_players = int(misc[2])
+		if last_hud_alive != alive:
+			last_hud_alive = alive
+			hud.set_alive(alive, total_players)
+
+
+func net_player_state() -> Variant:
+	if player == null or phase == "menu":
+		return null
+	var st := Bot.State.PLANE
+	match player.mode:
+		Player.Mode.FREEFALL:
+			st = Bot.State.FALL
+		Player.Mode.CHUTE:
+			st = Bot.State.CHUTE
+		Player.Mode.GROUND:
+			st = Bot.State.GROUND
+	if not player.alive:
+		st = Bot.State.DEAD
+	var flags := 0
+	if player.alive:
+		flags |= Bot.NF_ALIVE
+	if player.crouching():
+		flags |= Bot.NF_CROUCH
+	if player.aiming:
+		flags |= Bot.NF_AIM
+	if player.reloading:
+		flags |= Bot.NF_RELOAD
+	if player.has_gun():
+		flags |= Bot.NF_ARMED
+	return [player.global_position, player.yaw, player.pitch, st, flags, player.current_id() if player.has_gun() else "", player.vest_level, player.helmet_level]
+
+
+func net_apply_player_state(sender: int, st: Array) -> void:
+	var h = humans.get(sender)
+	if h == null or not is_instance_valid(h) or st.size() < 8:
+		return
+	var yaw: float = st[1]
+	# The player's yaw faces down -Z of its basis like a bot's.
+	(h as Bot).apply_net(st[0], yaw, int(st[3]), int(st[4]), str(st[5]), int(st[6]), int(st[7]), float(st[2]))
+
+
+## Ballistics: a real shot went off here. Mirror it to everyone else.
+func net_shot_fired(shooter: Node, from: Vector3, dir: Vector3, weapon: String, vis: Vector3, shot_id: int) -> void:
+	if not net_on():
+		return
+	if shooter is Bot and (shooter as Bot).puppet:
+		return
+	var key := node_key(shooter)
+	if key == "":
+		return
+	net.queue_shot(key, from, dir, weapon, vis, shot_id)
+
+
+var _last_remote_shot := ""
+
+
+func net_remote_shots(list: Array) -> void:
+	if not _net_setup_ok:
+		return
+	for e in list:
+		var key: String = e[0]
+		var src := node_for_key(key)
+		var from: Vector3 = e[1]
+		var weapon: String = e[3]
+		ballistics.fire(src, from, e[2], weapon, e[4], 0, 1.0, true)
+		var tag := "%s:%d" % [key, int(e[5])]
+		if tag != _last_remote_shot:
+			_last_remote_shot = tag
+			play_sfx_at("shot_" + str(Weapons.def(weapon)["sound"]), from, 0.9)
+			if src is Bot:
+				(src as Bot).muzzle_flash()
+			if net.hosting or src == null:
+				on_gunshot(from, src)
+			elif player != null:
+				var d := from.distance_to(player.global_position)
+				if d < PING_RANGE and d > 8.0 and randf() < 0.35:
+					hud.add_ping(from)
+
+
+func net_grenade_thrown(from: Vector3, vel: Vector3) -> void:
+	if net_on():
+		net.send_grenade(net.my_key(), from, vel)
+
+
+func net_remote_grenade(key: String, from: Vector3, vel: Vector3) -> void:
+	var g := Grenade.new()
+	g.game = self
+	g.thrower = node_for_key(key)
+	g.visual = true
+	add_child(g)
+	g.global_position = from
+	g.linear_velocity = vel
+
+
+## A puppet took a hit here: forward it to the machine that owns the body.
+func net_route_hit(target: Bot, amount: float, pos: Vector3, headshot: bool, source: Node) -> void:
+	if not net_on():
+		return
+	if target.is_human:
+		net.send_player_hit(target.peer_id, amount, pos, headshot, node_key(source))
+	elif net_is_client() and source == player:
+		net.send_bot_hit(target.net_index, amount, pos, headshot)
+
+
+## Host: a client shot one of our bots.
+func net_bot_hit(sender: int, idx: int, dmg: float, pos: Vector3, headshot: bool) -> void:
+	if idx < 0 or idx >= bots.size() or not is_instance_valid(bots[idx]):
+		return
+	var shooter = humans.get(sender)
+	(bots[idx] as Bot).take_damage(dmg, pos, headshot, shooter if shooter != null and is_instance_valid(shooter) else _net_dummy)
+
+
+## Our own player was hit on someone else's machine.
+func net_player_hit(dmg: float, pos: Vector3, headshot: bool, source_key: String) -> void:
+	if player == null or not player.alive:
+		return
+	var src := node_for_key(source_key)
+	if src == null:
+		_net_dummy.shown_name = _name_for_key(source_key)
+		src = _net_dummy
+	player.take_damage(dmg, pos, headshot, src)
+
+
+## Host: a human is out (ours or a client's).
+func net_human_died(peer_id: int, killer_key: String, killer_name: String, weapon: String) -> void:
+	if peer_id != 1:
+		var h = humans.get(peer_id)
+		if h != null and is_instance_valid(h):
+			(h as Bot).puppet_die()
+	alive = maxi(0, alive - 1)
+	var victim_name: String = net.roster.get(peer_id, "PLAYER")
+	var e := {"victim": "p%d" % peer_id, "victim_name": victim_name, "killer": killer_key,
+		"killer_name": killer_name, "weapon": weapon, "alive": alive}
+	net.send_elim(e)
+	if peer_id != 1:
+		_show_elim(e)
+	# A human killer gets the credit on their machine via the elim message.
+	_net_check_win()
+
+
+## Everyone: an elimination happened on the host.
+func net_elim(e: Dictionary) -> void:
+	_show_elim(e)
+	var victim: String = e["victim"]
+	var v := node_for_key(victim)
+	if v is Bot and v != player:
+		(v as Bot).puppet_die()
+	alive = int(e.get("alive", alive))
+	hud.set_alive(alive, total_players)
+	last_hud_alive = alive
+
+
+func _show_elim(e: Dictionary) -> void:
+	var victim: String = e["victim"]
+	if victim == net.my_key():
+		return
+	var killer: String = e.get("killer", "")
+	var kname := "YOU" if killer == net.my_key() else str(e.get("killer_name", ""))
+	if kname == "":
+		kname = "THE STORM"
+	var vname: String = e.get("victim_name", "?")
+	var weapon: String = e.get("weapon", "")
+	if killer == net.my_key() and net_is_client():
+		player_kills += 1
+		hud.set_kills(player_kills)
+		sfx.play_ui("elim", -4.0)
+		hud.show_big("ELIMINATED  %s" % vname, HUD.WHITE, 2.0)
+		hud.show_hitmarker(false, true)
+	var col := HUD.ACCENT if killer == net.my_key() else (Color(0.45, 0.95, 0.55) if victim.begins_with("p") else HUD.MUTED)
+	var mid := ("  [%s]  " % weapon) if weapon != "" else "   >   "
+	hud.killfeed("%s%s%s" % [kname, mid, vname], col)
+	if phase == "end" and end_cam_target != null and node_key(end_cam_target) == victim:
+		var k := node_for_key(killer)
+		if k is Node3D and bool(k.get("alive")):
+			end_cam_target = k
+			hud.set_spectate("SPECTATING  %s" % _name_for_key(killer))
+
+
+func net_loot_removed(l: LootPickup) -> void:
+	loot_pool.erase(l)
+	if l.net_id != 0:
+		loot_by_id.erase(l.net_id)
+	if net_on() and l.net_id != 0:
+		net.send_loot_taken(l.net_id)
+
+
+func net_loot_spawned(list: Array) -> void:
+	if not _net_setup_ok:
+		return
+	for e in list:
+		if loot_by_id.has(int(e[0])):
+			continue
+		var l := _spawn_loot(str(e[1]), str(e[2]), e[3], int(e[4]), int(e[5]), int(e[0]), false)
+		l.dropped = bool(e[6]) if e.size() > 6 else false
+
+
+func net_loot_taken(id: int) -> void:
+	var l = loot_by_id.get(id)
+	loot_by_id.erase(id)
+	if l != null and is_instance_valid(l) and not l.taken:
+		(l as LootPickup).consume(false)
+		if l == _last_best:
+			_last_best = null
+			hud.set_prompt("")
+
+
+func net_airdrop(p: Vector2, ground: float) -> void:
+	var drop := Airdrop.new()
+	drop.setup(self, p, ground)
+	add_child(drop)
+	airdrops.append(drop)
+	hud.show_big("SUPPLY DROP INCOMING", Color(1.0, 0.45, 0.3), 2.6)
+	hud.show_notice("HIGH-TIER LOOT  —  MARKED ON THE MAP", 3.0)
+	sfx.play_ui("zone_warn", -10.0)
+
+
+## Host: is the match decided?
+func _net_check_win() -> void:
+	if not net.hosting or not net.match_running:
+		return
+	var humans_alive: Array = []
+	if player != null and player.alive:
+		humans_alive.append(net.my_key())
+	for id in humans:
+		var h = humans[id]
+		if h != null and is_instance_valid(h) and (h as Bot).alive:
+			humans_alive.append("p%d" % id)
+	var bots_alive: Array = []
+	for i in bots.size():
+		if is_instance_valid(bots[i]) and (bots[i] as Bot).alive:
+			bots_alive.append("b%d" % i)
+	if net.squad:
+		if bots_alive.is_empty() and not humans_alive.is_empty():
+			_net_finish("squad", "YOUR SQUAD", true)
+	elif humans_alive.size() + bots_alive.size() <= 1:
+		var w: String = (humans_alive + bots_alive)[0] if humans_alive.size() + bots_alive.size() == 1 else ""
+		_net_finish(w, _name_for_key(w) if w != "" else "NOBODY", false)
+
+
+func _net_finish(key: String, wname: String, squad_win: bool) -> void:
+	net.send_match_over(key, wname if key != net.my_key() else net.my_name, squad_win)
+	net_match_over(key, wname, squad_win)
+
+
+func net_match_over(winner_key: String, winner_name: String, squad_win: bool) -> void:
+	var i_won := (squad_win and player != null and player.alive) or winner_key == net.my_key()
+	if i_won and phase != "end":
+		_win()
+	elif phase == "end" and not winner:
+		hud.show_notice(("YOUR SQUAD WON THE MATCH" if squad_win else "%s WON THE MATCH" % winner_name), 6.0)
+	elif not i_won:
+		hud.show_big(("YOUR SQUAD WON" if squad_win else "%s WINS" % winner_name), HUD.ACCENT, 4.0)
+
+
+## Host: a client dropped out mid-match.
+func net_player_left(id: int) -> void:
+	var h = humans.get(id)
+	if h != null and is_instance_valid(h) and (h as Bot).alive:
+		net_human_died(id, "", "", "")
+	if h != null and is_instance_valid(h):
+		h.queue_free()
+	humans.erase(id)
+
+
+## Two-instance smoke test on this machine: --nethost / --netjoin.
+func _run_net_test(as_host: bool) -> void:
+	net.status.connect(func(t): print("[net] status: ", t))
+	net.left_session.connect(func(t): print("[net] left: ", t))
+	net.multiplayer.peer_connected.connect(func(id): print("[net] peer connected ", id))
+	if as_host:
+		_net_host()
+		print("[net] hosting, waiting for a client")
+		var t := 0.0
+		while net.roster.size() < 2 and t < 60.0:
+			await get_tree().create_timer(0.5).timeout
+			t += 0.5
+		print("[net] roster ", net.roster)
+		_net_host_start()
+	else:
+		net.join("127.0.0.1")
+		var t := 0.0
+		while not _net_setup_ok and t < 90.0:
+			await get_tree().create_timer(0.5).timeout
+			t += 0.5
+		print("[net] client got setup=", _net_setup_ok, " bots=", bots.size(), " loot=", loot_pool.size(), " humans=", humans.size())
+	await get_tree().create_timer(4.0).timeout
+	_player_jump(true)
+	var spot := _random_ground_point(150.0)
+	player.global_position = spot + Vector3(0, 1.0, 0)
+	player.mode = Player.Mode.GROUND
+	player.landed = true
+	player.velocity = Vector3.ZERO
+	player.give_weapon("rifle")
+	for i in 75:
+		await get_tree().create_timer(1.0).timeout
+		var moving := 0
+		var landed := 0
+		for b in bots:
+			if is_instance_valid(b) and b.velocity.length() > 0.5:
+				moving += 1
+			if is_instance_valid(b) and b.state == Bot.State.GROUND:
+				landed += 1
+		var hs := []
+		for id in humans:
+			var h = humans[id]
+			if is_instance_valid(h):
+				hs.append("%s@%s st=%d" % [h.bot_name, str(h.global_position.round()), h.state])
+		if i % 5 == 0:
+			print("[net] %s t=%d alive=%d landed=%d moving=%d loot=%d zone=%.0f hp=%.0f kills=%d humans=%s" % ["host" if as_host else "client", i, alive, landed, moving, loot_pool.size(), zone.radius if zone != null else -1.0, player.hp, player_kills, str(hs)])
+		var near: Bot = null
+		var bd := 1e9
+		for b in bots:
+			if is_instance_valid(b) and b.alive and b.state == Bot.State.GROUND:
+				var d: float = b.global_position.distance_to(player.global_position)
+				if d < bd:
+					bd = d
+					near = b
+		if i == 50 and not as_host and near != null:
+			print("[net] client shooting ", near.bot_name, " at ", int(bd), " m")
+			net_route_hit(near, 500.0, near.global_position + Vector3(0, 1.6, 0), true, player)
+		if i == 55 and as_host and near != null:
+			print("[net] host kills ", near.bot_name)
+			near.take_damage(500.0, near.global_position, true, player)
+		if i == 60 and as_host:
+			for id in humans:
+				print("[net] host hits human ", id)
+				net_route_hit(humans[id], 30.0, humans[id].global_position + Vector3(0, 1, 0), false, near if near != null else player)
+		if i == 62 and not as_host:
+			# Take some loot and drop a gun: both must show on the host.
+			var l := _nearest_loot(player.global_position, 4000.0)
+			if l != null:
+				print("[net] client takes loot ", l.net_id, " ", l.item_id)
+				l.consume()
+			drop_weapon("smg", 10, 30, player.global_position)
+	print("[net] done")
+	get_tree().quit()

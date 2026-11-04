@@ -78,6 +78,29 @@ var _reload_t := 0.0
 
 var last_killer_node: Node = null
 
+# --- Network puppets: bots mirrored from the host, and other humans.
+## Driven by snapshots instead of AI.
+var puppet := false
+## A remote human player (not a bot).
+var is_human := false
+var peer_id := 0
+## Index in the host's bot list (bots only).
+var net_index := -1
+## Squad mate: our bullets pass harmlessly.
+var friendly := false
+var net_pitch := 0.0
+var _net_pos := Vector3.ZERO
+var _net_yaw := 0.0
+var _net_flags := 0
+var _net_seen := false
+var _tag: Label3D
+
+const NF_ALIVE := 1
+const NF_CROUCH := 2
+const NF_AIM := 4
+const NF_RELOAD := 8
+const NF_ARMED := 16
+
 const FOV_COS := 0.42      # ~130 degree cone
 const CLOSE_SENSE := 13.0  # always noticed this close
 
@@ -95,7 +118,7 @@ func setup(p_name: String, p_target: Vector2, p_game: Node, seed_n: int) -> void
 
 
 func _ready() -> void:
-	add_to_group("bots")
+	add_to_group("humans" if is_human else "bots")
 	add_to_group("damageable")
 	# Passengers are inside the hold: nobody should see them through the hull.
 	visible = state != State.PLANE
@@ -140,6 +163,21 @@ func _ready() -> void:
 	chute_node.position = Vector3(0, 0.6, 0)
 	chute_node.visible = false
 	add_child(chute_node)
+
+	if is_human and friendly:
+		# Squad mates get a name tag so you can find each other.
+		_tag = Label3D.new()
+		_tag.text = bot_name
+		_tag.position = Vector3(0, 2.25, 0)
+		_tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		_tag.no_depth_test = true
+		_tag.fixed_size = true
+		_tag.pixel_size = 0.0011
+		_tag.font_size = 28
+		_tag.outline_size = 8
+		_tag.modulate = Color(0.45, 0.95, 0.55)
+		_tag.font = load("res://assets/fonts/ui_bold.ttf")
+		add_child(_tag)
 
 
 func head_y() -> float:
@@ -188,6 +226,9 @@ func _move() -> void:
 
 
 func _physics_process(delta: float) -> void:
+	if puppet:
+		_puppet_tick(delta)
+		return
 	# Far from the player (and out of sight range) bots think and move every
 	# other tick with a double step: same behaviour, half the cost.
 	_lod_mult = 1.0
@@ -243,15 +284,18 @@ func _follow_plane(delta: float) -> void:
 func _fall(delta: float, chute: bool) -> void:
 	var to := Vector2(drop_target.x - global_position.x, drop_target.y - global_position.z)
 	var dist := to.length()
-	var move := to.normalized() * (9.0 if chute else 20.0)
+	var move := to.normalized() * minf(dist, 13.0 if chute else 34.0)
 	velocity.x = move_toward(velocity.x, move.x, 16.0 * delta)
 	velocity.z = move_toward(velocity.z, move.y, 16.0 * delta)
 	if chute:
-		velocity.y = move_toward(velocity.y, -8.5, 30.0 * delta)
+		velocity.y = move_toward(velocity.y, -7.5, 30.0 * delta)
 	else:
 		fall_speed = move_toward(fall_speed, -52.0, 80.0 * delta)
 		velocity.y = fall_speed
-		if global_position.y < game_ground_y() + 95.0 or dist < 18.0:
+		# Pull early when the target is still far: the canopy glides further
+		# than freefall does.
+		var agl := global_position.y - game_ground_y()
+		if agl < 110.0 or dist > (agl - 110.0) * 0.65 + 180.0:
 			state = State.CHUTE
 			chute_node.visible = true
 			_play("Jump_Start")
@@ -548,6 +592,130 @@ func hear_shot(pos: Vector3, shooter: Node) -> void:
 	think_timer = minf(think_timer, reaction)
 
 
+# ------------------------------------------------------------- net puppet --
+## Latest state from the network.
+func apply_net(pos: Vector3, yaw: float, st: int, flags: int, weapon: String, vest: int, helmet: int, pitch := 0.0) -> void:
+	if not alive:
+		return
+	_net_pos = pos
+	_net_yaw = yaw
+	net_pitch = pitch
+	_net_flags = flags
+	if not _net_seen or st != state and (st == State.GROUND or state == State.PLANE):
+		global_position = pos
+		rotation.y = yaw
+	_net_seen = true
+	if st != state:
+		if st == State.FALL:
+			_play("Jump_Start")
+		elif st == State.GROUND and state == State.CHUTE:
+			_play("Jump_Land")
+		state = st
+	vest_level = vest
+	helmet_level = helmet
+	var want_armed := (flags & NF_ARMED) != 0 and weapon != ""
+	if want_armed and weapon != weapon_id:
+		arm_weapon(weapon)
+	elif not want_armed and armed:
+		armed = false
+		weapon_id = ""
+		if body != null:
+			body.set_gun("")
+
+
+func _puppet_tick(delta: float) -> void:
+	_flash = maxf(0.0, _flash - delta)
+	_muzzle_flash.visible = _flash > 0.0
+	if hit_flash > 0.0:
+		hit_flash = maxf(0.0, hit_flash - delta)
+	if state == State.DEAD or not alive:
+		dead_timer += delta
+		if dead_timer > 7.0 and not is_human:
+			position.y -= delta * 0.6
+		if dead_timer > 10.0 and not is_human:
+			queue_free()
+		return
+	if not _net_seen:
+		return
+	var prev := global_position
+	var k := clampf(delta * 14.0, 0.0, 1.0)
+	if global_position.distance_to(_net_pos) > 25.0:
+		global_position = _net_pos
+	else:
+		global_position = global_position.lerp(_net_pos, k)
+	rotation.y = lerp_angle(rotation.y, _net_yaw, k)
+	velocity = (global_position - prev) / maxf(delta, 0.0001)
+	visible = state != State.PLANE
+	chute_node.visible = state == State.CHUTE
+	_set_crouch((_net_flags & NF_CROUCH) != 0)
+	match state:
+		State.FALL:
+			_play("Jump")
+		State.CHUTE:
+			_play("Idle")
+			chute_node.rotation.y = sin(Time.get_ticks_msec() * 0.0009) * 0.08
+		State.GROUND:
+			var planar := Vector2(velocity.x, velocity.z).length()
+			if planar > 0.5:
+				var want := "Sprint" if planar > 5.6 else ("Jog_Fwd" if planar > 2.6 else "Walk")
+				if crouched:
+					want = "Crouch_Fwd"
+				var ref := 6.2 if want == "Sprint" else (4.0 if want == "Jog_Fwd" else 1.6)
+				_play(want, clampf(planar / ref, 0.7, 1.4))
+				_step += planar * delta
+				if _step > 2.9:
+					_step = 0.0
+					if game != null and game.player != null and game.player.global_position.distance_to(global_position) < 42.0:
+						game.play_sfx_at("step_%s_%d" % [game.surface_at(global_position), randi() % 4 + 1], global_position, 1.0 if planar > 5.5 else -3.0)
+			else:
+				_play("Crouch_Idle" if crouched else "Idle")
+	if body != null:
+		if armed:
+			var aiming := (_net_flags & NF_AIM) != 0
+			body.set_arms("reload" if (_net_flags & NF_RELOAD) != 0 else ("aim" if aiming else "idle"))
+			body.aim_dir = (-global_basis.z).rotated(global_basis.x, net_pitch)
+		else:
+			body.set_arms("")
+		body.set_gear(vest_level, helmet_level)
+
+
+## Pack this bot's state for a snapshot (host side).
+func net_pack(out: PackedFloat32Array) -> void:
+	var flags := 0
+	if alive:
+		flags |= NF_ALIVE
+	if crouched:
+		flags |= NF_CROUCH
+	if armed:
+		flags |= NF_ARMED
+	if enemy != null and is_instance_valid(enemy) and not fight_moving and state == State.GROUND:
+		flags |= NF_AIM
+	if _reload_t > 0.0:
+		flags |= NF_RELOAD
+	var p := global_position
+	out.append_array(PackedFloat32Array([p.x, p.y, p.z, rotation.y, float(state), float(flags),
+		float(Weapons.ORDER.find(weapon_id) if armed else -1), float(vest_level * 10 + helmet_level)]))
+
+
+## Show a death that happened on the host.
+func puppet_die() -> void:
+	if not alive:
+		return
+	alive = false
+	state = State.DEAD
+	dead_timer = 0.0
+	collision_layer = 0
+	chute_node.visible = false
+	if _tag != null:
+		_tag.visible = false
+	if body != null:
+		body.die()
+
+
+func muzzle_flash() -> void:
+	_flash = 0.06
+
+
 func _play(name: String, speed := 1.0) -> void:
 	if body == null:
 		return
@@ -699,7 +867,7 @@ func _shoot_logic(delta: float) -> void:
 	var aim_pt := enemy.global_position + Vector3(0, aim_h, 0) + tvel * tof * comp
 	aim_pt.y += 0.5 * Ballistics.GRAVITY * tof * tof * comp
 	var base_dir := (aim_pt - from).normalized()
-	var mult := 0.62 if enemy is Player else 0.2
+	var mult := 0.62 if (enemy is Player or (enemy is Bot and (enemy as Bot).is_human)) else 0.2
 	var pellets := int(d["pellets"])
 	_shot_seq += 1
 	for i in pellets:
@@ -724,9 +892,10 @@ func _find_enemy() -> Node3D:
 	var p = game.player
 	if p != null and p.alive and (p.mode == Player.Mode.GROUND or p.mode == Player.Mode.CHUTE):
 		candidates.append(p)
-	for b in get_tree().get_nodes_in_group("bots"):
-		if b != self and is_instance_valid(b) and (b as Bot).alive and ((b as Bot).state == State.GROUND or (b as Bot).state == State.CHUTE):
-			candidates.append(b)
+	for g in ["bots", "humans"]:
+		for b in get_tree().get_nodes_in_group(g):
+			if b != self and is_instance_valid(b) and (b as Bot).alive and ((b as Bot).state == State.GROUND or (b as Bot).state == State.CHUTE):
+				candidates.append(b)
 	var fwd := -global_basis.z
 	fwd.y = 0.0
 	fwd = fwd.normalized()
@@ -736,7 +905,8 @@ func _find_enemy() -> Node3D:
 		var d := to.length()
 		# Bots pick fights with each other at shorter range than with you, and
 		# barely at all while still looting after the drop.
-		var reach := sight if c is Player else sight * 0.5
+		var human: bool = c is Player or (c is Bot and (c as Bot).is_human)
+		var reach := sight if human else sight * 0.5
 		if calm_t > 0.0 and c != enemy:
 			# Only the aggressive ones start a fight while still looting.
 			reach = 18.0 if aggression > 0.72 else 0.0
@@ -748,6 +918,8 @@ func _find_enemy() -> Node3D:
 			continue
 		# Crouching targets in the distance are harder to spot.
 		if c is Player and Input.is_action_pressed("crouch") and d > 55.0:
+			continue
+		if c is Bot and (c as Bot).is_human and (c as Bot).crouched and d > 55.0:
 			continue
 		scored.append([d, c])
 	scored.sort_custom(func(a, b): return a[0] < b[0])
@@ -795,6 +967,19 @@ func enemy_visible() -> bool:
 # ------------------------------------------------------------------ damage --
 func take_damage(amount: float, _pos: Vector3 = Vector3.ZERO, headshot: bool = false, source: Node = null) -> bool:
 	if not alive:
+		return false
+	if puppet:
+		# The real body lives on another machine: show the hit, send it on.
+		if source == null:
+			return false
+		# Squad mates cannot hurt each other (grenades included); bots can.
+		if friendly and (source is Player or (source is Bot and (source as Bot).is_human)):
+			return false
+		hit_flash = 0.25
+		if body != null:
+			body.flinch(1.4 if headshot else 1.0)
+		if game != null:
+			game.net_route_hit(self, amount, _pos, headshot, source)
 		return false
 	var dmg := amount
 	if source != null:

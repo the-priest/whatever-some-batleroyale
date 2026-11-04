@@ -1,8 +1,8 @@
 # Block Royale
 
-A single-player battle royale on a hand-generated fantasy island, built with Godot 4.7
-(GL Compatibility renderer). Drop from the plane with up to 59 bots (50 players by default, set in
-Settings), loot, and be the last one standing. A match runs roughly 11-12 minutes.
+A battle royale on a generated fantasy archipelago, built with Godot 4.7 (GL Compatibility
+renderer). Drop from the plane with up to 99 bots (64 players by default, set in Settings), loot,
+and be the last one standing, alone or with friends over LAN. A full match runs about 40-45 minutes.
 
 Open the project in Godot 4.7 and press Play, or export with the presets in `export_presets.cfg`.
 
@@ -26,6 +26,7 @@ Open the project in Godot 4.7 and press Play, or export with the presets in `exp
 | 4 / 5 / 6 | Bandage / medkit / energy drink |
 | G | Throw frag grenade |
 | M | Full map |
+| M then mouse wheel | Zoom the map |
 | Esc | Pause menu (sensitivity, volume) |
 
 ## Gunplay
@@ -45,11 +46,40 @@ The main menu's **Loadout** screen picks a primary, a secondary and an optic. Wi
 this loadout" on, you land with them and a few boxes of their ammo (bots land armed too); turn it
 off to loot everything from scratch.
 
+## LAN multiplayer
+
+Everyone must be on the same network (same Wi-Fi or router).
+
+1. One player presses **HOST LAN** in the main menu. The lobby shows the address to share.
+2. The others press **JOIN LAN**. The host's game appears in the list; click it, or type the
+   host's address and press **JOIN**.
+3. The host picks **Squad vs Bots** (everyone on one team, no friendly fire, team mates shown
+   on the map with name tags) or **Free-for-all**, then presses **START MATCH**.
+
+Joining players load the host's island automatically. The host runs the bots, the storm, loot
+and supply drops. If Windows asks whether to allow the game through the firewall, allow it on
+private networks. The game uses UDP ports 24555 (game) and 24556 (LAN discovery).
+
 ## The island
 
-Street towns, villages and farmsteads linked by dirt roads, lookout towers on high ground (good loot upstairs, windows to shoot from), ruins and
-boulders for cover in the open, and ridgelines to fight over. The storm closes in seven phases;
-the next safe zone is shown on the map as soon as it is chosen. Supply drops land during the match.
+Two islands about 2.4 km across:
+
+- The main island has the cliff-walled Highfalls plateau with a lake and a 75 m waterfall. Two
+  ledge trails climb its walls.
+- The waterfall's river cuts a gorge to Kestrel Bay. You can cross it at two shallow fords or on
+  Kingsbridge.
+- Skyreach Bridge, a 230 m stone span with a sky gate, links to the east isle and the Sunspire
+  temple.
+- Other landmarks: Stormkeep castle on its hill (walkable walls, a three-level keep and the best
+  loot), the Old Henge stone circle, Gull Point lighthouse (climb the outside stair for a sniper
+  perch) and the Elder Oak.
+- Street towns, villages and farmsteads are linked by dirt roads. Lookout towers stand on high
+  ground, and ruins and boulders give cover in the open.
+
+The storm closes in eight phases. It starts slow and weak, so there is time to land and loot,
+then each circle gets tighter, faster and more painful. The next safe zone is shown on the map as
+soon as it is chosen. Supply drops land during the match. The plane flies at 520 m. Pull the
+chute early to glide over 1 km, or dive and pull late to land first.
 
 ## Credits
 
@@ -63,4 +93,6 @@ godot --headless --fixed-fps 60 --path . -- --sim
 
 Runs a scripted test of looting, healing, reloading, bullet drop, holdover hits and gun handling,
 then fast-forwards a full match. `--smoke` is a shorter check, and `--shot --out=file.png` renders a
-screenshot (needs a display, e.g. `xvfb-run`).
+screenshot (needs a display, e.g. `xvfb-run`; `--lm=castle|bridge|falls|...` frames a landmark).
+`--nethost` and `--netjoin` (run in two terminals, without `--fixed-fps`) test a LAN match on
+this machine.

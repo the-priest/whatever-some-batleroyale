@@ -1,17 +1,34 @@
 extends RefCounted
 class_name Terrain
 
-## Deterministic island heightfield. All world queries go through this class so
-## spawning, loot, AI and collision agree on where the ground is.
+## Deterministic world heightfield: a large main island, a smaller east island
+## across a strait (joined by a bridge), sea cliffs on the south coast and a
+## high plateau with a lake that spills over a waterfall. All world queries go
+## through this class so spawning, loot, AI and collision agree on the ground.
 
-const SIZE := 900.0
-const HALF := 450.0
-const RES := 181
-const STEP := SIZE / float(RES - 1)
+const SIZE := 2400.0
+const HALF := 1200.0
+const RES := 401
+const STEP := SIZE / float(RES - 1)   # 6 m
 const WATER_LEVEL := 0.9
-const CHUNK_CELLS := 30
-const CHUNKS := 6
-const VILLAGE_RADIUS := 34.0
+const CHUNK_CELLS := 40
+const CHUNKS := 10
+
+# Island layout.
+const MAIN_C := Vector2(-260.0, 30.0)
+const MAIN_R := 760.0
+const EAST_C := Vector2(905.0, -150.0)
+const EAST_R := 250.0
+
+# Highfalls plateau: cliff walls all round, a lake on top, a waterfall off the
+# south-east edge into a pool.
+const PLATEAU_C := Vector2(-560.0, -300.0)
+const PLATEAU_R := 165.0
+const PLATEAU_H := 78.0
+const LAKE_C := Vector2(-530.0, -280.0)
+const LAKE_R := 58.0
+const BAY_C := Vector2(-760.0, 560.0)
+const BAY_R := 230.0
 
 var heights := PackedFloat32Array()
 var hills := FastNoiseLite.new()
@@ -20,8 +37,44 @@ var ridge := FastNoiseLite.new()
 var macro := FastNoiseLite.new()
 var woods := FastNoiseLite.new()
 var ridgelines := FastNoiseLite.new()
+var coast := FastNoiseLite.new()
+var warp := FastNoiseLite.new()
 var peaks: Array[Vector3] = []  # x, z, amplitude
 var seed_value: int = 20261101
+
+## Landmark data filled in during generation, read by the builders.
+var bridge_a := Vector2.ZERO
+var bridge_b := Vector2.ZERO
+var bridge_h := 0.0
+var lake_level := 0.0
+var falls_top := Vector3.ZERO
+var falls_bottom := Vector3.ZERO
+var pool_c := Vector2.ZERO
+var pool_r := 22.0
+var pool_level := 0.0
+var falls_dir := Vector2.RIGHT
+var channel_a := Vector2.ZERO
+var channel_b := Vector2.ZERO
+## River centre line and cumulative arc length.
+var river: Array[Vector2] = []
+var river_s: Array[float] = []
+var river_len := 0.0
+var fords: Array[Vector2] = []
+var gorge_bridge := Vector2.ZERO
+var gorge_bridge_dir := Vector2.RIGHT
+var trails: Array[Vector2] = []
+var castle_c := Vector2.ZERO
+var castle_h := 0.0
+var henge_c := Vector2.ZERO
+var henge_h := 0.0
+var lighthouse_c := Vector2.ZERO
+var lighthouse_h := 0.0
+var temple_c := Vector2.ZERO
+var temple_h := 0.0
+var oak_c := Vector2.ZERO
+var oak_h := 0.0
+## Areas the town planner must keep clear of: [Vector2 centre, radius].
+var reserved: Array = []
 
 
 func _init(p_seed: int = 20261101) -> void:
@@ -29,11 +82,10 @@ func _init(p_seed: int = 20261101) -> void:
 
 	hills.seed = p_seed
 	hills.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
-	hills.frequency = 0.0031
+	hills.frequency = 0.0024
 	hills.fractal_type = FastNoiseLite.FRACTAL_FBM
 	hills.fractal_octaves = 4
 	hills.fractal_gain = 0.52
-	hills.fractal_lacunarity = 2.0
 
 	detail.seed = p_seed + 91
 	detail.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
@@ -44,7 +96,7 @@ func _init(p_seed: int = 20261101) -> void:
 	ridge.seed = p_seed + 501
 	ridge.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
 	ridge.fractal_type = FastNoiseLite.FRACTAL_RIDGED
-	ridge.frequency = 0.0062
+	ridge.frequency = 0.0055
 	ridge.fractal_octaves = 4
 
 	macro.seed = p_seed + 7
@@ -54,30 +106,70 @@ func _init(p_seed: int = 20261101) -> void:
 
 	woods.seed = p_seed + 313
 	woods.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
-	woods.frequency = 0.0042
+	woods.frequency = 0.0030
 	woods.fractal_octaves = 4
 
 	ridgelines.seed = p_seed + 777
 	ridgelines.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
 	ridgelines.fractal_type = FastNoiseLite.FRACTAL_RIDGED
-	ridgelines.frequency = 0.0045
+	ridgelines.frequency = 0.0032
 	ridgelines.fractal_octaves = 3
 
+	coast.seed = p_seed + 4040
+	coast.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+	coast.frequency = 0.0028
+	coast.fractal_octaves = 3
+
+	warp.seed = p_seed + 5150
+	warp.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+	warp.frequency = 0.0011
+	warp.fractal_octaves = 2
+
+	# Hills: a fixed backbone plus seed-placed ones, so every map differs.
 	peaks = [
-		Vector3(-120.0, -175.0, 30.0),
-		Vector3(215.0, 195.0, 36.0),
-		Vector3(-255.0, 215.0, 22.0),
-		Vector3(60.0, 285.0, 18.0),
+		Vector3(-200.0, 380.0, 46.0),
+		Vector3(160.0, -260.0, 38.0),
+		Vector3(-760.0, 260.0, 34.0),
+		Vector3(240.0, 420.0, 30.0),
+		Vector3(880.0, -40.0, 26.0),
 	]
-	# A few more hills that move with the seed, so every island plays differently.
 	var rng := RandomNumberGenerator.new()
 	rng.seed = p_seed + 99
-	for i in 4:
+	for i in 8:
 		var a := rng.randf() * TAU
-		var r := rng.randf_range(60.0, 300.0)
-		peaks.append(Vector3(cos(a) * r, sin(a) * r, rng.randf_range(14.0, 26.0)))
+		var r := rng.randf_range(80.0, MAIN_R * 0.75)
+		peaks.append(Vector3(MAIN_C.x + cos(a) * r, MAIN_C.y + sin(a) * r, rng.randf_range(16.0, 32.0)))
 	heights.resize(RES * RES)
 	_generate()
+	_carve_landmarks()
+
+
+func _island_mask(x: float, z: float) -> float:
+	var p := Vector2(x, z)
+	var n := coast.get_noise_2d(x, z)
+	# Domain warp so the coast wanders into bays and headlands instead of
+	# tracing a circle.
+	var w := Vector2(warp.get_noise_2d(x, z), warp.get_noise_2d(x + 913.0, z - 377.0)) * 120.0
+	var q := p + w
+	var dm := q - MAIN_C
+	var rm := Vector2(dm.x / (MAIN_R * 0.99), dm.y / (MAIN_R * 0.95)).length() + n * 0.12
+	# Kestrel Bay bites into the south-west coast.
+	var bay := 1.0 - smoothstep(BAY_R * 0.75, BAY_R * 1.15, q.distance_to(BAY_C))
+	rm += bay * 0.45
+	var de := q - EAST_C
+	var re := Vector2(de.x / (EAST_R * 1.12), de.y / (EAST_R * 0.9)).length() + n * 0.16
+	# South coast of the main island ends in sheer cliffs: a much narrower
+	# land-to-sea transition there.
+	var cliff := _south_cliff(x, z)
+	var width := lerpf(0.15, 0.022, cliff)
+	var main := smoothstep(1.0, 1.0 - width, rm)
+	var east := smoothstep(1.0, 0.86, re)
+	return maxf(main, east)
+
+
+func _south_cliff(x: float, z: float) -> float:
+	var ang := (Vector2(x, z) - MAIN_C).angle()
+	return smoothstep(0.55, 0.8, sin(ang))
 
 
 func _generate() -> void:
@@ -85,23 +177,347 @@ func _generate() -> void:
 		var z := -HALF + float(iz) * STEP
 		for ix in RES:
 			var x := -HALF + float(ix) * STEP
-			var h := 11.0 + hills.get_noise_2d(x, z) * 19.0 + detail.get_noise_2d(x, z) * 4.5
-			for p in peaks:
-				var d := Vector2(x, z).distance_to(Vector2(p.x, p.y))
-				var m := clampf(1.0 - d / 210.0, 0.0, 1.0)
-				m = m * m * (3.0 - 2.0 * m)
-				h += p.z * m * (0.55 + 0.45 * ridge.get_noise_2d(x, z))
-			# Ridgelines: long crests to fight over and hide behind.
-			var rl := ridgelines.get_noise_2d(x, z) * 0.5 + 0.5
-			h += pow(clampf((rl - 0.55) / 0.45, 0.0, 1.0), 1.6) * 9.0
-			# Coast falloff: land right out to the rim, sea only past it.
-			# A short shelf just outside the square hides the seam.
-			var r := maxf(absf(x), absf(z)) / HALF
-			var edge := smoothstep(1.30, 1.02, r)
-			h = lerpf(-11.0, h, edge)
-			# A couple of gentle valleys for sight lines.
-			h -= 3.0 * pow(clampf(1.0 - absf(hills.get_noise_2d(x + 900.0, z - 400.0)), 0.0, 1.0), 3.0)
+			var land := _island_mask(x, z)
+			var h := -14.0
+			if land > 0.0:
+				var r := ridge.get_noise_2d(x, z)
+				var lh := 12.0 + hills.get_noise_2d(x, z) * 22.0 + detail.get_noise_2d(x, z) * 4.5
+				for p in peaks:
+					var dx := x - p.x
+					var dz := z - p.y
+					var d2 := dx * dx + dz * dz
+					if d2 > 270.0 * 270.0:
+						continue
+					var m := 1.0 - sqrt(d2) / 270.0
+					m = m * m * (3.0 - 2.0 * m)
+					lh += p.z * m * (0.55 + 0.45 * r)
+				var rl := ridgelines.get_noise_2d(x, z) * 0.5 + 0.5
+				lh += pow(clampf((rl - 0.55) / 0.45, 0.0, 1.0), 1.6) * 12.0
+				# Cliff coast: hold the land up right to the edge so the drop
+				# is sheer.
+				var cliff := _south_cliff(x, z) * smoothstep(MAIN_R * 0.5, MAIN_R * 0.8, Vector2(x, z).distance_to(MAIN_C))
+				lh += cliff * 20.0
+				lh = maxf(lh, 3.0)
+				h = lerpf(-14.0, lh, land)
 			heights[iz * RES + ix] = h
+
+
+## Rim radius of the plateau in a given direction: a lumpy massif, not a disc.
+func plateau_rim(ang: float) -> float:
+	return PLATEAU_R + coast.get_noise_2d(cos(ang) * 260.0, sin(ang) * 260.0) * 60.0 \
+		+ detail.get_noise_2d(cos(ang) * 900.0, sin(ang) * 900.0) * 8.0
+
+
+func _plateau_top(x: float, z: float) -> float:
+	# Rises toward the back (north-west) so the top is not a table.
+	var back := Vector2(x, z) - PLATEAU_C
+	return PLATEAU_H + 1.5 + back.dot(Vector2(-0.7, -0.7)) * 0.025 + absf(detail.get_noise_2d(x, z)) * 3.0
+
+
+## Plateau, lake, waterfall, river gorge, bridge headlands and landmark sites.
+## Done after the base terrain so they can read and reshape it.
+func _carve_landmarks() -> void:
+	# --- Highfalls: a cliff-walled massif with a lake on top.
+	_apply(PLATEAU_C, PLATEAU_R + 150.0, func(x: float, z: float, h: float) -> float:
+		var v := Vector2(x, z) - PLATEAU_C
+		var rim := plateau_rim(v.angle())
+		var d := v.length()
+		var t := smoothstep(rim + 22.0, rim - 2.0, d)
+		# A talus apron at the cliff foot.
+		var apron := smoothstep(rim + 70.0, rim + 18.0, d) * 10.0
+		return lerpf(maxf(h, h + apron), maxf(h, _plateau_top(x, z)), t))
+	reserved.append([PLATEAU_C, PLATEAU_R + 70.0])
+
+	# Two ledge trails wind up the cliff face so the top can be reached on foot.
+	for spec in [[0.75, -1.1], [2.9, 1.0]]:
+		_carve_trail(float(spec[0]), float(spec[1]))
+
+	lake_level = PLATEAU_H - 3.5
+	_apply(LAKE_C, LAKE_R + 30.0, func(x: float, z: float, h: float) -> float:
+		var v := Vector2(x, z) - LAKE_C
+		var lr := LAKE_R + coast.get_noise_2d(v.x * 4.0, v.y * 4.0) * 10.0
+		var t := smoothstep(lr + 12.0, lr * 0.4, v.length())
+		return lerpf(h, PLATEAU_H - 10.0, t))
+
+	# Outlet channel from the lake to the rim, then a long fall into the gorge.
+	falls_dir = Vector2(0.35, 0.94).normalized()
+	var p := LAKE_C
+	for i in 200:
+		p += falls_dir * 2.0
+		if height_at(p.x, p.y) < PLATEAU_H - 6.0 and p.distance_to(PLATEAU_C) > PLATEAU_R * 0.6:
+			break
+	var lip := p - falls_dir * 10.0
+	_carve_channel(LAKE_C + falls_dir * (LAKE_R - 10.0), lip, 6.0, 2.2)
+	channel_a = LAKE_C + falls_dir * (LAKE_R - 10.0)
+	channel_b = lip
+	falls_top = Vector3(lip.x, lake_level, lip.y)
+	pool_c = lip + falls_dir * 55.0
+	pool_level = WATER_LEVEL
+
+	# --- The river: from the plunge pool, through a gorge, out to the north sea.
+	_plan_river()
+	_carve_river()
+	falls_bottom = Vector3(lip.x + falls_dir.x * 14.0, WATER_LEVEL, lip.y + falls_dir.y * 14.0)
+
+	# --- Bridge headlands: raised bluffs at each end so the span runs high
+	# above the strait.
+	var dir := (EAST_C - MAIN_C).normalized()
+	bridge_a = _coast_point(MAIN_C, dir, 1.0) - dir * 25.0
+	bridge_b = _coast_point(EAST_C, -dir, 1.0) + dir * 25.0
+	bridge_h = 34.0
+	for c in [bridge_a, bridge_b]:
+		_apply(c, 75.0, func(x: float, z: float, h: float) -> float:
+			var d := Vector2(x, z).distance_to(c)
+			var t := smoothstep(75.0, 30.0, d)
+			return lerpf(h, maxf(h, bridge_h - 0.3), t))
+		reserved.append([c, 65.0])
+	# Keep towns off the strait line itself.
+	reserved.append([(bridge_a + bridge_b) * 0.5, bridge_a.distance_to(bridge_b) * 0.5 + 20.0])
+
+	# --- Landmark sites.
+	castle_c = _settle(Vector2(-150.0, 330.0), 34.0)
+	castle_h = _raise_mound(castle_c, 34.0, 26.0, 6.0)
+	reserved.append([castle_c, 85.0])
+	henge_c = _settle(Vector2(-830.0, 170.0), 18.0)
+	henge_h = flatten_circle(henge_c.x, henge_c.y, 18.0, 16.0)
+	reserved.append([henge_c, 50.0])
+	# Lighthouse on the south cliffs, a few metres in from the edge.
+	var sdir := Vector2(0.25, 1.0).normalized()
+	lighthouse_c = _coast_point(MAIN_C, sdir, 1.0) - sdir * 16.0
+	lighthouse_h = flatten_circle(lighthouse_c.x, lighthouse_c.y, 9.0, 10.0)
+	reserved.append([lighthouse_c, 40.0])
+	temple_c = _settle(EAST_C + Vector2(40.0, 10.0), 24.0)
+	temple_h = flatten_circle(temple_c.x, temple_c.y, 24.0, 18.0)
+	reserved.append([temple_c, 60.0])
+	oak_c = _settle(Vector2(140.0, -380.0), 12.0)
+	oak_h = flatten_circle(oak_c.x, oak_c.y, 12.0, 14.0)
+	reserved.append([oak_c, 35.0])
+
+
+## Walk from `from` along `dir` until the ground drops under `above` metres.
+func _coast_point(from: Vector2, dir: Vector2, above: float) -> Vector2:
+	# The last land before at least 60 m of open sea.
+	var p := from
+	var last_land := from
+	var sea_run := 0.0
+	for i in 1200:
+		p += dir * 2.0
+		if height_at(p.x, p.y) < above:
+			sea_run += 2.0
+			if sea_run >= 60.0:
+				return last_land
+		else:
+			sea_run = 0.0
+			last_land = p
+	return last_land
+
+
+## Nudge a site toward the island centre until it is on usable land.
+func _settle(c: Vector2, radius: float) -> Vector2:
+	var p := c
+	for i in 40:
+		if height_at(p.x, p.y) > 5.0 and roughness(p.x, p.y, radius) < 14.0 and not _near_river(p, radius + 30.0):
+			return p
+		p = p.lerp(MAIN_C if p.distance_to(MAIN_C) < p.distance_to(EAST_C) else EAST_C, 0.08)
+	return p
+
+
+## Castle motte: a flat top a little above the local ground with steep sides.
+func _raise_mound(c: Vector2, radius: float, shoulder: float, lift: float) -> float:
+	var top := 0.0
+	for i in 12:
+		var a := TAU * float(i) / 12.0
+		top = maxf(top, height_at(c.x + cos(a) * radius, c.y + sin(a) * radius))
+	top += lift
+	return flatten_circle(c.x, c.y, radius, shoulder, top)
+
+
+## A ledge trail cut into the plateau cliff, rising as it winds round.
+func _carve_trail(start_ang: float, sweep: float) -> void:
+	var steps := 90
+	var ground0 := 0.0
+	var pts: Array = []
+	for i in steps + 1:
+		var t := float(i) / float(steps)
+		var ang := start_ang + sweep * t
+		var rim := plateau_rim(ang)
+		var r := lerpf(rim + 26.0, rim - 10.0, smoothstep(0.0, 1.0, t))
+		var c := PLATEAU_C + Vector2(cos(ang), sin(ang)) * r
+		if i == 0:
+			ground0 = height_at(c.x, c.y)
+		pts.append([c, t])
+	var top := PLATEAU_H - 1.0
+	for e in pts:
+		var c: Vector2 = e[0]
+		var t: float = e[1]
+		var y := lerpf(ground0, top, t)
+		_apply(c, 12.0, func(x: float, z: float, h: float) -> float:
+			var d := Vector2(x, z).distance_to(c)
+			var k := smoothstep(11.0, 5.0, d)
+			return lerpf(h, y, k))
+	trails.append(pts[0][0])
+
+
+func _carve_channel(a: Vector2, b: Vector2, width: float, depth: float) -> void:
+	var len := a.distance_to(b)
+	var steps := int(len / 3.0) + 1
+	for i in steps + 1:
+		var c := a.lerp(b, float(i) / float(steps))
+		_apply(c, width + 4.0, func(x: float, z: float, h: float) -> float:
+			var d := Vector2(x, z).distance_to(c)
+			var t := smoothstep(width + 3.0, width * 0.4, d)
+			return lerpf(h, minf(h, lake_level - depth), t))
+
+
+## River centre line: from the plunge pool, bending north to the sea.
+func _plan_river() -> void:
+	var ctrl: Array[Vector2] = [
+		pool_c,
+		pool_c + falls_dir * 50.0,
+		Vector2(-400.0, 110.0),
+		Vector2(-450.0, 270.0),
+		Vector2(-570.0, 390.0),
+		Vector2(-700.0, 480.0),
+		Vector2(-860.0, 640.0),
+	]
+	# Catmull-Rom through the control points, then meander.
+	river.clear()
+	for i in ctrl.size() - 1:
+		var p0: Vector2 = ctrl[maxi(i - 1, 0)]
+		var p1: Vector2 = ctrl[i]
+		var p2: Vector2 = ctrl[i + 1]
+		var p3: Vector2 = ctrl[mini(i + 2, ctrl.size() - 1)]
+		var n := int(p1.distance_to(p2) / 12.0) + 1
+		for j in n:
+			var t := float(j) / float(n)
+			var t2 := t * t
+			var t3 := t2 * t
+			var q := 0.5 * ((2.0 * p1) + (-p0 + p2) * t + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2 + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3)
+			river.append(q)
+	river.append(ctrl[ctrl.size() - 1])
+	# Meander perpendicular to the flow.
+	var s := 0.0
+	for i in river.size():
+		if i > 0:
+			s += river[i].distance_to(river[i - 1])
+		river_s.append(s)
+		if i > 4 and i < river.size() - 1:
+			var fwd := (river[i + 1] - river[i - 1]).normalized()
+			river[i] += fwd.orthogonal() * detail.get_noise_1d(s * 0.4) * 28.0
+	river_len = s
+	# Crossings: two shallow fords and a gorge bridge between them.
+	for f in [0.28, 0.68]:
+		fords.append(_river_point(f * river_len))
+	gorge_bridge = _river_point(0.48 * river_len)
+	gorge_bridge_dir = _river_dir(0.48 * river_len).orthogonal()
+	var k := 0.0
+	while k < river_len:
+		reserved.append([_river_point(k), 45.0])
+		k += 35.0
+
+
+func _river_point(s: float) -> Vector2:
+	for i in range(1, river.size()):
+		if river_s[i] >= s:
+			var t := (s - river_s[i - 1]) / maxf(0.001, river_s[i] - river_s[i - 1])
+			return river[i - 1].lerp(river[i], t)
+	return river[river.size() - 1]
+
+
+func _river_dir(s: float) -> Vector2:
+	return (_river_point(s + 6.0) - _river_point(s - 6.0)).normalized()
+
+
+## Nearest point on the river: returns [distance, arc length].
+func river_query(p: Vector2) -> Vector2:
+	var best := 1e9
+	var best_s := 0.0
+	for i in range(1, river.size()):
+		var a: Vector2 = river[i - 1]
+		var b: Vector2 = river[i]
+		var ab := b - a
+		var t := clampf((p - a).dot(ab) / maxf(0.001, ab.length_squared()), 0.0, 1.0)
+		var d := p.distance_to(a + ab * t)
+		if d < best:
+			best = d
+			best_s = lerpf(river_s[i - 1], river_s[i], t)
+	return Vector2(best, best_s)
+
+
+## Unit vector across the river at the nearest point to `p`.
+func river_across(p: Vector2) -> Vector2:
+	return _river_dir(river_query(p).y).orthogonal()
+
+
+func _near_river(p: Vector2, margin: float) -> bool:
+	if river.is_empty():
+		return false
+	return river_query(p).x < margin
+
+
+## Bed half-width, bank width and bed depth along the river.
+func river_profile(s: float) -> Vector3:
+	var bed := 8.0 + detail.get_noise_1d(s * 0.9 + 50.0) * 3.0
+	var bank := 40.0 + detail.get_noise_1d(s * 0.6 + 400.0) * 16.0
+	var floor_y := -1.7
+	# The plunge pool under the falls.
+	var pool := smoothstep(70.0, 10.0, s)
+	bed = lerpf(bed, 24.0, pool)
+	bank = lerpf(bank, 22.0, pool)
+	# Shallow, wide fords.
+	for f in [0.28, 0.68]:
+		var k := smoothstep(70.0, 10.0, absf(s - f * river_len))
+		bank = lerpf(bank, 95.0, k)
+		floor_y = lerpf(floor_y, -0.25, k)
+	# A narrow rock gorge where the old bridge spans it.
+	var g := smoothstep(70.0, 15.0, absf(s - 0.48 * river_len))
+	bank = lerpf(bank, 15.0, g)
+	bed = lerpf(bed, 7.0, g)
+	# Widening into an estuary at the sea.
+	var mouth := smoothstep(river_len - 120.0, river_len, s)
+	bed = lerpf(bed, 30.0, mouth)
+	return Vector3(bed, bank, floor_y)
+
+
+func _carve_river() -> void:
+	var lo := Vector2(1e9, 1e9)
+	var hi := Vector2(-1e9, -1e9)
+	for p in river:
+		lo = Vector2(minf(lo.x, p.x), minf(lo.y, p.y))
+		hi = Vector2(maxf(hi.x, p.x), maxf(hi.y, p.y))
+	var pad := 120.0
+	var x0 := clampi(int(floor((lo.x - pad + HALF) / STEP)), 0, RES - 1)
+	var x1 := clampi(int(ceil((hi.x + pad + HALF) / STEP)), 0, RES - 1)
+	var z0 := clampi(int(floor((lo.y - pad + HALF) / STEP)), 0, RES - 1)
+	var z1 := clampi(int(ceil((hi.y + pad + HALF) / STEP)), 0, RES - 1)
+	for iz in range(z0, z1 + 1):
+		var wz := -HALF + float(iz) * STEP
+		for ix in range(x0, x1 + 1):
+			var wx := -HALF + float(ix) * STEP
+			var q := river_query(Vector2(wx, wz))
+			if q.x > 115.0:
+				continue
+			var prof := river_profile(q.y)
+			var t := smoothstep(prof.x + prof.y, prof.x, q.x)
+			if t <= 0.0:
+				continue
+			# Rock gorges are steep-sided: sharpen the profile there.
+			var idx := iz * RES + ix
+			heights[idx] = lerpf(heights[idx], minf(heights[idx], prof.z), t * t * (3.0 - 2.0 * t))
+
+
+## Runs `f(x, z, h) -> h` over every grid sample within `radius` of `c`.
+func _apply(c: Vector2, radius: float, f: Callable) -> void:
+	var x0 := clampi(int(floor((c.x - radius + HALF) / STEP)), 0, RES - 1)
+	var x1 := clampi(int(ceil((c.x + radius + HALF) / STEP)), 0, RES - 1)
+	var z0 := clampi(int(floor((c.y - radius + HALF) / STEP)), 0, RES - 1)
+	var z1 := clampi(int(ceil((c.y + radius + HALF) / STEP)), 0, RES - 1)
+	for iz in range(z0, z1 + 1):
+		var wz := -HALF + float(iz) * STEP
+		for ix in range(x0, x1 + 1):
+			var wx := -HALF + float(ix) * STEP
+			var idx := iz * RES + ix
+			heights[idx] = f.call(wx, wz, heights[idx])
 
 
 func height_at(x: float, z: float) -> float:
@@ -149,8 +565,20 @@ func slope_at(x: float, z: float) -> float:
 	return 1.0 - normal_at(x, z).y
 
 
+## Water surface height at a point: the sea, or the plateau lake / falls pool.
+func water_surface_at(x: float, z: float) -> float:
+	var p := Vector2(x, z)
+	if p.distance_to(LAKE_C) < LAKE_R + 22.0:
+		return lake_level
+	var ab := channel_b - channel_a
+	var t := clampf((p - channel_a).dot(ab) / maxf(0.001, ab.length_squared()), 0.0, 1.0)
+	if p.distance_to(channel_a + ab * t) < 9.0:
+		return lake_level
+	return WATER_LEVEL
+
+
 func is_water(x: float, z: float) -> bool:
-	return height_at(x, z) < WATER_LEVEL
+	return height_at(x, z) < water_surface_at(x, z)
 
 
 func flatness_ok(x: float, z: float, max_slope: float = 0.30) -> bool:
@@ -159,6 +587,24 @@ func flatness_ok(x: float, z: float, max_slope: float = 0.30) -> bool:
 
 func forest_density(x: float, z: float) -> float:
 	return woods.get_noise_2d(x, z) * 0.5 + 0.5
+
+
+func is_reserved(c: Vector2, margin: float) -> bool:
+	for r in reserved:
+		if c.distance_to(r[0]) < float(r[1]) + margin:
+			return true
+	return false
+
+
+## A random spot on dry, walkable land.
+func random_land_point(rng: RandomNumberGenerator, min_h := 2.0, max_slope := 0.35) -> Vector2:
+	for i in 80:
+		var c := Vector2(rng.randf_range(-HALF + 30.0, HALF - 30.0), rng.randf_range(-HALF + 30.0, HALF - 30.0))
+		var h := height_at(c.x, c.y)
+		if h < min_h or is_water(c.x, c.y) or slope_at(c.x, c.y) > max_slope:
+			continue
+		return c
+	return MAIN_C
 
 
 ## Soft circular terrace used for villages and POIs.

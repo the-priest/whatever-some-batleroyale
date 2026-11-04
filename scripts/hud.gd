@@ -2,6 +2,8 @@ class_name HUD
 extends CanvasLayer
 
 signal play_pressed
+signal host_lan_pressed
+signal join_lan_pressed
 signal resume_pressed
 signal quit_pressed
 signal settings_changed(sensitivity: float, volume: float, fov: float, players: int)
@@ -19,8 +21,8 @@ const ZONE_BLUE := Color(0.298, 0.553, 0.941)
 const STORM := Color(0.62, 0.42, 1.0)
 const PANEL := Color(0.043, 0.051, 0.059, 0.74)
 const PANEL_SOLID := Color(0.043, 0.051, 0.059, 0.92)
-const MAP_EXTENT := 450.0
-const MINIMAP_VIEW := 140.0
+const MAP_EXTENT := Terrain.HALF
+const MINIMAP_VIEW := 170.0
 
 var root: Control
 var font_bold: Font
@@ -680,10 +682,21 @@ func _build_menu() -> void:
 	col.add_child(_lv("DROP  ·  LOOT  ·  OUTLAST", 18, MUTED, false))
 	col.add_child(_spacer(30))
 
-	play_button = _button("P L A Y", true)
+	play_button = _button("P L A Y   S O L O", true)
 	play_button.custom_minimum_size = Vector2(340, 64)
 	play_button.pressed.connect(func(): play_pressed.emit())
 	col.add_child(play_button)
+	var lan := HBoxContainer.new()
+	lan.add_theme_constant_override("separation", 8)
+	var hb := _button("HOST LAN", false)
+	hb.custom_minimum_size = Vector2(166, 48)
+	hb.pressed.connect(func(): sfx_click(); host_lan_pressed.emit())
+	lan.add_child(hb)
+	var jb := _button("JOIN LAN", false)
+	jb.custom_minimum_size = Vector2(166, 48)
+	jb.pressed.connect(func(): sfx_click(); join_lan_pressed.emit())
+	lan.add_child(jb)
+	col.add_child(lan)
 	for item in [["LOADOUT", "_open_loadout"], ["SETTINGS", "_open_settings"], ["QUIT", "_quit"]]:
 		var b := _button(item[0], false)
 		b.custom_minimum_size = Vector2(340, 48)
@@ -868,7 +881,7 @@ func _build_pause() -> void:
 	col.add_child(lbl_size)
 	size_slider = HSlider.new()
 	size_slider.min_value = 10
-	size_slider.max_value = 60
+	size_slider.max_value = 100
 	size_slider.step = 5
 	size_slider.value = 50
 	size_slider.custom_minimum_size = Vector2(300, 22)
@@ -959,6 +972,9 @@ func show_pause(v: bool) -> void:
 
 func is_paused_open() -> bool:
 	return pause_panel.visible
+
+
+var map_zoom := 1.0
 
 
 func toggle_map() -> void:
@@ -1218,6 +1234,13 @@ func add_ping(pos: Vector3) -> void:
 		pings.pop_front()
 
 
+var mates: Array = []
+
+
+func set_mates(list: Array) -> void:
+	mates = list
+
+
 func set_match_size(n: int) -> void:
 	if menu_kicker != null:
 		var src := "ISLAND DROP  ·  %d PLAYERS  ·  SOLO" % n
@@ -1297,12 +1320,25 @@ func _unhandled_input(event: InputEvent) -> void:
 			resume_pressed.emit()
 		else:
 			show_pause(true)
-			get_tree().paused = true
+			# A LAN match keeps running for everyone else.
+			var g = get_parent()
+			var online: bool = g != null and g.get("net") != null and g.net.active
+			if not online:
+				get_tree().paused = true
 			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		get_viewport().set_input_as_handled()
 	elif event.is_action_pressed("map") and not pause_panel.visible:
 		toggle_map()
 		get_viewport().set_input_as_handled()
+	elif big_map.visible and event is InputEventMouseButton and event.pressed:
+		# Wheel zooms the map around you instead of swapping guns.
+		var mb := event as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_WHEEL_UP:
+			map_zoom = minf(6.0, map_zoom * 1.5)
+			get_viewport().set_input_as_handled()
+		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			map_zoom = maxf(1.0, map_zoom / 1.5)
+			get_viewport().set_input_as_handled()
 
 
 # -------------------------------------------------------------------- draw --
@@ -1495,6 +1531,9 @@ func _draw_world(ctrl: Control, inner: Rect2, origin: Vector2, span: float, big:
 			elif kind == "tower":
 				ctrl.draw_colored_polygon(PackedVector2Array([mp + Vector2(0, -7), mp + Vector2(-6, 5), mp + Vector2(6, 5)]), Color(0.95, 0.75, 0.35))
 				ctrl.draw_string(font_bold, mp + Vector2(-50, 18), "LOOKOUT", HORIZONTAL_ALIGNMENT_CENTER, 100, 10, Color(0.95, 0.85, 0.6))
+			elif kind == "landmark":
+				ctrl.draw_circle(mp, 3.5, Color(1.0, 0.82, 0.42))
+				ctrl.draw_string(font_bold, mp + Vector2(-80, -10), pl[0], HORIZONTAL_ALIGNMENT_CENTER, 160, 12, Color(1.0, 0.86, 0.55))
 			elif kind == "ruin":
 				ctrl.draw_rect(Rect2(mp - Vector2(3, 3), Vector2(6, 6)), Color(0.8, 0.78, 0.72), false, 1.5)
 	# Markers (supply drops).
@@ -1508,6 +1547,16 @@ func _draw_world(ctrl: Control, inner: Rect2, origin: Vector2, span: float, big:
 		var pp: Vector2 = to_map.call(p["p"])
 		var life: float = clampf(float(p["t"]) / 2.2, 0.0, 1.0)
 		ctrl.draw_arc(pp, 3.0 + (1.0 - life) * 7.0, 0, TAU, 16, Color(1.0, 0.35, 0.25, life), 1.5)
+
+	# Squad mates.
+	for m in mates:
+		var mp: Vector2 = to_map.call(m[1])
+		if not inner.has_point(mp):
+			continue
+		ctrl.draw_circle(mp, 5.0 if big else 4.0, Color(0, 0, 0, 0.6))
+		ctrl.draw_circle(mp, 3.8 if big else 3.0, Color(0.45, 0.95, 0.55))
+		if big:
+			ctrl.draw_string(font_bold, mp + Vector2(-60, -10), m[0], HORIZONTAL_ALIGNMENT_CENTER, 120, 11, Color(0.6, 1.0, 0.7))
 
 	# Player arrow.
 	var me: Vector2 = to_map.call(Vector2(player_pos.x, player_pos.z))
@@ -1566,7 +1615,12 @@ func _draw_big_map() -> void:
 	var side := minf(vp.x, vp.y) - 120.0
 	var inner := Rect2((vp - Vector2(side, side)) * 0.5, Vector2(side, side))
 	_map_style(big_map_draw, inner.grow(3.0))
-	_draw_world(big_map_draw, inner, Vector2(-MAP_EXTENT, -MAP_EXTENT), MAP_EXTENT * 2.0, true)
+	var span := MAP_EXTENT * 2.0 / map_zoom
+	var origin := Vector2(player_pos.x, player_pos.z) - Vector2(span, span) * 0.5
+	origin = origin.clamp(Vector2(-MAP_EXTENT, -MAP_EXTENT), Vector2(MAP_EXTENT - span, MAP_EXTENT - span))
+	if map_zoom <= 1.01:
+		origin = Vector2(-MAP_EXTENT, -MAP_EXTENT)
+	_draw_world(big_map_draw, inner, origin, span, true)
 	# Grid labels like a real map.
 	var cells := 8
 	for i in cells + 1:
@@ -1578,4 +1632,4 @@ func _draw_big_map() -> void:
 		if i < cells:
 			big_map_draw.draw_string(font_bold, Vector2(x + inner.size.x / cells * 0.5 - 4, inner.position.y - 10), "ABCDEFGH"[i], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, MUTED)
 			big_map_draw.draw_string(font_bold, Vector2(inner.position.x - 18, y + inner.size.y / cells * 0.5 + 4), str(i + 1), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, MUTED)
-	big_map_draw.draw_string(font_bold, Vector2(inner.position.x, inner.end.y + 26), "M  CLOSE MAP      ·      WHITE CIRCLE = NEXT SAFE ZONE      ·      RED RINGS = GUNFIRE", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, MUTED)
+	big_map_draw.draw_string(font_bold, Vector2(inner.position.x, inner.end.y + 26), "M  CLOSE MAP      ·      WHEEL  ZOOM      ·      WHITE CIRCLE = NEXT SAFE ZONE      ·      RED RINGS = GUNFIRE", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, MUTED)

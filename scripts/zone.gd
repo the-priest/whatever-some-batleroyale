@@ -6,19 +6,24 @@ signal phase_changed(phase: int, warning: bool)
 # Shrinking storm circle. Each phase holds (next circle already known and shown
 # on the map), then closes onto it. Anyone outside takes ramping damage.
 
-# Roughly 11-12 minutes from landing to the last circle.
-const HOLD := [100.0, 80.0, 65.0, 55.0, 45.0, 35.0, 25.0]
-const SHRINK := [75.0, 60.0, 50.0, 42.0, 35.0, 28.0, 22.0]
-const FRACTION := [0.62, 0.60, 0.55, 0.52, 0.48, 0.42, 0.0]
-const DAMAGE := [1.0, 2.0, 3.0, 5.0, 8.0, 11.0, 15.0, 20.0]
+# About 40 minutes from the plane to the last circle: a long first hold to
+# land and loot, then each circle tighter, faster and more painful.
+const HOLD := [360.0, 280.0, 220.0, 170.0, 130.0, 100.0, 80.0, 60.0]
+const SHRINK := [240.0, 200.0, 160.0, 130.0, 100.0, 80.0, 60.0, 50.0]
+const FRACTION := [0.59, 0.58, 0.57, 0.57, 0.57, 0.56, 0.53, 0.0]
+const DAMAGE := [0.4, 0.7, 1.2, 2.0, 3.5, 5.5, 8.0, 11.0, 15.0]
+## Middle of the playable area (between the two islands) and how far a
+## circle may reach from it.
+const MAP_MID := Vector2(90.0, 0.0)
+const MAP_REACH := 1150.0
 
 var terrain: Terrain = null
 
 var center := Vector2.ZERO
-var radius := 430.0
+var radius := 1250.0
 var target_center := Vector2.ZERO
-var target_radius := 430.0
-var start_radius := 430.0
+var target_radius := 1250.0
+var start_radius := 1250.0
 var start_center := Vector2.ZERO
 
 var phase := 0
@@ -75,10 +80,10 @@ func _build_wall() -> void:
 	_apply_wall()
 
 
-func start(p_island_radius: float) -> void:
+func start(p_island_radius: float, p_center := MAP_MID) -> void:
 	radius = p_island_radius
 	start_radius = radius
-	center = Vector2.ZERO
+	center = p_center
 	start_center = center
 	phase = 0
 	state = "hold"
@@ -106,9 +111,9 @@ func _choose_next() -> void:
 		var score := randf() * 4.0
 		if terrain != null:
 			var h := terrain.height_at(c.x, c.y)
-			if h < Terrain.WATER_LEVEL + 1.0:
+			if h < terrain.water_surface_at(c.x, c.y) + 1.0:
 				score -= 100.0
-			score -= maxf(0.0, c.length() + target_radius - 400.0) * 0.5
+			score -= maxf(0.0, c.distance_to(MAP_MID) + target_radius - MAP_REACH) * 0.5
 		if score > best_score:
 			best_score = score
 			best = c
@@ -160,13 +165,40 @@ func _apply_wall() -> void:
 	if wall == null:
 		return
 	var r := maxf(radius, 0.05)
-	wall.scale = Vector3(r, 100.0, r)
-	wall.position = Vector3(center.x, 60.0, center.y)
+	wall.scale = Vector3(r, 260.0, r)
+	wall.position = Vector3(center.x, 150.0, center.y)
 	ring.scale = Vector3(r, 0.6, r)
 	ring.position = Vector3(center.x, 0.8, center.y)
 	ring.visible = radius > 0.5
 	if _wall_mat != null:
 		_wall_mat.set_shader_parameter("radius", r)
+
+
+## Compact state for LAN snapshots.
+func net_pack() -> PackedFloat32Array:
+	var st := 0.0 if state == "hold" else (1.0 if state == "shrink" else 2.0)
+	return PackedFloat32Array([center.x, center.y, radius, target_center.x, target_center.y, target_radius,
+		timer, float(phase), st, 1.0 if warning else 0.0, phase_duration])
+
+
+func net_apply(a: PackedFloat32Array) -> void:
+	if a.size() < 11:
+		return
+	var old_phase := phase
+	var old_warn := warning
+	center = Vector2(a[0], a[1])
+	radius = a[2]
+	target_center = Vector2(a[3], a[4])
+	target_radius = a[5]
+	timer = a[6]
+	phase = int(a[7])
+	state = "hold" if a[8] < 0.5 else ("shrink" if a[8] < 1.5 else "done")
+	finished = state == "done"
+	warning = a[9] > 0.5
+	phase_duration = a[10]
+	if phase != old_phase or warning != old_warn:
+		phase_changed.emit(phase, warning)
+	_apply_wall()
 
 
 func damage_per_second() -> float:
