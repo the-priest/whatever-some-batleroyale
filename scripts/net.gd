@@ -11,12 +11,22 @@ signal roster_changed
 signal status(text: String)
 signal games_found(list: Array)
 signal left_session(reason: String)
+signal chat(from_id: int, name: String, text: String, system: bool)
+signal countdown(seconds: int)
+signal pings_updated
+signal marker(from_id: int, pos: Vector3)
 
 const PORT := 24555
 const DISCOVERY_PORT := 24556
-const VERSION := "br-2"
+const VERSION := "br-3"
 const SNAP_RATE := 12.0
 const STATE_RATE := 20.0
+const MAX_PLAYERS := 8
+## One colour per player slot: lobby cards, name tags, map dots, markers.
+const COLORS := [
+	Color(0.96, 0.66, 0.24), Color(0.36, 0.80, 0.98), Color(0.52, 0.92, 0.44), Color(0.96, 0.42, 0.62),
+	Color(0.76, 0.56, 1.00), Color(1.00, 0.88, 0.30), Color(0.30, 0.92, 0.80), Color(1.00, 0.52, 0.36),
+]
 
 var game: Node
 var peer: ENetMultiplayerPeer
@@ -27,6 +37,12 @@ var my_name := "PLAYER"
 var roster: Dictionary = {}
 var squad := true
 var match_running := false
+## Per player: {"ready": bool, "color": int, "ping": int}.
+var info: Dictionary = {}
+## Host-controlled match settings, mirrored to everyone.
+var settings := {"squad": true, "bots": 63, "loadout": true}
+var _ping_t := 0.0
+var _countdown_left := -1.0
 
 var _beacon: PacketPeerUDP
 var _listener: PacketPeerUDP
@@ -70,7 +86,7 @@ func is_client() -> bool:
 func host() -> bool:
 	leave("")
 	peer = ENetMultiplayerPeer.new()
-	var err := peer.create_server(PORT, 8)
+	var err := peer.create_server(PORT, MAX_PLAYERS - 1)
 	if err != OK:
 		status.emit("COULD NOT HOST ON PORT %d (%s)" % [PORT, error_string(err)])
 		peer = null
@@ -79,6 +95,11 @@ func host() -> bool:
 	active = true
 	hosting = true
 	roster = {1: my_name}
+	info = {1: {"ready": true, "color": 0, "ping": 0}}
+	if game != null:
+		settings["bots"] = game.MAX_BOTS
+		settings["loadout"] = game.loadout_enabled
+	settings["squad"] = squad
 	_beacon = PacketPeerUDP.new()
 	_beacon.set_broadcast_enabled(true)
 	_beacon.set_dest_address("255.255.255.255", DISCOVERY_PORT)
@@ -114,6 +135,8 @@ func leave(reason := "") -> void:
 	hosting = false
 	match_running = false
 	roster.clear()
+	info.clear()
+	_countdown_left = -1.0
 	_beacon = null
 	if was and reason != "":
 		left_session.emit(reason)
@@ -152,8 +175,9 @@ func _process(delta: float) -> void:
 		_beacon_t -= delta
 		if _beacon_t <= 0.0:
 			_beacon_t = 1.0
-			var info := {"game": "blockroyale", "v": VERSION, "name": my_name, "players": roster.size(), "running": match_running}
-			_beacon.put_packet(JSON.stringify(info).to_utf8_buffer())
+			var beacon := {"game": "blockroyale", "v": VERSION, "name": my_name, "players": roster.size(),
+				"max": MAX_PLAYERS, "running": match_running, "squad": squad, "bots": int(settings.get("bots", 63))}
+			_beacon.put_packet(JSON.stringify(beacon).to_utf8_buffer())
 	if _listener != null:
 		var changed := false
 		while _listener.get_available_packet_count() > 0:
@@ -174,6 +198,17 @@ func _process(delta: float) -> void:
 			games_found.emit(_found.values())
 	if active and match_running:
 		_tick_match(delta)
+	if active:
+		_ping_t -= delta
+		if _ping_t <= 0.0:
+			_ping_t = 1.0
+			_update_pings()
+	if hosting and _countdown_left > 0.0:
+		_countdown_left -= delta
+		if _countdown_left <= 0.0:
+			_countdown_left = -1.0
+			if game != null:
+				game._net_host_start()
 
 
 # ------------------------------------------------------------------- lobby --
@@ -188,8 +223,13 @@ func _on_peer_disconnected(id: int) -> void:
 		return
 	var name: String = roster.get(id, "PLAYER")
 	roster.erase(id)
+	info.erase(id)
 	_send_roster()
 	status.emit("%s LEFT" % name)
+	_chat.rpc(0, "", "%s LEFT THE LOBBY" % name, true)
+	chat.emit(0, "", "%s LEFT THE LOBBY" % name, true)
+	if _countdown_left > 0.0:
+		cancel_countdown()
 	if match_running and game != null:
 		game.net_player_left(id)
 
@@ -228,7 +268,16 @@ func _hello(name: String, version: String) -> void:
 		n = "%s %d" % [base, k]
 		k += 1
 	roster[id] = n
+	var used: Array = []
+	for other in info:
+		used.append(int(info[other]["color"]))
+	var col := 0
+	while col in used and col < COLORS.size() - 1:
+		col += 1
+	info[id] = {"ready": false, "color": col, "ping": 0}
 	_send_roster()
+	_chat.rpc(0, "", "%s JOINED THE LOBBY" % n, true)
+	chat.emit(0, "", "%s JOINED THE LOBBY" % n, true)
 
 
 @rpc("authority", "reliable")
@@ -239,29 +288,191 @@ func _kick(reason: String) -> void:
 
 func set_squad(v: bool) -> void:
 	squad = v
+	settings["squad"] = v
 	if hosting:
 		_send_roster()
+
+
+## Host: change a match setting (mode, bots, loadout).
+func set_setting(key: String, value: Variant) -> void:
+	if not hosting:
+		return
+	settings[key] = value
+	if key == "squad":
+		squad = bool(value)
+	_send_roster()
+
+
+func color_of(id: int) -> Color:
+	var i := int(info.get(id, {}).get("color", 0))
+	return COLORS[i % COLORS.size()]
+
+
+func ping_of(id: int) -> int:
+	return int(info.get(id, {}).get("ping", 0))
+
+
+func is_ready(id: int) -> bool:
+	return id == 1 or bool(info.get(id, {}).get("ready", false))
+
+
+func all_ready() -> bool:
+	for id in roster:
+		if not is_ready(int(id)):
+			return false
+	return true
+
+
+func ready_count() -> int:
+	var n := 0
+	for id in roster:
+		if is_ready(int(id)):
+			n += 1
+	return n
+
+
+func set_ready(v: bool) -> void:
+	if hosting or not active:
+		return
+	if info.has(my_id()):
+		info[my_id()]["ready"] = v
+	roster_changed.emit()
+	_ready_state.rpc_id(1, v)
+
+
+@rpc("any_peer", "reliable")
+func _ready_state(v: bool) -> void:
+	if not hosting:
+		return
+	var id := multiplayer.get_remote_sender_id()
+	if info.has(id):
+		info[id]["ready"] = v
+		_send_roster()
+		if not v and _countdown_left > 0.0:
+			cancel_countdown()
 
 
 func _send_roster() -> void:
 	var list: Array = []
 	for id in roster:
-		list.append([id, roster[id]])
+		var i: Dictionary = info.get(id, {"ready": false, "color": 0, "ping": 0})
+		list.append([id, roster[id], bool(i["ready"]), int(i["color"]), int(i["ping"])])
 	var seed_v: int = game.seed_value if game != null else 0
-	var size: int = game.match_size if game != null else 64
-	_roster.rpc(list, squad, seed_v, size)
+	if game != null:
+		game.net_apply_settings(settings)
+	_roster.rpc(list, settings, seed_v)
 	roster_changed.emit()
 
 
 @rpc("authority", "call_remote", "reliable")
-func _roster(list: Array, p_squad: bool, seed_v: int, size: int) -> void:
+func _roster(list: Array, p_settings: Dictionary, seed_v: int) -> void:
 	roster.clear()
+	info.clear()
 	for e in list:
 		roster[int(e[0])] = str(e[1])
-	squad = p_squad
+		info[int(e[0])] = {"ready": bool(e[2]), "color": int(e[3]), "ping": int(e[4])}
+	settings = p_settings
+	squad = bool(settings.get("squad", true))
+	# The host may have renamed us to keep names unique.
+	if roster.has(my_id()):
+		my_name = str(roster[my_id()])
 	roster_changed.emit()
 	if game != null:
-		game.net_lobby_update(seed_v, size)
+		game.net_lobby_update(seed_v, int(settings.get("bots", 63)) + 1)
+		game.net_apply_settings(settings)
+
+
+func _update_pings() -> void:
+	if peer == null:
+		return
+	if hosting:
+		var pings := {}
+		for id in roster:
+			if int(id) == 1:
+				continue
+			var pp := peer.get_peer(int(id))
+			if pp != null:
+				var rtt := int(pp.get_statistic(ENetPacketPeer.PEER_ROUND_TRIP_TIME))
+				if info.has(id):
+					info[id]["ping"] = rtt
+				pings[id] = rtt
+		if not pings.is_empty():
+			_pings.rpc(pings)
+		pings_updated.emit()
+	else:
+		var hp := peer.get_peer(1)
+		if hp != null and info.has(my_id()):
+			info[my_id()]["ping"] = int(hp.get_statistic(ENetPacketPeer.PEER_ROUND_TRIP_TIME))
+			pings_updated.emit()
+
+
+@rpc("authority", "call_remote", "unreliable")
+func _pings(pings: Dictionary) -> void:
+	for id in pings:
+		if info.has(id) and int(id) != my_id():
+			info[id]["ping"] = int(pings[id])
+	pings_updated.emit()
+
+
+# -------------------------------------------------------------------- chat --
+
+func send_chat(text: String) -> void:
+	var t := text.strip_edges().substr(0, 140)
+	if t == "" or not active:
+		return
+	_chat.rpc(my_id(), my_name, t, false)
+	chat.emit(my_id(), my_name, t, false)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _chat(from_id: int, name: String, text: String, system: bool) -> void:
+	var sender := multiplayer.get_remote_sender_id()
+	# Only the host may speak for the system or for someone else.
+	if sender != 1:
+		from_id = sender
+		name = str(roster.get(sender, name))
+		system = false
+	chat.emit(from_id, name, text, system)
+
+
+# --------------------------------------------------------------- countdown --
+
+func start_countdown(seconds := 5) -> void:
+	if not hosting:
+		return
+	_countdown_left = float(seconds)
+	_countdown.rpc(seconds)
+	countdown.emit(seconds)
+
+
+func cancel_countdown() -> void:
+	if not hosting:
+		return
+	_countdown_left = -1.0
+	_countdown.rpc(-1)
+	countdown.emit(-1)
+
+
+func counting_down() -> bool:
+	return _countdown_left > 0.0
+
+
+@rpc("authority", "call_remote", "reliable")
+func _countdown(seconds: int) -> void:
+	countdown.emit(seconds)
+
+
+# ----------------------------------------------------------------- markers --
+
+func send_marker(pos: Vector3) -> void:
+	if active:
+		_marker.rpc(pos)
+	marker.emit(my_id(), pos)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _marker(pos: Vector3) -> void:
+	marker.emit(multiplayer.get_remote_sender_id(), pos)
 
 
 # ------------------------------------------------------------------- match --
@@ -269,6 +480,11 @@ func _roster(list: Array, p_squad: bool, seed_v: int, size: int) -> void:
 ## Host: everything a client needs to build the same match.
 func send_setup(setup: Dictionary) -> void:
 	match_running = true
+	_countdown_left = -1.0
+	# Everyone readies up again for the next one.
+	for id in info:
+		if int(id) != 1:
+			info[id]["ready"] = false
 	_shots.clear()
 	_loot_out.clear()
 	_setup.rpc(setup)
@@ -277,6 +493,9 @@ func send_setup(setup: Dictionary) -> void:
 @rpc("authority", "call_remote", "reliable")
 func _setup(setup: Dictionary) -> void:
 	match_running = true
+	for id in info:
+		if int(id) != 1:
+			info[id]["ready"] = false
 	_shots.clear()
 	_loot_out.clear()
 	if game != null:

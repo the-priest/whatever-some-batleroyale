@@ -199,6 +199,23 @@ func _ready() -> void:
 	_emit_weapon()
 
 
+## Chat (or any text box) owns the keyboard while it is open.
+func _locked() -> bool:
+	return game != null and game.get("input_locked") == true
+
+
+func _ap(action: String) -> bool:
+	return not _locked() and Input.is_action_pressed(action)
+
+
+func _ajp(action: String) -> bool:
+	return not _locked() and Input.is_action_just_pressed(action)
+
+
+func _vec(a: String, b: String, c: String, d: String) -> Vector2:
+	return Vector2.ZERO if _locked() else Input.get_vector(a, b, c, d)
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if not alive:
 		return
@@ -254,12 +271,12 @@ func _passenger(_delta: float) -> void:
 
 
 func _freefall(delta: float) -> void:
-	var input := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
+	var input := _vec("move_left", "move_right", "move_forward", "move_back")
 	var basis_yaw := Basis(Vector3.UP, yaw)
 	var wish := basis_yaw * Vector3(input.x, 0.0, input.y)
-	var dive := 1.0 + (0.55 if Input.is_action_pressed("move_forward") else 0.0)
+	var dive := 1.0 + (0.55 if _ap("move_forward") else 0.0)
 	freefall_speed = move_toward(freefall_speed, TERMINAL * dive, 90.0 * delta)
-	var target := wish * (32.0 if not Input.is_action_pressed("sprint") else 42.0)
+	var target := wish * (32.0 if not _ap("sprint") else 42.0)
 	velocity.x = move_toward(velocity.x, target.x, 30.0 * delta)
 	velocity.z = move_toward(velocity.z, target.z, 30.0 * delta)
 	velocity.y = freefall_speed
@@ -270,7 +287,7 @@ func _freefall(delta: float) -> void:
 	trauma = maxf(trauma, clampf(-velocity.y / 62.0, 0.0, 1.0) * 0.42)
 	_freefall_t += delta
 	# The Space press that jumped out of the plane must not also pull the cord.
-	if Input.is_action_just_pressed("jump") and _freefall_t > 0.6:
+	if _ajp("jump") and _freefall_t > 0.6:
 		open_chute()
 	# Auto-deploy as a safety net so a first-time player does not splat while sightseeing.
 	if mode == Mode.FREEFALL and game != null and game.terrain != null:
@@ -281,7 +298,7 @@ func _freefall(delta: float) -> void:
 
 
 func _chute(delta: float) -> void:
-	var input := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
+	var input := _vec("move_left", "move_right", "move_forward", "move_back")
 	var basis_yaw := Basis(Vector3.UP, yaw)
 	var wish := basis_yaw * Vector3(input.x, 0.0, input.y)
 	# Ram-air canopy: W pushes the nose down for speed, S flares to stretch
@@ -301,10 +318,10 @@ func _chute(delta: float) -> void:
 
 
 func _ground(delta: float) -> void:
-	var input := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
-	var crouch := Input.is_action_pressed("crouch")
+	var input := _vec("move_left", "move_right", "move_forward", "move_back")
+	var crouch := _ap("crouch")
 	_sprint_lock = maxf(0.0, _sprint_lock - delta)
-	sprinting = Input.is_action_pressed("sprint") and input.y < -0.3 and not crouch and not aiming and not healing and _sprint_lock <= 0.0 and is_on_floor() and absf(lean) < 0.2
+	sprinting = _ap("sprint") and input.y < -0.3 and not crouch and not aiming and not healing and _sprint_lock <= 0.0 and is_on_floor() and absf(lean) < 0.2
 	var speed := CROUCH if crouch else (SPRINT if sprinting else WALK)
 	if aiming:
 		speed *= 0.62
@@ -329,7 +346,7 @@ func _ground(delta: float) -> void:
 	else:
 		velocity.y -= GRAVITY * delta
 		_coyote = maxf(0.0, _coyote - delta)
-	if Input.is_action_just_pressed("jump") and _coyote > 0.0 and not in_water:
+	if _ajp("jump") and _coyote > 0.0 and not in_water:
 		velocity.y = JUMP
 		_coyote = 0.0
 		if game != null and game.sfx != null:
@@ -372,40 +389,40 @@ func _ground(delta: float) -> void:
 	if is_on_floor() and planar > 1.2:
 		bob += delta * planar * 1.5
 		_step_dist += planar * delta
-		if _step_dist > (2.6 if sprinting else 2.1 if Input.is_action_pressed("crouch") else 3.0):
+		if _step_dist > (2.6 if sprinting else 2.1 if _ap("crouch") else 3.0):
 			_step_dist = 0.0
 			_footstep()
-	if Input.is_action_just_pressed("reload"):
+	if _ajp("reload"):
 		start_reload()
-	if Input.is_action_just_pressed("swap_weapon"):
+	if _ajp("swap_weapon"):
 		cycle_weapon()
-	if Input.is_action_just_pressed("fire_mode"):
+	if _ajp("fire_mode"):
 		toggle_fire_mode()
-	if Input.is_action_just_pressed("zero_up"):
+	if _ajp("zero_up"):
 		adjust_zero(100)
-	if Input.is_action_just_pressed("zero_down"):
+	if _ajp("zero_down"):
 		adjust_zero(-100)
 	_update_lean(delta)
 	_update_breath(delta)
-	if Input.is_action_just_pressed("slot_1"):
+	if _ajp("slot_1"):
 		select_slot(0)
-	if Input.is_action_just_pressed("slot_2"):
+	if _ajp("slot_2"):
 		select_slot(1)
-	if Input.is_action_just_pressed("interact"):
+	if _ajp("interact"):
 		_try_pickup()
-	if Input.is_action_just_pressed("heal"):
+	if _ajp("heal"):
 		start_heal()
-	if Input.is_action_just_pressed("use_bandage"):
+	if _ajp("use_bandage"):
 		use_item("bandage")
-	if Input.is_action_just_pressed("use_med"):
+	if _ajp("use_med"):
 		use_item("med")
-	if Input.is_action_just_pressed("use_energy"):
+	if _ajp("use_energy"):
 		use_item("energy")
 	_throw_cd = maxf(0.0, _throw_cd - delta)
-	if Input.is_action_just_pressed("grenade"):
+	if _ajp("grenade"):
 		throw_grenade()
 	_tick_boost(delta)
-	aiming = Input.is_action_pressed("aim") and not reloading and not healing
+	aiming = _ap("aim") and not reloading and not healing
 	fire_timer = maxf(0.0, fire_timer - delta)
 	if reloading:
 		reload_timer -= delta
@@ -420,7 +437,7 @@ func _ground(delta: float) -> void:
 	if _since_shot > 0.32:
 		_spray_n = 0
 	if has_gun():
-		want_fire = Input.is_action_pressed("fire") if is_auto() else Input.is_action_just_pressed("fire")
+		want_fire = _ap("fire") if is_auto() else _ajp("fire")
 	if want_fire and healing:
 		cancel_heal()
 	if want_fire and sprinting:
@@ -430,7 +447,7 @@ func _ground(delta: float) -> void:
 		fire_timer = maxf(fire_timer, 0.12 * sprint_blend)
 	if want_fire and fire_timer <= 0.0 and not reloading and equip_t > 0.75 and bolt_t < 0.0:
 		_try_fire()
-	elif not has_gun() and Input.is_action_just_pressed("fire"):
+	elif not has_gun() and _ajp("fire"):
 		notice.emit("NO WEAPON  —  PRESS F TO PICK ONE UP")
 
 
@@ -517,7 +534,7 @@ func _update_camera(delta: float) -> void:
 		camera.fov = lerpf(camera.fov, target_fov, clampf(delta * 14.0, 0.0, 1.0))
 
 	# Smooth crouch + land dip + foot bob.
-	var crouching := Input.is_action_pressed("crouch") and mode == Mode.GROUND
+	var crouching := _ap("crouch") and mode == Mode.GROUND
 	var target_y := CROUCH_EYE if crouching else EYE
 	if mode == Mode.FREEFALL or mode == Mode.CHUTE:
 		target_y = cam_base.y
@@ -547,7 +564,7 @@ func current_spread_deg() -> float:
 	var s := lerpf(float(d["spread"]), float(d["ads_spread"]), aim_blend)
 	var planar := Vector2(velocity.x, velocity.z).length()
 	s *= 1.0 + clampf(planar / WALK, 0.0, 1.6) * 0.55 * (1.0 - aim_blend * 0.7)
-	if Input.is_action_pressed("crouch") and is_on_floor():
+	if _ap("crouch") and is_on_floor():
 		s *= 0.8
 	if not is_on_floor():
 		s = s * 2.2 + 1.0
@@ -785,7 +802,7 @@ func _try_fire() -> void:
 	# Spread is measured before this shot adds its own bloom.
 	var spread_deg := current_spread_deg()
 	var rec := float(d["recoil"]) * (0.62 if aim_blend > 0.5 else 1.0) * recoil_mult()
-	if Input.is_action_pressed("crouch"):
+	if _ap("crouch"):
 		rec *= 0.85
 	var kick_up := deg_to_rad(rec * 0.55)
 	recoil_pitch += kick_up * 0.65
@@ -1384,7 +1401,7 @@ func _footstep() -> void:
 	var db := -9.0
 	if sprinting:
 		db = -5.0
-	elif Input.is_action_pressed("crouch"):
+	elif _ap("crouch"):
 		db = -18.0
 	game.sfx.play_2d("step_%s_%d" % [surf, randi() % 4 + 1], db, 0.07)
 	if sprinting and randf() < 0.45:
@@ -1402,7 +1419,7 @@ func display_name() -> String:
 
 
 func crouching() -> bool:
-	return mode == Mode.GROUND and Input.is_action_pressed("crouch")
+	return mode == Mode.GROUND and _ap("crouch")
 
 
 func reset_for_match() -> void:
@@ -1527,9 +1544,9 @@ func adjust_zero(step: int) -> void:
 
 func _update_lean(delta: float) -> void:
 	var want := 0.0
-	if Input.is_action_pressed("lean_left"):
+	if _ap("lean_left"):
 		want -= 1.0
-	if Input.is_action_pressed("lean_right"):
+	if _ap("lean_right"):
 		want += 1.0
 	if sprinting:
 		want = 0.0
@@ -1548,7 +1565,7 @@ func _update_lean(delta: float) -> void:
 func _update_breath(delta: float) -> void:
 	var scoped := aiming and cur_zoom() >= 1.9 and aim_blend > 0.7
 	var was_holding := holding_breath
-	holding_breath = scoped and Input.is_action_pressed("sprint") and breath > 0.0
+	holding_breath = scoped and _ap("sprint") and breath > 0.0
 	if holding_breath != was_holding and game != null and game.sfx != null:
 		game.sfx.play_2d("breath_in" if holding_breath else "breath_out", -10.0, 0.05)
 	if holding_breath:
@@ -1562,7 +1579,7 @@ func _update_breath(delta: float) -> void:
 	var amp := deg_to_rad(0.10 + cur_zoom() * 0.022)
 	var planar := Vector2(velocity.x, velocity.z).length()
 	amp *= 1.0 + clampf(planar / WALK, 0.0, 1.5) * 1.6
-	if Input.is_action_pressed("crouch"):
+	if _ap("crouch"):
 		amp *= 0.6
 	if breath <= 0.5:
 		amp *= 1.9

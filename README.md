@@ -48,17 +48,38 @@ off to loot everything from scratch.
 
 ## LAN multiplayer
 
-Everyone must be on the same network (same Wi-Fi or router).
+Everyone must be on the same network (same Wi-Fi or router). Up to 8 players.
 
-1. One player presses **HOST LAN** in the main menu. The lobby shows the address to share.
-2. The others press **JOIN LAN**. The host's game appears in the list; click it, or type the
-   host's address and press **JOIN**.
-3. The host picks **Squad vs Bots** (everyone on one team, no friendly fire, team mates shown
-   on the map with name tags) or **Free-for-all**, then presses **START MATCH**.
+1. One player presses **HOST LAN** in the main menu. The lobby shows their address, with a
+   button to copy it.
+2. The others press **JOIN LAN**. Games on the network appear in the server list; click one, or
+   type the host's address under Direct Connect.
+3. In the lobby:
+   - Every player has a slot with their colour, ping and ready state. There is a chat (press
+     Enter to type).
+   - The host picks **Squad vs Bots** or **Free-for-all**, the number of bots, and whether
+     everyone lands with their loadout.
+4. Everyone presses **READY**. The host presses **START MATCH** (or **FORCE START**), and a
+   5-second countdown drops the whole lobby into the same plane.
+
+In a match:
+
+| Key | Action |
+| --- | --- |
+| Tab (hold) | Scoreboard: players, kills, damage, ping, bots left |
+| Enter | Chat |
+| Middle mouse | Place a marker where you look (again on the same spot removes it) |
+| Map: left / right click | Place / remove a marker on the map |
+| Left mouse (when out) | Spectate the next team mate |
+
+- In squad mode, team mates appear on the squad panel (health and distance), with coloured
+  name tags, on the compass and on the map. There is no friendly fire.
+- When the match ends, Space or Esc returns everyone to the lobby to ready up again.
 
 Joining players load the host's island automatically. The host runs the bots, the storm, loot
 and supply drops. If Windows asks whether to allow the game through the firewall, allow it on
-private networks. The game uses UDP ports 24555 (game) and 24556 (LAN discovery).
+private networks. The game uses UDP ports 24555 (game) and 24556 (LAN discovery). Everyone must
+run the same build.
 
 ## The island
 

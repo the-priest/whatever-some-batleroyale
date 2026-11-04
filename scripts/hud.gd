@@ -2,6 +2,9 @@ class_name HUD
 extends CanvasLayer
 
 signal play_pressed
+signal chat_sent(text: String)
+signal chat_closed
+signal map_clicked(world: Vector2, button: int)
 signal host_lan_pressed
 signal join_lan_pressed
 signal resume_pressed
@@ -146,6 +149,7 @@ func _ready() -> void:
 	_build_minimap()
 	_build_bottom_text()
 	_build_big_map()
+	_build_social()
 	_build_menu()
 	_build_end()
 	_build_pause()
@@ -812,6 +816,11 @@ func _build_end() -> void:
 	end_stats.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	col.add_child(end_stats)
 	col.add_child(_spacer(24))
+	end_table = _lv("", 14, Color(1, 1, 1, 0.85))
+	end_table.add_theme_font_override("font", font_mono)
+	end_table.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	col.add_child(end_table)
+	col.add_child(_spacer(14))
 	end_hint = _lv("PRESS  SPACE  TO  REDEPLOY   ·   ESC  FOR  MENU", 13, ACCENT)
 	end_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	col.add_child(end_hint)
@@ -1235,6 +1244,26 @@ func add_ping(pos: Vector3) -> void:
 
 
 var mates: Array = []
+## Map / compass / world markers: {pos: Vector3, color: Color, name: String}.
+var waypoints: Array = []
+var _bm_inner := Rect2()
+var _bm_origin := Vector2.ZERO
+var _bm_span := 1.0
+## Overhead labels for team mates: {pos: Vector3, name: String, color: Color}.
+var tags: Array = []
+var camera_3d: Camera3D
+var social_layer: Control
+var scoreboard: Panel
+var _sb_title: Label
+var _sb_rows: VBoxContainer
+var _sb_footer: Label
+var squad_draw: Control
+var squad_rows: Array = []
+var chat_box: VBoxContainer
+var chat_edit: LineEdit
+var chat_open := false
+var lbl_ping: Label
+var end_table: Label
 
 
 func set_mates(list: Array) -> void:
@@ -1333,6 +1362,11 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif big_map.visible and event is InputEventMouseButton and event.pressed:
 		# Wheel zooms the map around you instead of swapping guns.
 		var mb := event as InputEventMouseButton
+		if (mb.button_index == MOUSE_BUTTON_LEFT or mb.button_index == MOUSE_BUTTON_RIGHT) and _bm_inner.has_point(mb.position):
+			var w := _bm_origin + (mb.position - _bm_inner.position) / _bm_inner.size.x * _bm_span
+			map_clicked.emit(w, mb.button_index)
+			get_viewport().set_input_as_handled()
+			return
 		if mb.button_index == MOUSE_BUTTON_WHEEL_UP:
 			map_zoom = minf(6.0, map_zoom * 1.5)
 			get_viewport().set_input_as_handled()
@@ -1417,6 +1451,21 @@ func _draw_compass() -> void:
 		var rel := wrapf(bearing - heading, -180.0, 180.0)
 		var x := cx + clampf(rel, -62.0, 62.0) / 62.0 * half
 		compass.draw_colored_polygon(PackedVector2Array([Vector2(x, y + 19), Vector2(x - 5, y + 27), Vector2(x + 5, y + 27)]), STORM.lightened(0.3))
+	for wp in waypoints:
+		var to_w := Vector2(wp.pos.x, wp.pos.z) - Vector2(player_pos.x, player_pos.z)
+		var bearing_w := rad_to_deg(atan2(to_w.x, -to_w.y))
+		var rel_w := wrapf(bearing_w - heading, -180.0, 180.0)
+		var xw := cx + clampf(rel_w, -62.0, 62.0) / 62.0 * half
+		var col_w: Color = wp.color
+		compass.draw_colored_polygon(PackedVector2Array([Vector2(xw, y + 6), Vector2(xw + 5, y + 11), Vector2(xw, y + 16), Vector2(xw - 5, y + 11)]), col_w)
+	for m in mates:
+		if m.size() > 3 and not bool(m[3]):
+			continue
+		var to_m: Vector2 = m[1] - Vector2(player_pos.x, player_pos.z)
+		var rel_m := wrapf(rad_to_deg(atan2(to_m.x, -to_m.y)) - heading, -180.0, 180.0)
+		if absf(rel_m) <= 62.0:
+			var xm := cx + rel_m / 62.0 * half
+			compass.draw_circle(Vector2(xm, y + 23), 3.0, m[2] if m.size() > 2 else Color(0.45, 0.95, 0.55))
 	compass.draw_string(font_mono, Vector2(cx + half + 14, y + 14), "%03d" % int(wrapf(heading, 0.0, 360.0)), HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(1, 1, 1, 0.45))
 
 
@@ -1550,13 +1599,29 @@ func _draw_world(ctrl: Control, inner: Rect2, origin: Vector2, span: float, big:
 
 	# Squad mates.
 	for m in mates:
+		if m.size() > 3 and not bool(m[3]):
+			continue
 		var mp: Vector2 = to_map.call(m[1])
 		if not inner.has_point(mp):
 			continue
-		ctrl.draw_circle(mp, 5.0 if big else 4.0, Color(0, 0, 0, 0.6))
-		ctrl.draw_circle(mp, 3.8 if big else 3.0, Color(0.45, 0.95, 0.55))
+		var mc: Color = m[2] if m.size() > 2 else Color(0.45, 0.95, 0.55)
+		ctrl.draw_circle(mp, 5.5 if big else 4.5, Color(0, 0, 0, 0.7))
+		ctrl.draw_circle(mp, 4.2 if big else 3.4, mc)
 		if big:
-			ctrl.draw_string(font_bold, mp + Vector2(-60, -10), m[0], HORIZONTAL_ALIGNMENT_CENTER, 120, 11, Color(0.6, 1.0, 0.7))
+			ctrl.draw_string(font_bold, mp + Vector2(-60, -10), m[0], HORIZONTAL_ALIGNMENT_CENTER, 120, 11, mc)
+	# Waypoints.
+	for w in waypoints:
+		var wp: Vector2 = to_map.call(Vector2(w.pos.x, w.pos.z))
+		if not inner.has_point(wp):
+			continue
+		var wc: Color = w.color
+		var k2 := 7.0 if big else 5.0
+		ctrl.draw_colored_polygon(PackedVector2Array([wp + Vector2(0, -k2), wp + Vector2(k2, 0), wp + Vector2(0, k2), wp + Vector2(-k2, 0)]), Color(0, 0, 0, 0.6))
+		ctrl.draw_colored_polygon(PackedVector2Array([wp + Vector2(0, -k2 + 1.5), wp + Vector2(k2 - 1.5, 0), wp + Vector2(0, k2 - 1.5), wp + Vector2(-k2 + 1.5, 0)]), wc)
+	if big:
+		_bm_inner = inner
+		_bm_origin = origin
+		_bm_span = span
 
 	# Player arrow.
 	var me: Vector2 = to_map.call(Vector2(player_pos.x, player_pos.z))
@@ -1633,3 +1698,278 @@ func _draw_big_map() -> void:
 			big_map_draw.draw_string(font_bold, Vector2(x + inner.size.x / cells * 0.5 - 4, inner.position.y - 10), "ABCDEFGH"[i], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, MUTED)
 			big_map_draw.draw_string(font_bold, Vector2(inner.position.x - 18, y + inner.size.y / cells * 0.5 + 4), str(i + 1), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, MUTED)
 	big_map_draw.draw_string(font_bold, Vector2(inner.position.x, inner.end.y + 26), "M  CLOSE MAP      ·      WHEEL  ZOOM      ·      WHITE CIRCLE = NEXT SAFE ZONE      ·      RED RINGS = GUNFIRE", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, MUTED)
+
+
+
+# ----------------------------------------------------------- multiplayer --
+func _build_social() -> void:
+	# Overhead tags and markers drawn over the 3D view.
+	social_layer = Control.new()
+	social_layer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	social_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	social_layer.draw.connect(_draw_social)
+	root.add_child(social_layer)
+	_hud_nodes.append(social_layer)
+
+	lbl_ping = _lv("", 11, MUTED)
+	lbl_ping.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	lbl_ping.offset_left = -240
+	lbl_ping.offset_right = -28
+	lbl_ping.offset_top = 46
+	lbl_ping.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	root.add_child(lbl_ping)
+	_hud_nodes.append(lbl_ping)
+
+	# Squad health above the kit strip.
+	squad_draw = Control.new()
+	squad_draw.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	squad_draw.offset_left = 28
+	squad_draw.offset_right = 348
+	squad_draw.offset_top = -330
+	squad_draw.offset_bottom = -186
+	squad_draw.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	squad_draw.draw.connect(_draw_squad)
+	root.add_child(squad_draw)
+	_hud_nodes.append(squad_draw)
+
+	# Chat: recent lines fade out; Enter opens the input.
+	chat_box = VBoxContainer.new()
+	chat_box.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	chat_box.offset_left = 28
+	chat_box.offset_right = 560
+	chat_box.offset_top = -560
+	chat_box.offset_bottom = -390
+	chat_box.alignment = BoxContainer.ALIGNMENT_END
+	chat_box.add_theme_constant_override("separation", 2)
+	chat_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(chat_box)
+	chat_edit = LineEdit.new()
+	chat_edit.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	chat_edit.offset_left = 28
+	chat_edit.offset_right = 560
+	chat_edit.offset_top = -384
+	chat_edit.offset_bottom = -348
+	chat_edit.max_length = 140
+	chat_edit.placeholder_text = "Say to everyone…   (Enter to send, Esc to close)"
+	chat_edit.add_theme_font_override("font", font_body)
+	chat_edit.add_theme_font_size_override("font_size", 15)
+	var csb := StyleBoxFlat.new()
+	csb.bg_color = Color(0.02, 0.025, 0.03, 0.85)
+	csb.border_color = ACCENT
+	csb.set_border_width_all(1)
+	csb.content_margin_left = 10
+	chat_edit.add_theme_stylebox_override("normal", csb)
+	chat_edit.add_theme_stylebox_override("focus", csb)
+	chat_edit.visible = false
+	chat_edit.text_submitted.connect(func(t):
+		if t.strip_edges() != "":
+			chat_sent.emit(t)
+		close_chat())
+	chat_edit.gui_input.connect(func(e):
+		if e is InputEventKey and e.pressed and e.keycode == KEY_ESCAPE:
+			close_chat()
+			chat_edit.accept_event())
+	root.add_child(chat_edit)
+
+	# Scoreboard (hold Tab).
+	scoreboard = Panel.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.02, 0.025, 0.03, 0.9)
+	sb.border_color = Color(1, 1, 1, 0.08)
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(4)
+	scoreboard.add_theme_stylebox_override("panel", sb)
+	scoreboard.set_anchors_preset(Control.PRESET_CENTER)
+	scoreboard.offset_left = -440
+	scoreboard.offset_right = 440
+	scoreboard.offset_top = -260
+	scoreboard.offset_bottom = 260
+	scoreboard.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	scoreboard.visible = false
+	root.add_child(scoreboard)
+	var accent := ColorRect.new()
+	accent.color = ACCENT
+	accent.position = Vector2(0, 0)
+	accent.size = Vector2(880, 3)
+	scoreboard.add_child(accent)
+	_sb_title = _lv("", 20, WHITE)
+	_sb_title.position = Vector2(32, 22)
+	scoreboard.add_child(_sb_title)
+	var heads := [["PLAYER", 60], ["STATUS", 420], ["KILLS", 560], ["DAMAGE", 650], ["PING", 780]]
+	for h in heads:
+		var l := _lv(h[0], 11, DIM)
+		l.position = Vector2(h[1], 72)
+		scoreboard.add_child(l)
+	_sb_rows = VBoxContainer.new()
+	_sb_rows.position = Vector2(24, 96)
+	_sb_rows.size = Vector2(832, 360)
+	_sb_rows.add_theme_constant_override("separation", 4)
+	scoreboard.add_child(_sb_rows)
+	_sb_footer = _lv("", 13, MUTED)
+	_sb_footer.position = Vector2(32, 474)
+	_sb_footer.size = Vector2(816, 20)
+	scoreboard.add_child(_sb_footer)
+
+
+func _draw_social() -> void:
+	if camera_3d == null or not is_instance_valid(camera_3d) or not camera_3d.is_inside_tree():
+		return
+	var vp := social_layer.size
+	var eye := camera_3d.global_position
+	for t in tags:
+		var p: Vector3 = t.pos
+		if camera_3d.is_position_behind(p):
+			continue
+		var sp := camera_3d.unproject_position(p)
+		if sp.x < -50 or sp.y < -50 or sp.x > vp.x + 50 or sp.y > vp.y + 50:
+			continue
+		var d := eye.distance_to(p)
+		var col: Color = t.color
+		var a := clampf(1.2 - d / 900.0, 0.45, 1.0)
+		social_layer.draw_colored_polygon(PackedVector2Array([sp + Vector2(-6, -4), sp + Vector2(6, -4), sp + Vector2(0, 4)]), Color(col.r, col.g, col.b, a))
+		var label := "%s   %d m" % [t.name, int(d)] if d > 25.0 else str(t.name)
+		var fs := 13
+		var tw := font_bold.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+		social_layer.draw_string(font_bold, sp + Vector2(-tw * 0.5 + 1, -9), label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(0, 0, 0, 0.7 * a))
+		social_layer.draw_string(font_bold, sp + Vector2(-tw * 0.5, -10), label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(col.r, col.g, col.b, a))
+	for w in waypoints:
+		var p: Vector3 = w.pos + Vector3(0, 1.5, 0)
+		var behind := camera_3d.is_position_behind(p)
+		var sp := camera_3d.unproject_position(p)
+		if behind:
+			sp = vp - sp
+		# Pin to the screen edge when off-screen so you can always turn to it.
+		var m := 40.0
+		var clamped := Vector2(clampf(sp.x, m, vp.x - m), clampf(sp.y, m + 60.0, vp.y - m))
+		if behind:
+			clamped.y = vp.y - m
+		var col: Color = w.color
+		var k := 9.0
+		social_layer.draw_colored_polygon(PackedVector2Array([clamped + Vector2(0, -k - 2), clamped + Vector2(k + 2, 0), clamped + Vector2(0, k + 2), clamped + Vector2(-k - 2, 0)]), Color(0, 0, 0, 0.55))
+		social_layer.draw_colored_polygon(PackedVector2Array([clamped + Vector2(0, -k), clamped + Vector2(k, 0), clamped + Vector2(0, k), clamped + Vector2(-k, 0)]), col)
+		var txt := "%d m" % int(eye.distance_to(w.pos))
+		var tw2 := font_mono.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x
+		social_layer.draw_string(font_mono, clamped + Vector2(-tw2 * 0.5 + 1, k + 17), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0, 0, 0, 0.7))
+		social_layer.draw_string(font_mono, clamped + Vector2(-tw2 * 0.5, k + 16), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, col)
+
+
+## Team mates: [name, Color, hp, alive, distance].
+func set_squad_rows(rows: Array) -> void:
+	squad_rows = rows
+	squad_draw.visible = not rows.is_empty() and lbl_kills.visible
+	squad_draw.queue_redraw()
+
+
+func _draw_squad() -> void:
+	var h := squad_draw.size.y
+	var y := h
+	for i in range(squad_rows.size() - 1, -1, -1):
+		var r: Array = squad_rows[i]
+		y -= 34.0
+		var alive_r: bool = r[3]
+		var col: Color = r[1]
+		squad_draw.draw_rect(Rect2(0, y, 320, 30), Color(0.04, 0.05, 0.06, 0.72))
+		squad_draw.draw_rect(Rect2(0, y, 4, 30), col if alive_r else Color(0.4, 0.4, 0.4))
+		var nm: String = r[0]
+		squad_draw.draw_string(font_bold, Vector2(14, y + 14), nm, HORIZONTAL_ALIGNMENT_LEFT, 170, 13, WHITE if alive_r else DIM)
+		if alive_r:
+			var hp := clampf(float(r[2]) / 100.0, 0.0, 1.0)
+			squad_draw.draw_rect(Rect2(14, y + 20, 200, 4), Color(1, 1, 1, 0.12))
+			var hc := Color(0.92, 0.93, 0.94) if hp > 0.5 else (Color(0.98, 0.78, 0.3) if hp > 0.25 else DANGER)
+			squad_draw.draw_rect(Rect2(14, y + 20, 200 * hp, 4), hc)
+			squad_draw.draw_string(font_mono, Vector2(230, y + 19), "%d m" % int(r[4]), HORIZONTAL_ALIGNMENT_RIGHT, 78, 11, MUTED)
+		else:
+			squad_draw.draw_string(font_bold, Vector2(230, y + 19), "OUT", HORIZONTAL_ALIGNMENT_RIGHT, 78, 11, DANGER)
+
+
+func open_chat() -> void:
+	chat_open = true
+	chat_edit.visible = true
+	chat_edit.text = ""
+	chat_edit.grab_focus()
+	for c in chat_box.get_children():
+		c.modulate.a = 1.0
+
+
+func close_chat() -> void:
+	if not chat_open:
+		return
+	chat_open = false
+	chat_edit.release_focus()
+	chat_edit.visible = false
+	chat_closed.emit()
+
+
+func chat_add(name: String, col: Color, text: String, system := false) -> void:
+	var l := RichTextLabel.new()
+	l.bbcode_enabled = true
+	l.fit_content = true
+	l.scroll_active = false
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	l.custom_minimum_size = Vector2(532, 0)
+	l.add_theme_font_override("normal_font", font_body)
+	l.add_theme_font_override("bold_font", font_bold)
+	l.add_theme_font_size_override("normal_font_size", 15)
+	l.add_theme_font_size_override("bold_font_size", 15)
+	l.add_theme_color_override("default_color", Color(0.92, 0.93, 0.94))
+	l.add_theme_constant_override("outline_size", 4)
+	l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.75))
+	var safe := text.replace("[", "[lb]")
+	if system:
+		l.text = "[color=#a8b0b5]%s[/color]" % safe
+	else:
+		l.text = "[b][color=#%s]%s[/color][/b]:  %s" % [col.to_html(false), name.replace("[", "[lb]"), safe]
+	chat_box.add_child(l)
+	while chat_box.get_child_count() > 7:
+		var old := chat_box.get_child(0)
+		chat_box.remove_child(old)
+		old.queue_free()
+	var tw := l.create_tween()
+	tw.tween_interval(10.0)
+	tw.tween_callback(func():
+		if not chat_open:
+			var t2 := l.create_tween()
+			t2.tween_property(l, "modulate:a", 0.0, 1.0))
+
+
+func clear_chat() -> void:
+	for c in chat_box.get_children():
+		c.queue_free()
+
+
+## rows: {name, color, alive, kills, damage, ping, me}
+func show_scoreboard(v: bool, title := "", rows: Array = [], footer := "") -> void:
+	scoreboard.visible = v
+	if not v:
+		return
+	_sb_title.text = title
+	_sb_footer.text = footer
+	for c in _sb_rows.get_children():
+		c.queue_free()
+	for r in rows:
+		var row := Panel.new()
+		row.custom_minimum_size = Vector2(832, 40)
+		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(1, 1, 1, 0.08) if bool(r.me) else Color(1, 1, 1, 0.03)
+		sb.set_corner_radius_all(3)
+		row.add_theme_stylebox_override("panel", sb)
+		var strip := ColorRect.new()
+		strip.color = r.color
+		strip.size = Vector2(4, 40)
+		row.add_child(strip)
+		var alive_r: bool = r.alive
+		var cols := [[str(r.name), 36, WHITE if alive_r else DIM, 16],
+			["ALIVE" if alive_r else "ELIMINATED", 396, Color(0.45, 0.9, 0.5) if alive_r else DANGER, 12],
+			[str(r.kills), 536, WHITE, 16], [str(int(r.damage)), 626, WHITE, 16],
+			[("%d" % int(r.ping)) if int(r.ping) >= 0 else "—", 756, MUTED, 14]]
+		for c in cols:
+			var l := _lv(c[0], c[3], c[2])
+			l.position = Vector2(c[1], 10 if c[3] >= 14 else 12)
+			row.add_child(l)
+		_sb_rows.add_child(row)
+
+
+func set_ping_text(t: String, col: Color) -> void:
+	lbl_ping.text = t
+	lbl_ping.add_theme_color_override("font_color", col)

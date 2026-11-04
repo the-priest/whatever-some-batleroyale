@@ -90,6 +90,12 @@ var loot_by_id: Dictionary = {}
 var _next_loot_id := 1
 var _net_dummy: Node
 var _net_setup_ok := false
+## True while a text box (chat) owns the keyboard.
+var input_locked := false
+## Map / world markers per player id: {pos, t}.
+var waypoints: Dictionary = {}
+var _social_t := 0.0
+var _shot_tab: bool = OS.get_cmdline_user_args().has("--tab")
 
 
 func _ready() -> void:
@@ -118,15 +124,20 @@ func _ready() -> void:
 	net.game = self
 	add_child(net)
 	lobby = LobbyUI.new()
-	lobby.setup(hud, net)
+	lobby.setup(hud, net, self)
 	hud.root.add_child(lobby)
 	lobby.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	lobby.z_index = 30
 	lobby.host_pressed.connect(func(_n): _net_host())
 	lobby.join_pressed.connect(func(a, _n): net.join(a))
-	lobby.start_pressed.connect(_net_host_start)
+	lobby.start_pressed.connect(func(): net.start_countdown(5))
 	lobby.leave_pressed.connect(_net_leave)
-	lobby.squad_toggled.connect(func(v): net.set_squad(v))
+	lobby.squad_toggled.connect(func(v): net.set_setting("squad", v))
+	net.chat.connect(_on_net_chat)
+	net.marker.connect(_on_net_marker)
+	hud.chat_sent.connect(func(t): net.send_chat(t))
+	hud.chat_closed.connect(func(): input_locked = false)
+	hud.map_clicked.connect(_on_map_clicked)
 	hud.host_lan_pressed.connect(_net_host)
 	hud.join_lan_pressed.connect(func(): lobby.show_join())
 	net.multiplayer.connected_to_server.connect(func(): lobby.show_lobby())
@@ -310,6 +321,8 @@ func _quit_to_menu() -> void:
 	if net != null and net.active and net.hosting and net.match_running:
 		net.match_running = false
 		net._abort.rpc()
+	if net != null and net.active and net.hosting:
+		net.call_deferred("_send_roster")
 	_cleanup_match()
 	player.process_mode = Node.PROCESS_MODE_DISABLED
 	player.alive = false
@@ -498,6 +511,13 @@ func _spawn_loot(kind: String, id: String, pos: Vector3, mag := -1, reserve := -
 
 func _cleanup_match() -> void:
 	_net_setup_ok = false
+	waypoints.clear()
+	hud.waypoints = []
+	hud.tags = []
+	hud.set_squad_rows([])
+	hud.show_scoreboard(false)
+	hud.close_chat()
+	input_locked = false
 	for l in loot_pool:
 		if is_instance_valid(l):
 			l.queue_free()
@@ -668,6 +688,8 @@ func _process(delta: float) -> void:
 		"end":
 			_update_end_cam(delta)
 			_update_world_sim(delta)
+	if phase in ["plane", "playing", "end"]:
+		_update_social(delta)
 	_update_mouse_capture()
 
 
@@ -1027,6 +1049,16 @@ func _update_end_cam(delta: float) -> void:
 	if end_cam_target != null and is_instance_valid(end_cam_target) and bool(end_cam_target.get("alive")):
 		focus = end_cam_target.global_position
 		end_cam_spot = focus
+		if end_cam_target is Bot and (end_cam_target as Bot).is_human:
+			# Team mate: ride over their shoulder, looking where they look.
+			var b := end_cam_target as Bot
+			var fwd := (-b.global_basis.z).rotated(b.global_basis.x, b.net_pitch * 0.8)
+			var side := b.global_basis.x
+			var want_s := focus + Vector3(0, 2.1, 0) - Vector3(fwd.x, 0, fwd.z).normalized() * 3.6 + side * 0.7
+			menu_cam.global_position = menu_cam.global_position.lerp(want_s, clampf(delta * 8.0, 0.0, 1.0))
+			menu_cam.look_at(focus + Vector3(0, 1.6, 0) + fwd * 30.0, Vector3.UP)
+			menu_cam.fov = lerpf(menu_cam.fov, 74.0, delta * 3.0)
+			return
 	end_cam_angle += delta * 0.25
 	var want := focus + Vector3(cos(end_cam_angle) * 9.0, 4.5, sin(end_cam_angle) * 9.0)
 	menu_cam.global_position = menu_cam.global_position.lerp(want, clampf(delta * 2.5, 0.0, 1.0))
@@ -1034,31 +1066,44 @@ func _update_end_cam(delta: float) -> void:
 
 
 func _begin_end_cam(target: Node3D, spot: Vector3) -> void:
+	if net_on() and net.squad and phase == "end" and not winner:
+		var mate := _next_mate(null)
+		if mate != null:
+			target = mate
 	end_cam_target = target
 	end_cam_spot = spot
 	end_cam_angle = player.yaw + PI * 0.5
 	menu_cam.global_position = player.camera.global_position
 	menu_cam.fov = 70.0
 	menu_cam.make_current()
-	if target != null and target is Bot and (target as Bot).alive:
-		hud.set_spectate("SPECTATING  %s" % (target as Bot).bot_name)
-	else:
-		hud.set_spectate("")
+	_spectate_label()
 
 
 # -------------------------------------------------------------------- input --
 func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed("chat") and net.active and phase in ["plane", "playing", "end"] and not hud.chat_open:
+		input_locked = true
+		hud.open_chat()
+		get_viewport().set_input_as_handled()
+		return
+	if event.is_action_pressed("marker") and phase == "playing" and player != null and player.alive:
+		_place_marker_from_view()
+		return
+	if phase == "end" and event.is_action_pressed("fire") and net_on() and net.squad:
+		_spectate_next()
+		return
 	if event.is_action_pressed("jump"):
 		if phase == "menu":
-			# Not while the armory or settings are open over the menu.
-			if not hud.loadout_screen.visible and not hud.pause_panel.visible:
+			# Not while the armory, settings or a LAN screen are open.
+			if not hud.loadout_screen.visible and not hud.pause_panel.visible and not lobby.visible:
 				_start_match()
 			return
 		if phase == "plane" and player != null and player.mode == Player.Mode.PLANE:
 			_player_jump(false)
 		elif phase == "end":
-			if net != null and net.active and not net.hosting:
-				hud.show_notice("WAITING FOR THE HOST TO START THE NEXT MATCH", 2.0)
+			if net != null and net.active:
+				# Back to the lobby to ready up for the next one.
+				_quit_to_menu()
 			else:
 				_start_match()
 		return
@@ -1133,6 +1178,7 @@ func _on_player_died(killer: String) -> void:
 	_stop_ambience()
 	hud.killfeed("%s   >   YOU" % killer, HUD.DANGER)
 	hud.show_death(killer, placement, _stats())
+	_net_end_hint()
 	sfx.play_ui("defeat", -4.0)
 	hud.set_prompt("")
 	var k = player.last_killer
@@ -1234,6 +1280,7 @@ func _win() -> void:
 	hud.set_storm(false)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	hud.show_victory(_stats())
+	_net_end_hint()
 	sfx.play_ui("victory", -3.0)
 	hud.set_prompt("")
 	_begin_end_cam(player, player.global_position)
@@ -1709,8 +1756,27 @@ func _run_shot() -> void:
 			hud._open_loadout()
 		if OS.get_cmdline_user_args().has("--lobby"):
 			_net_host()
+			if OS.get_cmdline_user_args().has("--fake"):
+				# Stand-in players so the lobby can be judged full.
+				var fake := [[2, "LUKA", true, 1, 4], [3, "MARKO", false, 2, 9], [4, "IVAN", true, 3, 23]]
+				for f in fake:
+					net.roster[f[0]] = f[1]
+					net.info[f[0]] = {"ready": f[2], "color": f[3], "ping": f[4]}
+				net.roster_changed.emit()
+				net.chat.emit(0, "", "LUKA JOINED THE LOBBY", true)
+				net.chat.emit(2, "LUKA", "ajmo ajmo, castle drop?", false)
+				net.chat.emit(3, "MARKO", "give me a sec, setting my loadout", false)
+				net.chat.emit(4, "IVAN", "bridge is better, sniper on the gate", false)
+				net.chat.emit(1, net.my_name, "castle first then bridge", false)
+				if OS.get_cmdline_user_args().has("--countdown"):
+					lobby._on_countdown(3)
 		if OS.get_cmdline_user_args().has("--join"):
 			lobby.show_join()
+			if OS.get_cmdline_user_args().has("--fake"):
+				lobby._show_games([
+					{"name": "LUKA", "ip": "192.168.1.23", "players": 3, "max": 8, "running": false, "squad": true, "bots": 63},
+					{"name": "MARKO", "ip": "192.168.1.40", "players": 2, "max": 8, "running": true, "squad": false, "bots": 40},
+				])
 		for i in 30:
 			await get_tree().process_frame
 		await RenderingServer.frame_post_draw
@@ -1776,6 +1842,31 @@ func _run_shot() -> void:
 			p.pitch = float(a.substr(8))
 	p.camera.make_current()
 	phase = "playing"
+	if OS.get_cmdline_user_args().has("--fakesquad"):
+		net.set_process(false)
+		net.active = true
+		net.match_running = true
+		net.squad = true
+		net.roster = {1: "PLAYER", 2: "LUKA", 3: "MARKO", 4: "IVAN"}
+		net.info = {1: {"ready": true, "color": 0, "ping": 0}, 2: {"ready": true, "color": 1, "ping": 4}, 3: {"ready": true, "color": 2, "ping": 9}, 4: {"ready": true, "color": 3, "ping": 23}}
+		var fwd := Vector3(-sin(p.yaw), 0, -cos(p.yaw))
+		var right := Vector3(cos(p.yaw), 0, -sin(p.yaw))
+		var offs := [fwd * 14.0 + right * 4.0, fwd * 40.0 - right * 12.0, fwd * 120.0 + right * 30.0]
+		for i in 3:
+			var mate := _make_human(i + 2, ["LUKA", "MARKO", "IVAN"][i])
+			var mp: Vector3 = p.global_position + offs[i]
+			mp.y = terrain.height_at(mp.x, mp.z)
+			mate.apply_net(mp, p.yaw + 0.4, Bot.State.GROUND, Bot.NF_ALIVE | Bot.NF_ARMED, "rifle", 2, 1)
+			mate.hp = [100.0, 46.0, 18.0][i]
+			mate.net_kills = [3, 1, 5][i]
+			mate.net_damage = [412.0, 160.0, 655.0][i]
+		player_kills = 2
+		damage_dealt = 288.0
+		waypoints[2] = {"pos": p.global_position + fwd * 260.0 + right * 60.0, "t": 60.0}
+		waypoints[1] = {"pos": p.global_position + fwd * 90.0 - right * 80.0, "t": 60.0}
+		hud.chat_add("LUKA", net.color_of(2), "enemy behind the red house", false)
+		hud.chat_add("IVAN", net.color_of(4), "i have a 4x if anyone needs it", false)
+		hud.chat_add("", Color.WHITE, "MARKO PLACED A MARKER", true)
 	var args := OS.get_cmdline_user_args()
 	for a in args:
 		if a.begins_with("--gun="):
@@ -2398,7 +2489,7 @@ func _on_left_session(reason: String) -> void:
 	if reason == "CONNECTION FAILED":
 		# Stay on the join screen so another address can be tried.
 		lobby.show_join()
-		lobby._status.text = "COULD NOT REACH THAT HOST  ·  CHECK THE ADDRESS AND THAT YOU ARE ON THE SAME NETWORK"
+		lobby.connection_failed("COULD NOT REACH THAT HOST  ·  CHECK THE ADDRESS AND THAT YOU ARE ON THE SAME NETWORK")
 		return
 	lobby.close()
 	hud.show_menu(reason)
@@ -2657,7 +2748,8 @@ func net_player_state() -> Variant:
 		flags |= Bot.NF_RELOAD
 	if player.has_gun():
 		flags |= Bot.NF_ARMED
-	return [player.global_position, player.yaw, player.pitch, st, flags, player.current_id() if player.has_gun() else "", player.vest_level, player.helmet_level]
+	return [player.global_position, player.yaw, player.pitch, st, flags, player.current_id() if player.has_gun() else "", player.vest_level, player.helmet_level,
+		player.hp, player_kills, damage_dealt]
 
 
 func net_apply_player_state(sender: int, st: Array) -> void:
@@ -2667,6 +2759,10 @@ func net_apply_player_state(sender: int, st: Array) -> void:
 	var yaw: float = st[1]
 	# The player's yaw faces down -Z of its basis like a bot's.
 	(h as Bot).apply_net(st[0], yaw, int(st[3]), int(st[4]), str(st[5]), int(st[6]), int(st[7]), float(st[2]))
+	if st.size() >= 11:
+		(h as Bot).hp = float(st[8])
+		(h as Bot).net_kills = int(st[9])
+		(h as Bot).net_damage = float(st[10])
 
 
 ## Ballistics: a real shot went off here. Mirror it to everyone else.
@@ -2799,11 +2895,17 @@ func _show_elim(e: Dictionary) -> void:
 	var col := HUD.ACCENT if killer == net.my_key() else (Color(0.45, 0.95, 0.55) if victim.begins_with("p") else HUD.MUTED)
 	var mid := ("  [%s]  " % weapon) if weapon != "" else "   >   "
 	hud.killfeed("%s%s%s" % [kname, mid, vname], col)
+	if victim.begins_with("p") and net.squad:
+		hud.show_notice("%s WAS ELIMINATED%s" % [vname, ("  BY  " + kname) if kname != "" else ""], 3.0)
 	if phase == "end" and end_cam_target != null and node_key(end_cam_target) == victim:
-		var k := node_for_key(killer)
-		if k is Node3D and bool(k.get("alive")):
-			end_cam_target = k
-			hud.set_spectate("SPECTATING  %s" % _name_for_key(killer))
+		var mate := _next_mate(end_cam_target) if net.squad else null
+		if mate != null and mate != end_cam_target:
+			end_cam_target = mate
+		else:
+			var k := node_for_key(killer)
+			if k is Node3D and bool(k.get("alive")):
+				end_cam_target = k
+		_spectate_label()
 
 
 func net_loot_removed(l: LootPickup) -> void:
@@ -2905,9 +3007,31 @@ func _run_net_test(as_host: bool) -> void:
 			await get_tree().create_timer(0.5).timeout
 			t += 0.5
 		print("[net] roster ", net.roster)
-		_net_host_start()
+		net.chat.connect(func(id, n, t, sys): print("[net] host chat <%s> %s sys=%s" % [n, t, sys]))
+		var w := 0.0
+		while not net.all_ready() and w < 20.0:
+			await get_tree().create_timer(0.5).timeout
+			w += 0.5
+		print("[net] all ready=", net.all_ready(), " info=", net.info)
+		net.start_countdown(3)
+		var c := 0.0
+		while phase == "menu" and c < 10.0:
+			await get_tree().create_timer(0.25).timeout
+			c += 0.25
+		print("[net] countdown started the match after %.1fs phase=%s" % [c, phase])
 	else:
 		net.join("127.0.0.1")
+		net.chat.connect(func(id, n, t2, sys): print("[net] client chat <%s> %s sys=%s" % [n, t2, sys]))
+		net.countdown.connect(func(sec): print("[net] client countdown ", sec))
+		net.marker.connect(func(id, pos): print("[net] client marker from ", id, " at ", pos.round()))
+		var r := 0.0
+		while net.roster.size() < 2 and r < 30.0:
+			await get_tree().create_timer(0.5).timeout
+			r += 0.5
+		await get_tree().create_timer(1.0).timeout
+		net.send_chat("hello from the client")
+		net.set_ready(true)
+		print("[net] client ready, my ping ", net.ping_of(net.my_id()))
 		var t := 0.0
 		while not _net_setup_ok and t < 90.0:
 			await get_tree().create_timer(0.5).timeout
@@ -2951,6 +3075,8 @@ func _run_net_test(as_host: bool) -> void:
 		if i == 55 and as_host and near != null:
 			print("[net] host kills ", near.bot_name)
 			near.take_damage(500.0, near.global_position, true, player)
+		if i == 58 and as_host:
+			net.send_marker(player.global_position + Vector3(50, 0, 0))
 		if i == 60 and as_host:
 			for id in humans:
 				print("[net] host hits human ", id)
@@ -2964,3 +3090,202 @@ func _run_net_test(as_host: bool) -> void:
 			drop_weapon("smg", 10, 30, player.global_position)
 	print("[net] done")
 	get_tree().quit()
+
+
+# ====================================================== social / squad UI ==
+
+## Host settings arrived (or changed locally on the host).
+func net_apply_settings(st: Dictionary) -> void:
+	MAX_BOTS = clampi(int(st.get("bots", MAX_BOTS)), 0, 99)
+	match_size = MAX_BOTS + 1
+	loadout_enabled = bool(st.get("loadout", loadout_enabled))
+	net.squad = bool(st.get("squad", net.squad))
+
+
+func _on_net_chat(from_id: int, pname: String, text: String, system: bool) -> void:
+	if phase in ["plane", "playing", "end"]:
+		hud.chat_add(pname, net.color_of(from_id), text, system)
+		if not system and from_id != net.my_id():
+			sfx.play_ui("chat_msg", -10.0)
+
+
+func _marker_color(id: int) -> Color:
+	return net.color_of(id) if net.active else HUD.ACCENT
+
+
+func _on_net_marker(from_id: int, pos: Vector3) -> void:
+	if phase == "menu":
+		return
+	# Same spot again removes it, like toggling a map pin.
+	if waypoints.has(from_id) and Vector2(pos.x, pos.z).distance_to(Vector2(waypoints[from_id].pos.x, waypoints[from_id].pos.z)) < 6.0:
+		waypoints.erase(from_id)
+		return
+	waypoints[from_id] = {"pos": pos, "t": 120.0}
+	# In free-for-all only your own marker shows.
+	if from_id == net.my_id() or not net.active or net.squad:
+		sfx.play_ui("marker_ping", -8.0)
+		if from_id != net.my_id() and net.active:
+			hud.show_notice("%s PLACED A MARKER" % str(net.roster.get(from_id, "MATE")), 1.6)
+
+
+func _place_marker_from_view() -> void:
+	var cam := player.camera
+	var from := cam.global_position
+	var to := from - cam.global_basis.z * 1500.0
+	var q := PhysicsRayQueryParameters3D.create(from, to, 1)
+	q.exclude = [player.get_rid()]
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	var pos: Vector3 = hit["position"] if not hit.is_empty() else to
+	if hit.is_empty():
+		pos.y = terrain.height_at(pos.x, pos.z)
+	_send_marker(pos)
+
+
+func _on_map_clicked(w: Vector2, button: int) -> void:
+	if phase == "menu":
+		return
+	var me := net.my_id()
+	if button == MOUSE_BUTTON_RIGHT:
+		if waypoints.has(me):
+			_send_marker(waypoints[me].pos)
+		return
+	_send_marker(Vector3(w.x, terrain.height_at(w.x, w.y), w.y))
+
+
+func _send_marker(pos: Vector3) -> void:
+	if net.active and net_on():
+		net.send_marker(pos)
+	else:
+		_on_net_marker(net.my_id(), pos)
+
+
+## Squad panel, overhead tags, markers, scoreboard and ping, every frame.
+func _update_social(delta: float) -> void:
+	hud.camera_3d = get_viewport().get_camera_3d()
+	# Markers expire.
+	var wl: Array = []
+	for id in waypoints.keys():
+		waypoints[id].t -= delta
+		if waypoints[id].t <= 0.0:
+			waypoints.erase(id)
+			continue
+		if id == net.my_id() or not net.active or net.squad:
+			wl.append({"pos": waypoints[id].pos, "color": _marker_color(id), "name": ""})
+	hud.waypoints = wl
+	var tags: Array = []
+	var rows: Array = []
+	var mates: Array = []
+	if net_on() and net.squad:
+		var eye := player.global_position
+		var ids := humans.keys()
+		ids.sort()
+		for id in ids:
+			var h = humans[id]
+			if h == null or not is_instance_valid(h):
+				continue
+			var b := h as Bot
+			var col := net.color_of(id)
+			rows.append([b.bot_name, col, b.hp, b.alive, eye.distance_to(b.global_position)])
+			mates.append([b.bot_name, Vector2(b.global_position.x, b.global_position.z), col, b.alive])
+			if b.alive and b.state != Bot.State.PLANE:
+				tags.append({"pos": b.global_position + Vector3(0, 2.15, 0), "name": b.bot_name, "color": col})
+	hud.tags = tags
+	hud.set_squad_rows(rows)
+	hud.set_mates(mates)
+	hud.social_layer.queue_redraw()
+	if net.active:
+		var p := net.ping_of(net.my_id())
+		hud.set_ping_text("HOST" if net.hosting else "PING  %d MS" % p, LobbyUI.GOOD if p < 60 else (Color(0.98, 0.82, 0.32) if p < 120 else LobbyUI.BAD))
+	else:
+		hud.set_ping_text("", Color.WHITE)
+	# Scoreboard while Tab is held (and refreshed a few times a second).
+	var want_sb: bool = (Input.is_action_pressed("scoreboard") or _shot_tab) and not hud.chat_open
+	_social_t -= delta
+	if want_sb and (_social_t <= 0.0 or not hud.scoreboard.visible):
+		_social_t = 0.25
+		_show_scoreboard()
+	elif not want_sb and hud.scoreboard.visible:
+		hud.show_scoreboard(false)
+	if phase == "end" and net_on():
+		_social_t -= 0.0
+		_refresh_end_table()
+
+
+func _human_rows() -> Array:
+	var rows: Array = []
+	var my_col := net.color_of(net.my_id()) if net.active else HUD.ACCENT
+	rows.append({"name": (net.my_name if net.active else "YOU"), "color": my_col, "alive": player.alive,
+		"kills": player_kills, "damage": damage_dealt, "ping": net.ping_of(net.my_id()) if net.active and not net.hosting else -1, "me": true})
+	for id in humans:
+		var h = humans[id]
+		if h == null or not is_instance_valid(h):
+			continue
+		var b := h as Bot
+		rows.append({"name": b.bot_name, "color": net.color_of(id), "alive": b.alive, "kills": b.net_kills,
+			"damage": b.net_damage, "ping": -1 if id == 1 else net.ping_of(id), "me": false})
+	rows.sort_custom(func(a, b): return int(a.kills) > int(b.kills) or (int(a.kills) == int(b.kills) and float(a.damage) > float(b.damage)))
+	return rows
+
+
+func _show_scoreboard() -> void:
+	var bots_alive := 0
+	for b in bots:
+		if is_instance_valid(b) and (b as Bot).alive:
+			bots_alive += 1
+	var mode := ("SQUAD vs BOTS" if net.squad else "FREE-FOR-ALL") if net.active else "SOLO"
+	var t := int(match_time)
+	var title := "%s   ·   %d ALIVE   ·   %d:%02d" % [mode, alive, t / 60, t % 60]
+	var zone_txt := ""
+	if zone != null:
+		zone_txt = "   ·   STORM PHASE %d" % (zone.phase + 1)
+	hud.show_scoreboard(true, title, _human_rows(), "BOTS REMAINING   %d%s" % [bots_alive, zone_txt])
+
+
+func _refresh_end_table() -> void:
+	if not net_on():
+		hud.end_table.text = ""
+		return
+	var lines: Array = ["%-16s %8s %8s   %s" % ["PLAYER", "KILLS", "DAMAGE", "STATUS"]]
+	for r in _human_rows():
+		lines.append("%-16s %8d %8d   %s" % [str(r.name).substr(0, 16), int(r.kills), int(r.damage), "ALIVE" if r.alive else "OUT"])
+	hud.end_table.text = "\n".join(lines)
+
+
+func _next_mate(after: Node) -> Bot:
+	var ids := humans.keys()
+	ids.sort()
+	var list: Array = []
+	for id in ids:
+		var h = humans[id]
+		if h != null and is_instance_valid(h) and (h as Bot).alive:
+			list.append(h)
+	if list.is_empty():
+		return null
+	var i := list.find(after)
+	return list[(i + 1) % list.size()]
+
+
+func _spectate_next() -> void:
+	var m := _next_mate(end_cam_target)
+	if m != null and m != end_cam_target:
+		end_cam_target = m
+		sfx.play_ui("ui_click", -10.0)
+		_spectate_label()
+
+
+func _net_end_hint() -> void:
+	if net.active:
+		hud.end_hint.text = "SPACE / ESC   BACK TO LOBBY      ·      ENTER   CHAT      ·      TAB   SCOREBOARD"
+		if net.squad and winner:
+			hud.end_sub.text = "#1   ·   YOUR SQUAD WINS"
+	_refresh_end_table()
+
+
+func _spectate_label() -> void:
+	var t := end_cam_target
+	if t != null and is_instance_valid(t) and t is Bot and (t as Bot).alive:
+		var b := t as Bot
+		var extra := "      ·      LMB  NEXT TEAMMATE" if b.is_human and humans.size() > 1 else ""
+		hud.set_spectate("SPECTATING  %s%s" % [b.bot_name, extra])
+	else:
+		hud.set_spectate("")

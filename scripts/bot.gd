@@ -89,6 +89,8 @@ var net_index := -1
 ## Squad mate: our bullets pass harmlessly.
 var friendly := false
 var net_pitch := 0.0
+var net_kills := 0
+var net_damage := 0.0
 var _net_pos := Vector3.ZERO
 var _net_yaw := 0.0
 var _net_flags := 0
@@ -164,8 +166,8 @@ func _ready() -> void:
 	chute_node.visible = false
 	add_child(chute_node)
 
-	if is_human and friendly:
-		# Squad mates get a name tag so you can find each other.
+	if false:
+		# Squad mates get a name tag (now drawn by the HUD).
 		_tag = Label3D.new()
 		_tag.text = bot_name
 		_tag.position = Vector3(0, 2.25, 0)

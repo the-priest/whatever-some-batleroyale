@@ -30,6 +30,9 @@ func _enter_tree() -> void:
 	_key("map", [KEY_M])
 	_key("pause", [KEY_ESCAPE])
 	_key("free_look", [KEY_ALT])
+	_key("scoreboard", [KEY_TAB])
+	_key("chat", [KEY_ENTER, KEY_KP_ENTER])
+	_mouse("marker", MOUSE_BUTTON_MIDDLE)
 	_mouse("fire", MOUSE_BUTTON_LEFT)
 	_mouse("aim", MOUSE_BUTTON_RIGHT)
 
