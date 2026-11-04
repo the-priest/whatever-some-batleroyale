@@ -59,6 +59,7 @@ var killfeed_box: VBoxContainer
 var slot_labels: Array[Label] = []
 var lbl_meds: Label
 var lbl_items: Label
+var kit_panel: PanelContainer
 var lbl_cal: Label
 var breath_val := 100.0
 var breath_hold := false
@@ -86,6 +87,7 @@ var settings_from_menu := false
 var _pause_resume: Button
 var _pause_leave: Button
 var _pause_title: Label
+var _pause_bg: ColorRect
 var fov_slider: HSlider
 var lbl_fov: Label
 var size_slider: HSlider
@@ -497,22 +499,25 @@ func _build_bars() -> void:
 	root.add_child(box)
 	_hud_nodes.append(box)
 
+	# Kit strip above the health box: worn gear, then consumables and ammo.
+	var kit := _panel(0.85)
+	kit.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	kit.offset_left = 28
+	kit.offset_top = -176
+	kit.offset_bottom = -126
+	kit.grow_horizontal = Control.GROW_DIRECTION_END
+	kit.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	var kv := VBoxContainer.new()
+	kv.add_theme_constant_override("separation", 2)
+	kv.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	kit.add_child(kv)
 	lbl_gear = _lv("", 12, Color(0.55, 0.75, 0.95))
-	lbl_gear.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	lbl_gear.offset_left = 30
-	lbl_gear.offset_right = 600
-	lbl_gear.offset_top = -144
-	lbl_gear.offset_bottom = -126
-	root.add_child(lbl_gear)
-	_hud_nodes.append(lbl_gear)
+	kv.add_child(lbl_gear)
 	lbl_items = _lv("", 12, Color(0.92, 0.80, 0.70))
-	lbl_items.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	lbl_items.offset_left = 30
-	lbl_items.offset_right = 900
-	lbl_items.offset_top = -164
-	lbl_items.offset_bottom = -146
-	root.add_child(lbl_items)
-	_hud_nodes.append(lbl_items)
+	kv.add_child(lbl_items)
+	root.add_child(kit)
+	_hud_nodes.append(kit)
+	kit_panel = kit
 
 
 func _build_weapon_panel() -> void:
@@ -607,7 +612,7 @@ func _build_bottom_text() -> void:
 	lbl_big.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	root.add_child(lbl_big)
 
-	lbl_spectate = _lv("", 14, MUTED)
+	lbl_spectate = _lv("", 18, Color(1, 1, 1, 0.85))
 	lbl_spectate.set_anchors_preset(Control.PRESET_CENTER_TOP)
 	lbl_spectate.offset_left = -400
 	lbl_spectate.offset_right = 400
@@ -790,7 +795,7 @@ func _build_end() -> void:
 	end_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	col.add_child(end_sub)
 	col.add_child(_spacer(18))
-	end_stats = _lv("", 15, MUTED)
+	end_stats = _lv("", 15, Color(1, 1, 1, 0.82))
 	end_stats.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	col.add_child(end_stats)
 	col.add_child(_spacer(24))
@@ -810,6 +815,7 @@ func _build_pause() -> void:
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	bg.color = Color(0.01, 0.012, 0.014, 0.7)
 	pause_panel.add_child(bg)
+	_pause_bg = bg
 
 	var col := VBoxContainer.new()
 	col.set_anchors_preset(Control.PRESET_CENTER)
@@ -944,6 +950,9 @@ func show_pause(v: bool) -> void:
 	pause_panel.visible = v
 	if _pause_title != null:
 		_pause_title.text = "SETTINGS" if settings_from_menu else "PAUSED"
+		# Over the main menu the panel needs a solid backdrop; in a match the
+		# world can show through.
+		_pause_bg.color.a = 0.95 if settings_from_menu else 0.7
 	if v:
 		big_map.visible = false
 
@@ -1044,6 +1053,9 @@ func set_inventory(p: Player) -> void:
 	if p.vest_level > 0:
 		gear.append("VEST LV%d" % p.vest_level)
 	lbl_gear.text = "   ·   ".join(gear)
+	lbl_gear.visible = lbl_gear.text != ""
+	lbl_items.visible = lbl_items.text != ""
+	kit_panel.modulate.a = 1.0 if (lbl_gear.visible or lbl_items.visible) else 0.0
 
 
 func set_breath(v: float, holding: bool, show: bool) -> void:
@@ -1247,7 +1259,7 @@ func show_death(killer: String, placement: int, stats: Dictionary) -> void:
 func show_victory(stats: Dictionary) -> void:
 	end_panel.visible = true
 	set_gameplay_visible(false)
-	end_title.text = "WINNER WINNER"
+	end_title.text = "VICTORY"
 	end_title.add_theme_color_override("font_color", ACCENT)
 	end_sub.text = "#1   ·   LAST ONE STANDING"
 	end_stats.text = _stats_text(stats)
@@ -1267,6 +1279,17 @@ func hide_end() -> void:
 
 # ------------------------------------------------------------------- input --
 func _unhandled_input(event: InputEvent) -> void:
+	# Esc backs out of the armory or menu settings.
+	if event.is_action_pressed("pause"):
+		if loadout_screen != null and loadout_screen.visible:
+			sfx_click()
+			loadout_screen.visible = false
+			get_viewport().set_input_as_handled()
+			return
+		if settings_from_menu and pause_panel.visible:
+			_on_resume_button()
+			get_viewport().set_input_as_handled()
+			return
 	if not pause_allowed:
 		return
 	if event.is_action_pressed("pause"):
@@ -1318,13 +1341,13 @@ func _draw_vignette() -> void:
 	var red := maxf(low_hp * (0.55 + sin(Time.get_ticks_msec() * 0.006) * 0.12), hurt_flash * 0.45)
 	if red <= 0.01:
 		return
-	# Edge-only red: four gradient strips.
-	var steps := 10
-	var depth := minf(sz.x, sz.y) * 0.22
+	# Edge-only red: four gradient strips, strongest at the screen edge.
+	var steps := 14
+	var depth := minf(sz.x, sz.y) * 0.24
 	for i in steps:
 		var f := float(i) / float(steps)
-		var a := red * (1.0 - f) * 0.16
-		var c := Color(0.55, 0.0, 0.0, a)
+		var a := red * pow(1.0 - f, 1.6) * 0.85
+		var c := Color(0.62, 0.02, 0.02, a)
 		var d := depth * f
 		var w := depth / float(steps) + 1.0
 		vignette.draw_rect(Rect2(0, d, sz.x, w), c)

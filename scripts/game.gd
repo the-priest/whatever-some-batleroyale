@@ -914,7 +914,9 @@ func _begin_end_cam(target: Node3D, spot: Vector3) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("jump"):
 		if phase == "menu":
-			_start_match()
+			# Not while the armory or settings are open over the menu.
+			if not hud.loadout_screen.visible and not hud.pause_panel.visible:
+				_start_match()
 			return
 		if phase == "plane" and player != null and player.mode == Player.Mode.PLANE:
 			_player_jump(false)
@@ -1631,6 +1633,9 @@ func _run_shot() -> void:
 		for b in ballistics.bullets:
 			var mi: MeshInstance3D = b["mesh"]
 			print("[shot] bullet pos=", b["pos"], " mesh vis=", mi.visible, " in_tree=", mi.is_inside_tree(), " xf=", mi.global_transform.origin, " scale=", mi.global_transform.basis.get_scale(), " cam=", p.camera.global_position)
+	for a2 in args:
+		if a2.begins_with("--state="):
+			await _shot_state(a2.substr(8))
 	print("[shot] frames waited")
 	await RenderingServer.frame_post_draw
 	print("[shot] post draw")
@@ -2069,3 +2074,64 @@ func _run_perf() -> void:
 		print("[perf] window %d: physics avg %.2f ms (worst %.2f)  process avg %.2f ms  alive=%d bullets=%d nodes=%d" % [
 			window, phys / n, worst, proc / n, alive, ballistics.bullets.size(), int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT))])
 	get_tree().quit()
+
+
+## Puts the match into a particular state for a screenshot.
+func _shot_state(st: String) -> void:
+	var p := player
+	match st:
+		"freefall":
+			hud.root.visible = true
+			p.mode = Player.Mode.FREEFALL
+			p.global_position += Vector3(0, 140, 0)
+			p.velocity = Vector3(0, -55, 0)
+			p.pitch = -0.7
+		"chute":
+			hud.root.visible = true
+			p.mode = Player.Mode.FREEFALL
+			p.global_position += Vector3(0, 60, 0)
+			p.open_chute()
+			p.pitch = 0.9
+		"storm":
+			zone.radius = 20.0
+			zone.center = Vector2(p.global_position.x + 120.0, p.global_position.z)
+			zone.set_process(false)
+			zone._apply_wall()
+			hud.set_storm(true)
+		"lowhp":
+			p.spawn_protect = 0.0
+			p.take_damage(80.0, p.global_position + Vector3(4, 0, -6), false, bots[0])
+		"inventory":
+			for k in [["armor", "2"], ["helmet", "3"], ["bandage", ""], ["med", ""], ["energy", ""], ["grenade", ""], ["ammo", "5.56"], ["scope", "2x"]]:
+				var l := _spawn_loot(k[0], k[1], p.global_position)
+				l.pickup(p)
+			p.give_weapon("dmr")
+			p.boost = 60.0
+		"death":
+			p.spawn_protect = 0.0
+			player_kills = 3
+			damage_dealt = 412.0
+			p.take_damage(999.0, p.global_position + Vector3(5, 0, 0), true, bots[0])
+		"win":
+			player_kills = 7
+			damage_dealt = 960.0
+			for b in bots:
+				if is_instance_valid(b) and b.alive:
+					b.take_damage(9999.0, b.global_position, false, p)
+		"pause":
+			hud.show_pause(true)
+		"settings":
+			_quit_to_menu()
+			hud._open_settings()
+		"airdrop":
+			var c := Vector2(p.global_position.x, p.global_position.z) + Vector2(cos(p.yaw + PI * 0.5), -sin(p.yaw + PI * 0.5)) * 0.0
+			var fwd := Basis(Vector3.UP, p.yaw) * Vector3(0, 0, -14)
+			var drop := Airdrop.new()
+			drop.setup(self, Vector2(p.global_position.x + fwd.x, p.global_position.z + fwd.z), ground_at(p.global_position + fwd).y)
+			add_child(drop)
+			airdrops.append(drop)
+			drop.position.y = ground_at(p.global_position + fwd).y + 0.05
+			for i in 5:
+				await get_tree().process_frame
+	for i in 25:
+		await get_tree().process_frame

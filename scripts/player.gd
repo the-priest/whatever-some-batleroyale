@@ -188,7 +188,9 @@ func _ready() -> void:
 	flash_light.light_cull_mask = 0xFFFFF & ~2
 	view.add_child(flash_light)
 
-	chute_mesh = Parachute.build(0, 4.2)
+	# Lines run to the shoulders, above and behind the eye, so they frame the
+	# view instead of slicing through it.
+	chute_mesh = Parachute.build(0, 4.2, Vector3(0.28, 1.75, 0.22))
 	chute_mesh.position = Vector3(0, 0.4, 0.3)
 	chute_mesh.visible = false
 	add_child(chute_mesh)

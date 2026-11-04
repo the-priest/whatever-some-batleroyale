@@ -12,7 +12,7 @@ const SCHEMES := [
 ]
 
 
-static func build(scheme: int = -1, height := 3.8) -> Node3D:
+static func build(scheme: int = -1, height := 3.8, harness := Vector3(0.15, 0.6, 0.15)) -> Node3D:
 	var root := Node3D.new()
 	root.name = "Parachute"
 	var cols: Array = SCHEMES[(randi() if scheme < 0 else scheme) % SCHEMES.size()]
@@ -22,10 +22,16 @@ static func build(scheme: int = -1, height := 3.8) -> Node3D:
 		m.albedo_color = c
 		m.roughness = 0.85
 		m.cull_mode = BaseMaterial3D.CULL_DISABLED
+		# Ripstop nylon lets daylight through: from underneath it glows.
+		m.backlight_enabled = true
+		m.backlight = c.lightened(0.3)
+		m.emission_enabled = true
+		m.emission = c
+		m.emission_energy_multiplier = 0.45
 		mats.append(m)
 	var line_mat := StandardMaterial3D.new()
-	line_mat.albedo_color = Color(0.85, 0.85, 0.82)
-	line_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	line_mat.albedo_color = Color(0.32, 0.32, 0.3)
+	line_mat.roughness = 0.9
 
 	var cells := 9
 	var arc := deg_to_rad(110.0)
@@ -54,11 +60,11 @@ static func build(scheme: int = -1, height := 3.8) -> Node3D:
 		# Two lines per cell to the harness.
 		for z in [-chord * 0.35, chord * 0.35]:
 			var top := cell.position + Vector3(0, -0.16, z)
-			var bottom := Vector3(sign(top.x) * 0.15, 0.6, z * 0.15)
+			var bottom := Vector3(sign(top.x) * harness.x, harness.y, harness.z + z * 0.08)
 			var line := MeshInstance3D.new()
 			var lm := BoxMesh.new()
 			var len := top.distance_to(bottom)
-			lm.size = Vector3(0.012, 0.012, len)
+			lm.size = Vector3(0.007, 0.007, len)
 			line.mesh = lm
 			line.material_override = line_mat
 			line.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
