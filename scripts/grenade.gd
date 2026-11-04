@@ -15,6 +15,7 @@ var _done := false
 
 
 func _ready() -> void:
+	add_to_group("grenades")
 	collision_layer = 0
 	collision_mask = 1
 	mass = 0.4

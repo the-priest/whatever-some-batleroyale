@@ -456,6 +456,8 @@ func _cleanup_match() -> void:
 		if is_instance_valid(i):
 			i.queue_free()
 	impacts.clear()
+	for g in get_tree().get_nodes_in_group("grenades"):
+		g.queue_free()
 	if player != null:
 		player.mode = Player.Mode.PLANE
 	hud.set_storm(false)
@@ -633,6 +635,18 @@ func _update_ambience(delta: float) -> void:
 		if not outside and _storm.volume_db < -55.0:
 			_storm.queue_free()
 			_storm = null
+
+
+## Storm rumble and wind belong to being alive in the match; fade them out
+## for the end screen.
+func _stop_ambience() -> void:
+	for n in [_storm, _wind2d]:
+		if n != null and is_instance_valid(n):
+			var tw := (n as Node).create_tween()
+			tw.tween_property(n, "volume_db", -60.0, 1.0)
+			tw.tween_callback((n as Node).queue_free)
+	_storm = null
+	_wind2d = null
 
 
 func _follow_plane_cam(delta: float) -> void:
@@ -947,6 +961,7 @@ func _on_player_died(killer: String) -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	var placement := maxi(1, alive)
 	alive = maxi(0, alive - 1)
+	_stop_ambience()
 	hud.killfeed("%s   >   YOU" % killer, HUD.DANGER)
 	hud.show_death(killer, placement, _stats())
 	sfx.play_ui("defeat", -4.0)
@@ -1033,6 +1048,7 @@ func _win() -> void:
 		return
 	phase = "end"
 	winner = true
+	_stop_ambience()
 	hud.pause_allowed = false
 	hud.set_storm(false)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE

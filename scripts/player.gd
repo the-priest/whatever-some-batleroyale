@@ -1424,6 +1424,39 @@ func reset_for_match() -> void:
 	freefall_speed = 0.0
 	mode = Mode.PLANE
 	process_mode = Node.PROCESS_MODE_INHERIT
+	# Feel/animation state from the last match must not leak into this one.
+	trauma = 0.0
+	land_dip = 0.0
+	sprinting = false
+	sprint_blend = 0.0
+	aiming = false
+	aim_blend = 0.0
+	bloom = 0.0
+	bolt_t = -1.0
+	kick = Vector3.ZERO
+	kick_vel = Vector3.ZERO
+	kick_rot = Vector3.ZERO
+	kick_rot_vel = Vector3.ZERO
+	recoil_pitch = 0.0
+	recoil_yaw = 0.0
+	holding_breath = false
+	in_water = false
+	_scope_sway = Vector2.ZERO
+	_pending_hits.clear()
+	_spray_n = 0
+	_fall_speed = 0.0
+	_was_on_floor = true
+	_sprint_lock = 0.0
+	_throw_cd = 0.0
+	pitch = 0.0
+	cam_base = Vector3(0, EYE, 0)
+	camera.fov = base_fov
+	flash_time = 0.0
+	flash.visible = false
+	for c in _casings:
+		if is_instance_valid(c["node"]):
+			c["node"].queue_free()
+	_casings.clear()
 	_emit_health()
 	_rebuild_viewmodel()
 	_emit_weapon()

@@ -31,8 +31,6 @@ var think_timer := 0.0
 var shoot_skill := 0.55
 var reaction := 0.35
 var sight := 130.0
-var strafe_dir := 1.0
-var strafe_timer := 0.0
 var fall_speed := -12.0
 var landed := false
 var roam_point := Vector2.ZERO
@@ -70,6 +68,9 @@ var _col: CollisionShape3D
 var _cap: CapsuleShape3D
 var crouched := false
 var calm_t := 0.0
+var fight_moving := false
+var _fight_t := 0.0
+var _fight_dir := Vector3.FORWARD
 var _posture_t := 0.0
 var _reload_t := 0.0
 
@@ -301,12 +302,9 @@ func _ground(delta: float) -> void:
 	else:
 		if enemy != null and is_instance_valid(enemy) and enemy_visible():
 			var d := global_position.distance_to(enemy.global_position)
-			strafe_timer -= delta
-			if strafe_timer <= 0.0:
-				strafe_timer = randf_range(0.7, 1.7)
-				strafe_dir = -strafe_dir
-			var to_e := (enemy.global_position - global_position).normalized()
-			var side := Vector3(-to_e.z, 0, to_e.x) * strafe_dir
+			var to_e := (enemy.global_position - global_position)
+			to_e.y = 0.0
+			to_e = to_e.normalized()
 			# Fight at the range the weapon is made for.
 			var hold := 45.0
 			match Weapons.cls(weapon_id):
@@ -318,28 +316,36 @@ func _ground(delta: float) -> void:
 					hold = 90.0
 				"lmg":
 					hold = 55.0
-			# At range, alternate between crouched shooting and standing to
-			# reposition; up close, stay up and strafe.
-			_posture_t -= delta
-			if _posture_t <= 0.0:
-				var want_crouch := d > 30.0 and not crouched and randf() < 0.45 + shoot_skill * 0.3
-				_set_crouch(want_crouch)
-				_posture_t = randf_range(2.0, 4.0) if crouched else randf_range(1.2, 2.5)
-			if crouched:
-				hold = d
-			if d > hold + 6.0:
-				target_pos = enemy.global_position
-				stop_dist = hold
+			# Fire and move in bounds: hold still (standing or crouched) and
+			# shoot, then dash to a new spot facing the way you run, then shoot
+			# again. Nobody moonwalks.
+			_fight_t -= delta
+			if _fight_t <= 0.0:
+				fight_moving = not fight_moving
+				if fight_moving:
+					_set_crouch(false)
+					_fight_t = randf_range(0.7, 1.5) * (1.6 if d > hold + 10.0 else 1.0)
+					var side := Vector3(-to_e.z, 0, to_e.x) * (1.0 if randf() < 0.5 else -1.0)
+					var push := 0.0
+					if d > hold + 6.0:
+						push = 1.0
+					elif d < hold - 8.0:
+						push = -0.8
+					_fight_dir = (side * (1.0 - absf(push) * 0.6) + to_e * push).normalized()
+				else:
+					_fight_t = randf_range(1.4, 3.4)
+					_set_crouch(d > 30.0 and randf() < 0.4 + shoot_skill * 0.35)
+			if fight_moving:
+				target_pos = global_position + _fight_dir * 6.0
+				stop_dist = 0.0
 				want_sprint = true
-			elif d < hold - 8.0:
-				target_pos = global_position - to_e * 6.0 + side * 4.0
-				stop_dist = 0.0
 			else:
-				target_pos = global_position + side * 4.0
-				stop_dist = 0.0
+				target_pos = global_position
+				stop_dist = 1.0
 		else:
 			enemy = null
 			_set_crouch(false)
+			fight_moving = false
 			var here := Vector2(global_position.x, global_position.z)
 			if game != null and game.zone != null:
 				var zc: Vector2 = game.zone.center
@@ -400,8 +406,8 @@ func _ground(delta: float) -> void:
 			speed *= 0.6
 		velocity.x = move_toward(velocity.x, dir.x * speed, 26.0 * delta)
 		velocity.z = move_toward(velocity.z, dir.z * speed, 26.0 * delta)
-		if not fighting:
-			rotation.y = lerp_angle(rotation.y, atan2(-dir.x, -dir.z), clampf(delta * 8.0, 0.0, 1.0))
+		if not fighting or fight_moving:
+			rotation.y = lerp_angle(rotation.y, atan2(-dir.x, -dir.z), clampf(delta * 10.0, 0.0, 1.0))
 		_blocked -= delta
 		if _blocked <= 0.0 and is_on_floor() and dist > 3.0:
 			var q2 := PhysicsRayQueryParameters3D.create(global_position + Vector3.UP * 0.4, global_position + Vector3.UP * 0.4 + dir * 0.9, 1)
@@ -464,7 +470,7 @@ func _animate_ground() -> void:
 	# Arms: gun up while fighting, held low otherwise.
 	if body != null:
 		if armed:
-			var fighting_now := enemy != null and is_instance_valid(enemy) and enemy_visible()
+			var fighting_now := enemy != null and is_instance_valid(enemy) and enemy_visible() and not fight_moving
 			_reload_t = maxf(0.0, _reload_t - get_physics_process_delta_time())
 			body.set_arms("reload" if _reload_t > 0.0 else ("aim" if fighting_now else "idle"))
 			var aim_to: Vector3 = (enemy.global_position + Vector3(0, 1.2, 0) - _shot_origin()) if fighting_now else -global_basis.z
@@ -613,6 +619,11 @@ func _shoot_logic(delta: float) -> void:
 	if randf() < shoot_skill * 0.18:
 		aim_h = 1.55
 	var aim := (enemy.global_position + Vector3(0, aim_h, 0)) - _shot_origin()
+	if fight_moving:
+		# Running between positions: no shooting, and the next stop needs a
+		# moment to bring the gun back on target.
+		fire_timer = maxf(fire_timer, 0.25)
+		return
 	rotation.y = lerp_angle(rotation.y, atan2(-aim.x, -aim.z), clampf(delta * 9.0, 0.0, 1.0))
 	if fire_timer > 0.0:
 		return

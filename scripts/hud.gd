@@ -921,9 +921,19 @@ func set_gameplay_visible(v: bool) -> void:
 	if not v:
 		big_map.visible = false
 		set_scope(false)
+		set_reddot(false, false)
 		lbl_prompt.text = ""
+		prompt_label = ""
 		lbl_big.text = ""
 		progress_frac = -1.0
+		progress_text = ""
+		progress.queue_redraw()
+		low_hp = 0.0
+		hurt_flash = 0.0
+		in_storm = false
+		damage_marks.clear()
+		pings.clear()
+		vignette.queue_redraw()
 
 
 func set_crosshair_visible(v: bool) -> void:
