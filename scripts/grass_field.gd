@@ -150,6 +150,11 @@ func _compute_chunk(k: Vector2i) -> void:
 			var h := t.height_at(x, z)
 			if h < Terrain.WATER_LEVEL + 2.6 or t.is_water(x, z):
 				continue
+			# The ground shader blends sand between 6 m terrain vertices, so a
+			# beach can show sand a little above the height cut-off: match it.
+			var sand := _vertex_sand(t, x, z)
+			if sand > 0.2 or (sand > 0.06 and rr.randf() < sand * 5.0):
+				continue
 			if t.slope_at(x, z) > 0.36:
 				continue
 			var forest := t.forest_density(x, z)
@@ -166,6 +171,27 @@ func _compute_chunk(k: Vector2i) -> void:
 	_mutex.lock()
 	_done[k] = [count, buf]
 	_mutex.unlock()
+
+
+## Sand weight as the terrain mesh shows it: the per-vertex beach blend
+## (see WorldBuilder._ground_weights) interpolated across the grid cell.
+static func _vertex_sand(t: Terrain, x: float, z: float) -> float:
+	var gx := (x + Terrain.HALF) / Terrain.STEP
+	var gz := (z + Terrain.HALF) / Terrain.STEP
+	var ix := floorf(gx)
+	var iz := floorf(gz)
+	var fx := gx - ix
+	var fz := gz - iz
+	var w := [0.0, 0.0, 0.0, 0.0]
+	for i in 4:
+		var vx := (ix + float(i % 2)) * Terrain.STEP - Terrain.HALF
+		var vz := (iz + float(i >> 1)) * Terrain.STEP - Terrain.HALF
+		var vh := t.height_at(vx, vz)
+		var s := smoothstep(3.6, 1.2, vh)
+		if Vector2(vx, vz).distance_to(Terrain.LAKE_C) < Terrain.LAKE_R + 45.0:
+			s = maxf(s, smoothstep(t.lake_level + 2.4, t.lake_level + 0.6, vh))
+		w[i] = s
+	return lerpf(lerpf(w[0], w[1], fx), lerpf(w[2], w[3], fx), fz)
 
 
 func _collect_done() -> void:

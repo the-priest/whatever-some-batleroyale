@@ -180,7 +180,7 @@ func _place_tracer(b: Dictionary, cam: Camera3D = null) -> void:
 
 
 func _near_miss(b: Dictionary, a: Vector3, c: Vector3, player: Node3D) -> void:
-	if not bool(player.get("alive")):
+	if not (player.get("alive") == true):
 		return
 	var ear := player.global_position + Vector3(0, 1.5, 0)
 	var seg := c - a
@@ -200,7 +200,7 @@ func _resolve_hit(b: Dictionary, hit: Dictionary) -> void:
 	var pos: Vector3 = hit["position"]
 	var d: Dictionary = Weapons.def(b["id"])
 	var shooter: Node = b["shooter"]
-	var damageable: bool = col != null and col.has_method("take_damage") and bool(col.get("alive")) and col != shooter
+	var damageable: bool = col != null and col.has_method("take_damage") and (col.get("alive") == true) and col != shooter
 	# Squad mates: friendly fire is off, the round just stops.
 	if damageable and col.get("friendly") == true and shooter is Player:
 		damageable = false

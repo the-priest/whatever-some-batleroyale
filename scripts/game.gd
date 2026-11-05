@@ -260,6 +260,8 @@ func _ready() -> void:
 		_run_mantle_test()
 	elif OS.get_cmdline_user_args().has("--drive"):
 		_run_drive_test()
+	elif OS.get_cmdline_user_args().has("--carexit"):
+		_run_carexit_test()
 	elif OS.get_cmdline_user_args().has("--nethost"):
 		_run_net_test(true)
 	elif OS.get_cmdline_user_args().has("--netjoin"):
@@ -1251,14 +1253,17 @@ func _update_prompt() -> void:
 	if player.mode == Player.Mode.CHUTE:
 		hud.set_prompt("STEER WITH WASD  —  PICK YOUR LANDING SPOT")
 		return
+	if player.mode == Player.Mode.VEHICLE:
+		hud.set_prompt("[F]  GET OUT")
+		return
 	if player.mode != Player.Mode.GROUND:
 		hud.set_prompt("")
 		return
 	var best := _nearest_loot(player.global_position, 3.0)
-	var car := _nearest_vehicle(player.global_position, 4.0)
-	if car != null and (best == null or best.global_position.distance_to(player.global_position) > 1.6):
+	var car := _nearest_vehicle(player.global_position, 1.7)
+	if car != null and (best == null or best.global_position.distance_to(player.global_position) > _vehicle_gap(player.global_position + Vector3.UP * 0.9, car) + 0.4):
 		var seat := car.free_seat()
-		hud.set_prompt("JEEP IS FULL" if seat < 0 else ("F   DRIVE" if seat == 0 else "F   RIDE AS PASSENGER"))
+		hud.set_prompt("JEEP IS FULL" if seat < 0 else ("[F]  DRIVE THE JEEP" if seat == 0 else "[F]  RIDE AS PASSENGER"))
 	elif best != null:
 		var why := best.block_reason(player)
 		hud.set_prompt(best.prompt_text() if why == "" else why)
@@ -1347,7 +1352,7 @@ func _menu_flyby(delta: float) -> void:
 
 func _update_end_cam(delta: float) -> void:
 	var focus := end_cam_spot
-	if end_cam_target != null and is_instance_valid(end_cam_target) and bool(end_cam_target.get("alive")):
+	if end_cam_target != null and is_instance_valid(end_cam_target) and (end_cam_target.get("alive") == true):
 		focus = end_cam_target.global_position
 		end_cam_spot = focus
 		if end_cam_target is Bot and (end_cam_target as Bot).is_human:
@@ -1387,7 +1392,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		hud.open_chat()
 		get_viewport().set_input_as_handled()
 		return
-	if event.is_action_pressed("interact") and phase == "playing" and player != null and player.mode == Player.Mode.VEHICLE:
+	if event.is_action_pressed("interact") and phase == "playing" and player != null and player.mode == Player.Mode.VEHICLE \
+			and Engine.get_physics_frames() - _veh_enter_frame > 12:
 		_exit_vehicle()
 		get_viewport().set_input_as_handled()
 		return
@@ -1635,8 +1641,12 @@ func try_pickup(p: Player) -> void:
 	if p == null or p.mode != Player.Mode.GROUND:
 		return
 	var best := _nearest_loot(p.global_position, 3.2)
-	var car := _nearest_vehicle(p.global_position, 4.0)
-	if car != null and (best == null or best.global_position.distance_to(p.global_position) > 1.6):
+	var car := _nearest_vehicle(p.global_position, 1.7)
+	# The F that just got you out is still "just pressed" for the player's own
+	# tick this frame: without this you were put straight back in.
+	if Engine.get_physics_frames() - _veh_exit_frame < 20:
+		car = null
+	if car != null and (best == null or best.global_position.distance_to(p.global_position) > _vehicle_gap(p.global_position + Vector3.UP * 0.9, car) + 0.4):
 		_enter_vehicle(car)
 		return
 	if best == null:
@@ -2514,8 +2524,10 @@ func _run_shot() -> void:
 			print("[shot] camper camp_t=%.1f at %s" % [cb._camp_t, str(cb.global_position.round())])
 			for i in 10:
 				await get_tree().process_frame
-	if args.has("--bot"):
+	if args.has("--bot") or args.has("--botheal"):
 		var poses := [["aim", "Idle", Vector3(-1.4, 0, -5.5), 2, 2], ["idle", "Jog_Fwd", Vector3(1.6, 0, -7.0), 1, 0], ["idle", "Sprint", Vector3(4.2, 0, -9.0), 3, 3]]
+		if args.has("--botheal"):
+			poses = [["bandage", "Idle", Vector3(-1.5, 0, -4.2), 2, 2], ["med", "Walk", Vector3(0.6, 0, -4.6), 1, 0], ["energy", "Idle", Vector3(2.4, 0, -4.4), 3, 3]]
 		var k := 0
 		for b in bots:
 			if not is_instance_valid(b) or k >= poses.size():
@@ -2529,7 +2541,7 @@ func _run_shot() -> void:
 			b.arm_weapon(["rifle", "carbine", "smg"][k - 1])
 			b.set_physics_process(false)
 			var to: Vector3 = p.global_position - b.global_position
-			b.rotation.y = atan2(-to.x, -to.z) + (0.0 if pose[0] == "aim" else 1.2)
+			b.rotation.y = atan2(-to.x, -to.z) + (0.0 if pose[0] == "aim" else (0.45 if Bot.HEAL_FLAGS.has(pose[0]) else 1.2))
 			b.body.set_gear(pose[3], pose[4])
 			b.body.set_arms(pose[0])
 			b.body.set_legs(pose[1])
@@ -2548,6 +2560,30 @@ func _run_shot() -> void:
 		p.reload_timer = p._reload_dur * (1.0 - at)
 		p._update_weapon(0.0)
 		p.set_physics_process(false)
+	for a in args:
+		if a.begins_with("--heal="):
+			# Freeze a healing animation part-way through.
+			var it := a.substr(7)
+			p.bandages = 5
+			p.meds = 2
+			p.energy = 2
+			p.hp = 40.0
+			p.boost = 0.0
+			p.use_item(it)
+			var at := 0.5
+			for b in args:
+				if b.begins_with("--at_t="):
+					at = float(b.substr(7))
+			var steps := 6
+			for i in steps + 1:
+				p.heal_timer = p.heal_dur * (1.0 - at * float(i) / float(steps))
+				await get_tree().process_frame
+			p.set_physics_process(false)
+			for i in 4:
+				p.heal_timer = p.heal_dur * (1.0 - at)
+				p._update_weapon(1.0 / 60.0)
+				p._update_camera(1.0 / 60.0)
+				await get_tree().process_frame
 	if args.has("--fire"):
 		# One volley right before capture so tracers are in flight in the frame.
 		get_tree().paused = false
@@ -3435,6 +3471,10 @@ func net_player_state() -> Variant:
 		flags |= Bot.NF_RELOAD
 	if player.has_gun():
 		flags |= Bot.NF_ARMED
+	if player.healing:
+		flags |= int(Bot.HEAL_FLAGS.get(player.heal_item, 0))
+	if player.swimming:
+		flags |= Bot.NF_SWIM
 	return [player.global_position, player.yaw, player.pitch, st, flags, player.current_id() if player.has_gun() else "", player.vest_level, player.helmet_level,
 		player.hp, player_kills, damage_dealt,
 		player.vehicle.net_id if player.mode == Player.Mode.VEHICLE and player.vehicle != null else -1, player.seat]
@@ -3593,7 +3633,7 @@ func _show_elim(e: Dictionary) -> void:
 			end_cam_target = mate
 		else:
 			var k := node_for_key(killer)
-			if k is Node3D and bool(k.get("alive")):
+			if k is Node3D and (k.get("alive") == true):
 				end_cam_target = k
 		_spectate_label()
 
@@ -4028,17 +4068,26 @@ func _spawn_vehicles(list: Array) -> void:
 		vehicles.append(v)
 
 
+## Nearest drivable jeep whose body (not its centre) is within max_d: you
+## can get in from a door, the bonnet or the tailgate alike.
 func _nearest_vehicle(pos: Vector3, max_d: float) -> Vehicle:
 	var best: Vehicle = null
 	var bd := max_d
 	for v in vehicles:
 		if not is_instance_valid(v) or (v as Vehicle).wrecked:
 			continue
-		var d := pos.distance_to((v as Vehicle).global_position + Vector3(0, 0.8, 0))
+		var d := _vehicle_gap(pos + Vector3.UP * 0.9, v as Vehicle)
 		if d < bd:
 			bd = d
 			best = v
 	return best
+
+
+## Distance from a point to the jeep's body box.
+static func _vehicle_gap(p: Vector3, v: Vehicle) -> float:
+	var l := v.global_transform.affine_inverse() * p
+	var c := Vector3(clampf(l.x, -0.95, 0.95), clampf(l.y, 0.6, 1.75), clampf(l.z, -2.05, 2.05))
+	return l.distance_to(c)
 
 
 func _enter_vehicle(v: Vehicle) -> void:
@@ -4047,6 +4096,7 @@ func _enter_vehicle(v: Vehicle) -> void:
 		hud.show_notice("JEEP IS FULL", 1.4)
 		return
 	v.seats[seat] = player
+	_veh_enter_frame = Engine.get_physics_frames()
 	player.vehicle = v
 	player.seat = seat
 	player.mode = Player.Mode.VEHICLE
@@ -4098,20 +4148,21 @@ func _leave_seat() -> void:
 	hud.set_vehicle(false)
 
 
+var _veh_exit_frame := -100000
+var _veh_enter_frame := -100000
+
+
 func _exit_vehicle() -> void:
 	var v: Vehicle = player.vehicle
 	if v == null or not is_instance_valid(v):
 		_leave_seat()
 		return
-	var seat := player.seat
-	var side := -1.0 if seat % 2 == 0 else 1.0
-	var sz: float = (Vehicle.SEATS[maxi(seat, 0)] as Vector3).z
-	var out := v.global_transform * Vector3(side * 2.0, 1.2, sz)
+	var spot := _exit_spot(v, player.seat)
 	var vel := v.linear_velocity
 	var car_yaw := v.global_basis.get_euler().y
 	_leave_seat()
-	var g := ground_at(out + Vector3.UP * 2.0)
-	player.global_position = g + Vector3(0, 0.15, 0)
+	_veh_exit_frame = Engine.get_physics_frames()
+	player.global_position = spot
 	player.velocity = vel * 0.6
 	player.yaw = car_yaw + _veh_cam_yaw
 	player.camera.make_current()
@@ -4119,6 +4170,51 @@ func _exit_vehicle() -> void:
 	# Bailing out at speed hurts.
 	if vel.length() > 14.0:
 		player.take_damage((vel.length() - 14.0) * 4.0, player.global_position, false, null)
+
+
+## Where to stand after getting out: beside your own door if there is room
+## (no wall between the seat and the spot, nothing in the way of your body),
+## else the other door, behind, in front, and the roof as a last resort.
+func _exit_spot(v: Vehicle, seat: int) -> Vector3:
+	var s := maxi(seat, 0)
+	var side := -1.0 if s % 2 == 0 else 1.0
+	var sz: float = (Vehicle.SEATS[s] as Vector3).z
+	# Yaw only, so a car on its side still lets you out onto the ground.
+	var flat := Transform3D(Basis(Vector3.UP, v.global_basis.get_euler().y), v.global_position)
+	var seat_pos := v.global_transform * (Vehicle.SEATS[s] as Vector3)
+	var tries := [Vector3(side * 1.85, 0, sz), Vector3(side * 1.85, 0, sz + 1.1), Vector3(side * 1.85, 0, sz - 1.2),
+		Vector3(-side * 1.85, 0, sz), Vector3(-side * 1.85, 0, sz + 1.1), Vector3(0, 0, 3.3), Vector3(0, 0, -3.5),
+		Vector3(side * 2.6, 0, sz), Vector3(-side * 2.6, 0, sz)]
+	var space := get_world_3d().direct_space_state
+	var cap := CapsuleShape3D.new()
+	cap.radius = 0.36
+	cap.height = 1.72
+	var sq := PhysicsShapeQueryParameters3D.new()
+	sq.shape = cap
+	sq.collision_mask = 1 | 4
+	sq.exclude = [v.get_rid(), player.get_rid()]
+	for o in tries:
+		var p: Vector3 = flat * (o as Vector3)
+		var down := PhysicsRayQueryParameters3D.create(p + Vector3.UP * 3.0, p + Vector3.DOWN * 6.0, 1)
+		down.exclude = [v.get_rid()]
+		var hit := space.intersect_ray(down)
+		var g: Vector3 = Vector3(hit["position"]) if not hit.is_empty() else Vector3(p.x, terrain.height_at(p.x, p.z), p.z)
+		if absf(g.y - v.global_position.y) > 2.2:
+			continue
+		# Deep water is fine: come up swimming at the surface.
+		if terrain.is_water(g.x, g.z):
+			var ws: float = terrain.water_surface_at(g.x, g.z)
+			if ws - g.y > Player.FLOAT_DEPTH:
+				g.y = ws - Player.FLOAT_DEPTH
+		sq.transform = Transform3D(Basis.IDENTITY, g + Vector3.UP * 0.94)
+		if not space.intersect_shape(sq, 1).is_empty():
+			continue
+		var los := PhysicsRayQueryParameters3D.create(seat_pos + Vector3.UP * 0.3, g + Vector3.UP * 1.2, 1)
+		los.exclude = [v.get_rid()]
+		if not space.intersect_ray(los).is_empty():
+			continue
+		return g + Vector3.UP * 0.06
+	return v.global_position + Vector3.UP * 2.3
 
 
 ## Driver input, the chase camera and the speedometer.
@@ -4129,6 +4225,11 @@ func _update_driving(delta: float) -> void:
 	if v == null or not is_instance_valid(v):
 		_leave_seat()
 		player.camera.make_current()
+		return
+	# Backup for F when a focused menu control swallowed the key event.
+	if Input.is_action_just_pressed("interact") and not input_locked and phase == "playing" \
+			and Engine.get_physics_frames() - _veh_enter_frame > 12:
+		_exit_vehicle()
 		return
 	if player.seat == 0 and not input_locked and not _drive_scripted:
 		var fwd := (1.0 if Input.is_action_pressed("move_forward") else 0.0) - (1.0 if Input.is_action_pressed("move_back") else 0.0)
@@ -4265,6 +4366,101 @@ func _seat_remote(h: Bot, vid: int, slot: int) -> void:
 
 
 ## Headless jeep test: settle, accelerate, steer, roadkill, explode.
+## Press F through the real input path: get in, get out, stay out. From every
+## seat, parked against a house wall, and with the jeep on its side.
+func _press(action: String) -> void:
+	var e := InputEventAction.new()
+	e.action = action
+	e.pressed = true
+	Input.parse_input_event(e)
+	await get_tree().physics_frame
+	await get_tree().process_frame
+	var r := InputEventAction.new()
+	r.action = action
+	r.pressed = false
+	Input.parse_input_event(r)
+	await get_tree().physics_frame
+
+
+func _run_carexit_test() -> void:
+	_start_match()
+	await get_tree().physics_frame
+	_land_player_now()
+	var v: Vehicle = vehicles[0]
+	var fails := 0
+	var space := get_world_3d().direct_space_state
+	var cap := CapsuleShape3D.new()
+	cap.radius = 0.3
+	cap.height = 1.6
+	var places: Array = []
+	for pad in world.villages.village_pads:
+		if pad.type == "town":
+			places.append(["plaza", Vector3((pad.center as Vector2).x, float(pad.pad) + 0.5, (pad.center as Vector2).y), 0.0, false])
+			break
+	# Against a house: door side pressed to the wall.
+	var h: Dictionary = world.villages.houses[3]
+	var hc2: Vector2 = h["center"]
+	var hy: float = float(h.get("yaw", 0.0))
+	var hx := Basis(Vector3.UP, hy) * Vector3(1, 0, 0)
+	var half_w: float = float(h.get("w", 8.0)) * 0.5
+	var hc := Vector3(hc2.x, float(h.get("pad", 0.0)), hc2.y)
+	places.append(["wall", Vector3(0, 0.5, 0) + Vector3(hc.x, 0, hc.z) + hx * (half_w + 1.75), hy, false])
+	var dummy := Node3D.new()
+	places.append(["tipped", places[0][1] + Vector3(6, 0.4, 0), 0.0, true])
+	for pl in places:
+		for seat in 4:
+			v.global_transform = Transform3D(Basis(Vector3.UP, float(pl[2])) * (Basis(Vector3.FORWARD, PI * 0.5) if bool(pl[3]) else Basis.IDENTITY), pl[1])
+			if pl[0] == "wall":
+				var gw := terrain.height_at(v.global_position.x, v.global_position.z)
+				v.global_position.y = gw + 0.6
+			v.linear_velocity = Vector3.ZERO
+			v.angular_velocity = Vector3.ZERO
+			v._last_vel = Vector3.ZERO
+			v._crash_cd = 2.0
+			for i in 50:
+				await get_tree().physics_frame
+			v.hp = Vehicle.MAX_HP
+			for k in 4:
+				v.seats[k] = dummy if k < seat else null
+			var flat_x := Basis(Vector3.UP, v.global_basis.get_euler().y) * Vector3(1, 0, 0)
+			player.global_position = ground_at(v.global_position + flat_x * 2.6) + Vector3.UP * 0.1
+			player.velocity = Vector3.ZERO
+			for i in 3:
+				await get_tree().physics_frame
+			var nl := _nearest_loot(player.global_position, 3.2)
+			var pre := "mode=%d d=%.1f car=%s up=%.2f near_car=%s free=%d loot=%s locked=%s cd=%d hp=%d wrecked=%s" % [player.mode, player.global_position.distance_to(v.global_position + Vector3(0, 0.8, 0)), str(v.global_position.round()), v.global_basis.y.y, _nearest_vehicle(player.global_position, 1.7) == v, v.free_seat(), str(nl.global_position.distance_to(player.global_position)) if nl != null else "-", player._locked(), Engine.get_physics_frames() - _veh_exit_frame, int(v.hp), v.wrecked]
+			await _press("interact")
+			for i in 6:
+				await get_tree().physics_frame
+			var entered := player.mode == Player.Mode.VEHICLE
+			var got_seat := player.seat
+			for i in 20:
+				await get_tree().physics_frame
+			await _press("interact")
+			var exit_d := player.global_position.distance_to(v.global_position)
+			var car0 := v.global_position
+			var stayed_out := true
+			for i in 40:
+				await get_tree().physics_frame
+				if player.mode != Player.Mode.GROUND:
+					stayed_out = false
+			var sq := PhysicsShapeQueryParameters3D.new()
+			sq.shape = cap
+			sq.collision_mask = 1
+			sq.exclude = [player.get_rid()]
+			sq.transform = Transform3D(Basis.IDENTITY, player.global_position + Vector3.UP * 0.95)
+			var stuck := not space.intersect_shape(sq, 1).is_empty()
+			var ok := entered and stayed_out and not stuck and exit_d < 4.0
+			if not ok:
+				fails += 1
+			print("[carexit] %s seat=%d entered=%s got_seat=%d stayed_out=%s stuck=%s exit_d=%.1f later_d=%.1f car_moved=%.1f %s  (%s)" % [pl[0], seat, entered, got_seat, stayed_out, stuck, exit_d, player.global_position.distance_to(v.global_position), car0.distance_to(v.global_position), "ok" if ok else "FAIL", pre])
+			for k in 4:
+				v.seats[k] = null
+	dummy.free()
+	print("[carexit] ", "ALL GOOD" if fails == 0 else "%d FAILED" % fails)
+	get_tree().quit()
+
+
 func _run_drive_test() -> void:
 	_start_match()
 	await get_tree().physics_frame

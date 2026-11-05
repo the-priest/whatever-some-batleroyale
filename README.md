@@ -32,6 +32,12 @@ Open the project in Godot 4.7 and press Play, or export with the presets in `exp
 In deep water you swim (gun lowered): Shift swims faster, C dives (watch the air bar), Space climbs
 out onto a bank or jetty. Shallow water slows you down the deeper it gets.
 
+Healing puts the gun away and plays the item's animation; you can walk slowly but not sprint, and
+firing cancels it. A bandage (2.2 s, heals to 75) is torn and wrapped round the forearm; a medkit
+(4 s, +60) is unzipped and its syringe goes into your thigh; an energy drink (1.6 s, boost) is
+cracked open, downed in three gulps and crushed. Other players and bots show the same item in their
+hands, and you can hear someone healing nearby. You cannot heal while swimming.
+
 ## Gunplay
 
 - Every bullet is a simulated projectile with muzzle velocity and gravity drop, so long shots need

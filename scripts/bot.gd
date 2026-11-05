@@ -117,6 +117,22 @@ const NF_CROUCH := 2
 const NF_AIM := 4
 const NF_RELOAD := 8
 const NF_ARMED := 16
+const NF_HEAL_BANDAGE := 32
+const NF_HEAL_MED := 64
+const NF_HEAL_DRINK := 128
+const NF_SWIM := 256
+const HEAL_FLAGS := {"bandage": NF_HEAL_BANDAGE, "med": NF_HEAL_MED, "energy": NF_HEAL_DRINK}
+const HEAL_START_SFX := {"bandage": "bandage_tear", "med": "kit_zip_open", "energy": "can_open"}
+
+
+static func heal_kind_of(flags: int) -> String:
+	if flags & NF_HEAL_BANDAGE:
+		return "bandage"
+	if flags & NF_HEAL_MED:
+		return "med"
+	if flags & NF_HEAL_DRINK:
+		return "energy"
+	return ""
 
 const FOV_COS := 0.42      # ~130 degree cone
 const CLOSE_SENSE := 13.0  # always noticed this close
@@ -367,15 +383,19 @@ func _ground(delta: float) -> void:
 		heal_timer -= delta
 		velocity.x = move_toward(velocity.x, 0.0, 30.0 * delta)
 		velocity.z = move_toward(velocity.z, 0.0, 30.0 * delta)
+		if heal_timer < 1.4 and heal_timer + delta >= 1.4:
+			_heal_sound("syringe_inject", -6.0)
 		if heal_timer <= 0.0 and meds > 0:
 			meds -= 1
 			hp = minf(100.0, hp + 50.0)
+			_heal_sound("kit_zip_close", -8.0)
 		_move()
 		_ground_safety()
 		_animate_ground()
 		return
-	if armed and meds > 0 and hp < 55.0 and (enemy == null or not is_instance_valid(enemy)):
+	if armed and meds > 0 and hp < 55.0 and (enemy == null or not is_instance_valid(enemy)) and not in_deep_water():
 		heal_timer = 3.0
+		_heal_sound("kit_zip_open", -6.0)
 		return
 
 	var target_pos := global_position
@@ -788,8 +808,50 @@ func _ground_safety() -> void:
 		global_position = Vector3(roam_point.x, game_ground_y() + 2.0, roam_point.y)
 
 
+var _deep_frame := -1
+var _deep := false
+
+
+## Floating in water too deep to stand in (cached for the physics frame).
+func in_deep_water() -> bool:
+	var f := Engine.get_physics_frames()
+	if f == _deep_frame:
+		return _deep
+	_deep_frame = f
+	_deep = false
+	if game != null and game.terrain != null and bool(game.terrain.is_water(global_position.x, global_position.z)):
+		var ws: float = game.terrain.water_surface_at(global_position.x, global_position.z)
+		_deep = ws - game_ground_y() > 1.43 and global_position.y < ws - 1.0
+	return _deep
+
+
+func _heal_sound(name: String, db: float) -> void:
+	if game != null and game.player != null and game.player.global_position.distance_to(global_position) < 40.0:
+		game.play_sfx_at(name, global_position + Vector3(0, 1.2, 0), db)
+
+
+var _swim_stroke := 0.0
+
+
+## Swim clips for a body in deep water; true when it handled the frame.
+func _animate_swim(planar: float, delta: float) -> bool:
+	if body == null:
+		return true
+	_play("Swim_Fwd" if planar > 0.6 else "Swim_Idle", clampf(planar / 2.4, 0.7, 1.3) if planar > 0.6 else 1.0)
+	body.set_arms("")
+	if planar > 0.6:
+		_swim_stroke += delta * planar
+		if _swim_stroke > 2.2:
+			_swim_stroke = 0.0
+			_heal_sound("swim_stroke_%d" % (randi() % 3 + 1), -4.0)
+	return true
+
+
 func _animate_ground() -> void:
 	var planar := Vector2(velocity.x, velocity.z).length()
+	if in_deep_water():
+		_animate_swim(planar, get_physics_process_delta_time())
+		return
 	if is_on_floor() and planar > 1.0:
 		_step += planar * get_physics_process_delta_time()
 		if _step > 2.9:
@@ -811,7 +873,7 @@ func _animate_ground() -> void:
 		if armed:
 			var fighting_now := enemy != null and is_instance_valid(enemy) and enemy_visible() and not fight_moving
 			_reload_t = maxf(0.0, _reload_t - get_physics_process_delta_time())
-			body.set_arms("reload" if _reload_t > 0.0 else ("aim" if fighting_now else "idle"))
+			body.set_arms("med" if heal_timer > 0.0 else ("reload" if _reload_t > 0.0 else ("aim" if fighting_now else "idle")))
 			var aim_to: Vector3 = (enemy.global_position + Vector3(0, 1.2, 0) - _shot_origin()) if fighting_now else -global_basis.z
 			body.aim_dir = aim_to
 		else:
@@ -861,6 +923,9 @@ func apply_net(pos: Vector3, yaw: float, st: int, flags: int, weapon: String, ve
 	_net_pos = pos
 	_net_yaw = yaw
 	net_pitch = pitch
+	var heal := heal_kind_of(flags)
+	if heal != "" and heal != heal_kind_of(_net_flags) and alive:
+		_heal_sound(HEAL_START_SFX[heal], -5.0)
 	_net_flags = flags
 	if not _net_seen or st != state and (st == State.GROUND or state == State.PLANE):
 		global_position = pos
@@ -928,6 +993,11 @@ func _puppet_tick(delta: float) -> void:
 			chute_node.rotation.y = sin(Time.get_ticks_msec() * 0.0009) * 0.08
 		State.GROUND:
 			var planar := Vector2(velocity.x, velocity.z).length()
+			if (_net_flags & NF_SWIM) != 0:
+				_animate_swim(planar, delta)
+				if body != null:
+					body.set_gear(vest_level, helmet_level)
+				return
 			if planar > 0.5:
 				var want := "Sprint" if planar > 5.6 else ("Jog_Fwd" if planar > 2.6 else "Walk")
 				if crouched:
@@ -942,7 +1012,10 @@ func _puppet_tick(delta: float) -> void:
 			else:
 				_play("Crouch_Idle" if crouched else "Idle")
 	if body != null:
-		if armed:
+		var heal_kind := heal_kind_of(_net_flags)
+		if heal_kind != "":
+			body.set_arms(heal_kind)
+		elif armed:
 			var aiming := (_net_flags & NF_AIM) != 0
 			body.set_arms("reload" if (_net_flags & NF_RELOAD) != 0 else ("aim" if aiming else "idle"))
 			body.aim_dir = (-global_basis.z).rotated(global_basis.x, net_pitch)
@@ -964,6 +1037,10 @@ func net_pack(out: PackedFloat32Array) -> void:
 		flags |= NF_AIM
 	if _reload_t > 0.0:
 		flags |= NF_RELOAD
+	if heal_timer > 0.0:
+		flags |= NF_HEAL_MED
+	if state == State.GROUND and in_deep_water():
+		flags |= NF_SWIM
 	var p := global_position
 	out.append_array(PackedFloat32Array([p.x, p.y, p.z, rotation.y, float(state), float(flags),
 		float(Weapons.ORDER.find(weapon_id) if armed else -1), float(vest_level * 10 + helmet_level)]))
@@ -1068,6 +1145,10 @@ func arm_weapon(id: String) -> void:
 func _shoot_logic(delta: float) -> void:
 	if not armed or weapon_id == "":
 		return
+	if in_deep_water():
+		# Both hands are swimming, same as for the player.
+		_reload_t = maxf(0.0, _reload_t - delta)
+		return
 	if think_timer <= 0.0:
 		think_timer = randf_range(0.22, 0.45)
 		var prev := enemy
@@ -1078,9 +1159,9 @@ func _shoot_logic(delta: float) -> void:
 				# Reaction time before the first shot on a new target.
 				fire_timer = maxf(fire_timer, reaction * randf_range(0.8, 1.4))
 				_burst = 0
-		elif enemy != null and (not is_instance_valid(enemy) or not bool(enemy.get("alive"))):
+		elif enemy != null and (not is_instance_valid(enemy) or not (enemy.get("alive") == true)):
 			enemy = null
-	if enemy == null or not is_instance_valid(enemy) or not bool(enemy.get("alive")):
+	if enemy == null or not is_instance_valid(enemy) or not (enemy.get("alive") == true):
 		enemy = null
 		return
 	if not enemy_visible():

@@ -71,7 +71,7 @@ func _explode() -> void:
 		for h in get_tree().get_nodes_in_group("humans"):
 			victims.append(h)
 	for v in victims:
-		if not bool(v.get("alive")):
+		if not (v.get("alive") == true):
 			continue
 		var target: Vector3 = (v as Node3D).global_position + Vector3(0, 1.0, 0)
 		var d := pos.distance_to(target)

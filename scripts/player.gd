@@ -128,6 +128,8 @@ var _boost_acc := 0.0
 var _throw_cd := 0.0
 var heal_timer := 0.0
 var healing := false
+var heal_view: HealView
+var heal_blend := 0.0
 var in_water := false
 
 
@@ -160,6 +162,12 @@ func _ready() -> void:
 	camera.add_child(view)
 	gun_holder = Node3D.new()
 	view.add_child(gun_holder)
+	heal_view = HealView.new()
+	view.add_child(heal_view)
+	heal_view.sound.connect(func(n: String, db: float) -> void:
+		if game != null and game.get("sfx") != null:
+			game.sfx.play_2d(n, db, 0.05))
+	heal_view.jolt.connect(add_trauma)
 
 	flash = MeshInstance3D.new()
 	var q := QuadMesh.new()
@@ -797,7 +805,7 @@ func _update_camera(delta: float) -> void:
 	var sx := (sin(t * 37.0) + sin(t * 23.0 + 1.3)) * 0.5 * shake_amt * 0.035
 	var sy := (sin(t * 31.0 + 0.7) + sin(t * 19.0)) * 0.5 * shake_amt * 0.035
 	var sz := sin(t * 27.0 + 2.1) * shake_amt * 0.03
-	camera.rotation.x = pitch + recoil_pitch + sx + _scope_sway.y
+	camera.rotation.x = pitch + recoil_pitch + sx + _scope_sway.y + heal_view.cam_pitch
 	camera.rotation.y = yaw + recoil_yaw + sy + _scope_sway.x
 	# Lean slightly into strafes.
 	var side_speed := (Basis(Vector3.UP, yaw).inverse() * velocity).x if mode == Mode.GROUND else 0.0
@@ -875,6 +883,8 @@ static func _bump(t: float, a: float, b: float) -> float:
 
 
 func _update_weapon(delta: float) -> void:
+	heal_view.update(healing and alive, heal_item, heal_progress(), delta)
+	heal_blend = move_toward(heal_blend, 1.0 if healing else 0.0, delta / 0.2)
 	if not has_gun() or mode != Mode.GROUND or not alive:
 		gun_holder.visible = false
 		if game != null and game.hud != null:
@@ -926,6 +936,11 @@ func _update_weapon(delta: float) -> void:
 	pos.y -= land_dip * 0.05
 	rot.x -= land_dip * 0.15
 
+	# Healing: the gun drops out of the way of the hands.
+	var hb := heal_blend * heal_blend * (3.0 - 2.0 * heal_blend)
+	pos += Vector3(0.04, -0.3, 0.06) * hb
+	rot += Vector3(-0.9, 0.3, 0.35) * hb
+
 	# Reload choreography.
 	if reloading:
 		var rt := 1.0 - clampf(reload_timer / maxf(0.01, _reload_dur), 0.0, 1.0)
@@ -964,7 +979,7 @@ func _update_weapon(delta: float) -> void:
 
 	# Sniper scope: hide the gun and let the HUD draw the scope.
 	var scoped := cur_zoom() >= 1.9 and aim_blend > 0.92
-	gun_holder.visible = not scoped
+	gun_holder.visible = not scoped and heal_blend < 0.98
 	if game != null and game.hud != null:
 		game.hud.set_scope(scoped, cur_scope(), float(d.get("velocity", 700.0)))
 		# Red dot and iron sights are real 3D sights now: nothing drawn on the HUD.
@@ -1459,12 +1474,14 @@ func use_item(item: String) -> void:
 	if item == "energy" and boost >= 95.0:
 		notice.emit("BOOST ALREADY FULL")
 		return
+	if swimming:
+		notice.emit("CAN'T HEAL WHILE SWIMMING")
+		return
 	reloading = false
 	healing = true
 	heal_item = item
 	heal_dur = float(USE_TIME[item])
 	heal_timer = heal_dur
-	_sfx("heal", -2.0)
 
 
 ## H: the sensible item for the situation.

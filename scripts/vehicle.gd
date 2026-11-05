@@ -405,6 +405,10 @@ func _physics_process_body(delta: float) -> void:
 			f_long -= BRAKE * 0.5 * -throttle
 		if handbrake and not front:
 			f_long -= signf(v_long) * minf(absf(v_long) * mass * 0.8, BRAKE * 0.35)
+		elif absf(throttle) < 0.05 and absf(speed) < 2.5:
+			# Hill hold: off the pedals at walking pace the jeep stops and stays
+			# put instead of rolling away down a slope.
+			f_long -= signf(v_long) * minf(absf(v_long) * mass * 1.6, BRAKE * 0.3)
 		# Rolling resistance.
 		f_long -= v_long * 22.0
 		var f := Vector2(f_lat, f_long)

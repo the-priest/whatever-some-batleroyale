@@ -30,8 +30,15 @@ static func _camo_shader() -> Shader:
 
 
 const VEST_COLORS := [Color(0.55, 0.50, 0.38), Color(0.30, 0.34, 0.24), Color(0.10, 0.11, 0.12)]
-const LEG_ANIMS := ["Idle", "Walk", "Jog_Fwd", "Sprint", "Jump", "Crouch_Idle", "Crouch_Fwd"]
-const ARM_ANIMS := ["Pistol_Idle", "Pistol_Aim_Neutral", "Pistol_Reload"]
+const LEG_ANIMS := ["Idle", "Walk", "Jog_Fwd", "Sprint", "Jump", "Crouch_Idle", "Crouch_Fwd", "Swim_Fwd", "Swim_Idle"]
+const ARM_ANIMS := ["Pistol_Idle", "Pistol_Aim_Neutral", "Pistol_Reload", "Idle_Talking", "Interact", "Idle_Torch"]
+## Upper-body clip per healing item: hands busy in front of the chest for a
+## bandage, reaching for the kit, can held up (then lifted to the mouth by
+## _drink_ik, as no clip has a hand-to-mouth pose).
+const HEAL_ARMS := {"bandage": "Idle_Talking", "med": "Interact", "energy": "Idle_Torch"}
+## The swim stroke clip lies the body flat at hip height; lift it to the
+## surface (the soldier floats chest-deep, 1.38 m under the waterline).
+const SWIM_LIFT := 1.12
 const UPPER_BONES := ["spine_02", "spine_03", "neck_01", "Head", "clavicle_l", "upperarm_l", "lowerarm_l", "hand_l",
 	"clavicle_r", "upperarm_r", "lowerarm_r", "hand_r"]
 
@@ -50,6 +57,10 @@ var _arms := ""
 var _armed := false
 var _dead := false
 var _gun_len := 0.8
+var hand_l: BoneAttachment3D
+var _props: Dictionary = {}
+var _busy := false
+var _swim_lift := 0.0
 
 
 func _ready() -> void:
@@ -233,11 +244,16 @@ func set_legs(name: String, speed := 1.0) -> void:
 	tree.set("parameters/speed/scale", speed)
 
 
-## "" = arms follow the legs, "idle" = gun held low, "aim" = gun up.
+## "" = arms follow the legs, "idle" = gun held low, "aim" = gun up,
+## "reload", or a healing item ("bandage", "med", "energy"): the gun is put
+## away and the item shows in the hands.
 func set_arms(mode: String) -> void:
 	if _dead or tree == null or mode == _arms:
 		return
 	_arms = mode
+	var heal := str(mode) if HEAL_ARMS.has(mode) else ""
+	_show_props(heal)
+	_busy = heal != ""
 	if mode == "":
 		tree.set("parameters/blend/blend_amount", 0.0)
 	else:
@@ -246,11 +262,155 @@ func set_arms(mode: String) -> void:
 			a = "Pistol_Aim_Neutral"
 		elif mode == "reload":
 			a = "Pistol_Reload"
+		elif heal != "":
+			a = HEAL_ARMS[heal]
 		tree.set("parameters/arms/transition_request", a)
 		tree.set("parameters/blend/blend_amount", 1.0)
 
 
+func is_swimming() -> bool:
+	return _legs.begins_with("Swim")
+
+
+# ------------------------------------------------------------ drinking ----
+var _drink_k := 0.0
+var _ik_bones: PackedInt32Array = PackedInt32Array()
+
+
+## Two-bone IK on the left arm, applied over the animated pose: the hand (and
+## the can in it) goes up to the mouth, dipping a little between sips.
+func _drink_ik(k: float) -> void:
+	if _ik_bones.is_empty():
+		for b in ["upperarm_l", "lowerarm_l", "hand_l", "Head"]:
+			_ik_bones.append(skeleton.find_bone(b))
+		if _ik_bones.has(-1):
+			return
+	var ua := skeleton.get_bone_global_pose(_ik_bones[0])
+	var la := skeleton.get_bone_global_pose(_ik_bones[1])
+	var hd := skeleton.get_bone_global_pose(_ik_bones[2])
+	var head := skeleton.get_bone_global_pose(_ik_bones[3])
+	var sh := ua.origin
+	var l1 := sh.distance_to(la.origin)
+	var l2 := la.origin.distance_to(hd.origin)
+	var sip := 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.0035)
+	# Mouth: in front of and below the head bone (+Z is the model's front).
+	var mouth := head.origin + Vector3(0.05, -0.09 - sip * 0.04, 0.16 + sip * 0.03)
+	var target := hd.origin.lerp(mouth, k)
+	var to := target - sh
+	var d := clampf(to.length(), absf(l1 - l2) + 0.01, l1 + l2 - 0.005)
+	var n := to.normalized()
+	var pole := Vector3(0.5, -1.0, -0.2)
+	var bend := (pole - n * pole.dot(n)).normalized()
+	var a := acos(clampf((l1 * l1 + d * d - l2 * l2) / (2.0 * l1 * d), -1.0, 1.0))
+	var elbow := sh + n * cos(a) * l1 + bend * sin(a) * l1
+	var wrist := sh + n * d
+	var r1 := Quaternion(ua.basis.y.normalized(), (elbow - sh).normalized())
+	skeleton.set_bone_global_pose(_ik_bones[0], Transform3D(Basis(r1) * ua.basis, sh))
+	var r2 := Quaternion(la.basis.y.normalized(), (wrist - elbow).normalized())
+	skeleton.set_bone_global_pose(_ik_bones[1], Transform3D(Basis(r2) * la.basis, elbow))
+	# Tip the can back as it reaches the lips.
+	var tip := Basis(Vector3(0, 0, 1), -0.5 * k)
+	skeleton.set_bone_global_pose(_ik_bones[2], Transform3D(Basis(r2) * tip * hd.basis, wrist))
+
+
+# ------------------------------------------------------------ hand props ----
+func _bone_att(bone: String) -> BoneAttachment3D:
+	var a := BoneAttachment3D.new()
+	a.bone_name = bone
+	skeleton.add_child(a)
+	return a
+
+
+func _prop_mat(c: Color, rough := 0.6, metal := 0.0) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = c
+	m.roughness = rough
+	m.metallic = metal
+	return m
+
+
+func _prop(parent: Node3D, mesh: Mesh, mat: Material, pos: Vector3, rot := Vector3.ZERO) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.material_override = mat
+	mi.position = pos
+	mi.rotation = rot
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(mi)
+	return mi
+
+
+static func _pcyl(r: float, h: float, caps := true) -> CylinderMesh:
+	var c := CylinderMesh.new()
+	c.top_radius = r
+	c.bottom_radius = r
+	c.height = h
+	c.radial_segments = 12
+	c.rings = 1
+	c.cap_top = caps
+	c.cap_bottom = caps
+	return c
+
+
+## Hand bones run along +Y to the fingertips with the thumb toward +Z; the
+## palm faces -X on the right hand and +X on the left.
+func _build_props(kind: String) -> Array:
+	if hand_l == null:
+		hand_l = _bone_att("hand_l")
+	if hand_r == null:
+		hand_r = _bone_att("hand_r")
+	var out: Array = []
+	var white := _prop_mat(Color(0.95, 0.93, 0.87), 0.95)
+	match kind:
+		"bandage":
+			var r := Node3D.new()
+			hand_r.add_child(r)
+			_prop(r, _pcyl(0.035, 0.065), white, Vector3(-0.04, 0.085, 0.0), Vector3(PI * 0.5, 0, 0))
+			out.append(r)
+			var arm := _bone_att("lowerarm_l")
+			_prop(arm, _pcyl(0.052, 0.12, false), white, Vector3(0, 0.17, 0))
+			out.append(arm)
+		"med":
+			var k := Node3D.new()
+			hand_l.add_child(k)
+			var box := BoxMesh.new()
+			box.size = Vector3(0.075, 0.22, 0.16)
+			_prop(k, box, _prop_mat(Color(0.92, 0.91, 0.88), 0.45), Vector3(0.07, 0.1, 0.0))
+			var red := _prop_mat(Color(0.86, 0.1, 0.1), 0.5)
+			for sx in [-1.0, 1.0]:
+				var bar := BoxMesh.new()
+				bar.size = Vector3(0.004, 0.08, 0.026)
+				_prop(k, bar, red, Vector3(0.07 + sx * 0.039, 0.1, 0.0))
+				var bar2 := BoxMesh.new()
+				bar2.size = Vector3(0.004, 0.026, 0.08)
+				_prop(k, bar2, red, Vector3(0.07 + sx * 0.039, 0.1, 0.0))
+			out.append(k)
+			var sy := Node3D.new()
+			hand_r.add_child(sy)
+			_prop(sy, _pcyl(0.011, 0.11), _prop_mat(Color(0.75, 1.0, 0.6), 0.2), Vector3(-0.03, 0.08, 0.02), Vector3(PI * 0.5, 0, 0))
+			_prop(sy, _pcyl(0.003, 0.05), _prop_mat(Color(0.85, 0.85, 0.88), 0.2, 1.0), Vector3(-0.03, 0.08, -0.06), Vector3(PI * 0.5, 0, 0))
+			out.append(sy)
+		"energy":
+			var c := Node3D.new()
+			hand_l.add_child(c)
+			_prop(c, _pcyl(0.034, 0.12), _prop_mat(Color(0.07, 0.5, 0.27), 0.3, 0.5), Vector3(0.042, 0.08, 0.0), Vector3(PI * 0.5, 0, 0))
+			_prop(c, _pcyl(0.0345, 0.03, false), _prop_mat(Color(1.0, 0.8, 0.1), 0.35, 0.3), Vector3(0.042, 0.08, 0.0), Vector3(PI * 0.5, 0, 0))
+			out.append(c)
+	return out
+
+
+func _show_props(kind: String) -> void:
+	if kind != "" and not _props.has(kind):
+		_props[kind] = _build_props(kind)
+	for k in _props:
+		for n in _props[k]:
+			for c in (n as Node3D).get_children():
+				if c is MeshInstance3D:
+					(c as MeshInstance3D).visible = k == kind
+
+
 func die() -> void:
+	_show_props("")
 	_dead = true
 	if tree != null:
 		tree.active = false
@@ -312,6 +472,9 @@ func _process_body(delta: float) -> void:
 			tree.advance(_anim_acc)
 			_anim_acc = 0.0
 			_anim_frame = 0
+			_drink_k = move_toward(_drink_k, 1.0 if _arms == "energy" else 0.0, delta * float(_anim_every) * 2.5)
+			if _drink_k > 0.0 and not _dead:
+				_drink_ik(_drink_k)
 	# Far away: stop animating and stop drawing. You could not make out a
 	# soldier past ~260 m, and 50 animated rigs are not free.
 	_lod_t -= delta
@@ -327,7 +490,15 @@ func _process_body(delta: float) -> void:
 				gun_holder.visible = near
 				if tree != null:
 					tree.active = near
-	if not _armed or hand_r == null or _dead or not model.visible:
+	# Swim strokes lie the body flat: float it up to the waterline.
+	var lift := SWIM_LIFT if _legs == "Swim_Fwd" else 0.0
+	if absf(_swim_lift - lift) > 0.001:
+		_swim_lift = move_toward(_swim_lift, lift, delta * 2.5)
+		model.position.y = _swim_lift
+	var hide_gun := _busy or is_swimming()
+	if gun_holder.visible == hide_gun and model.visible:
+		gun_holder.visible = not hide_gun
+	if not _armed or hand_r == null or _dead or not model.visible or hide_gun:
 		return
 	# The gun follows the right hand and points where the soldier is aiming;
 	# the grip (behind the centre of the model) sits in the hand.
