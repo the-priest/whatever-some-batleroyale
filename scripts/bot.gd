@@ -1188,7 +1188,17 @@ func _shoot_logic(delta: float) -> void:
 		fire_timer = float(d["reload"])
 		_reload_t = float(d["reload"])
 		if game != null and game.player != null and game.player.global_position.distance_to(global_position) < 30.0:
-			game.play_sfx_at("reload_out", global_position, -6.0)
+			# Enemies are heard reloading: a cue to push.
+			var c := Weapons.cls(weapon_id)
+			if c == "shotgun":
+				for k in 3:
+					game._delayed_sfx("rl_shotgun_shell", global_position, -5.0, 0.4 + k * 0.5, 0.05)
+			else:
+				if c not in ["ar", "smg", "pistol", "lmg", "dmr", "sniper"]:
+					c = "ar"
+				game.play_sfx_at("rl_%s_out" % c, global_position, -4.0)
+				game._delayed_sfx("rl_%s_in" % c, global_position, -3.0, _reload_t * 0.55, 0.05)
+				game._delayed_sfx("rl_%s_rack" % c, global_position, -4.0, _reload_t * 0.75, 0.05)
 		return
 	fire_timer = 60.0 / float(d["rpm"]) * (1.15 if dist < 45.0 else 1.6)
 	# Fire in bursts with short pauses, like a person re-acquiring the target.

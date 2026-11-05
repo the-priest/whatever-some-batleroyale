@@ -67,7 +67,7 @@ const DEFS := {
 		"damage": 26.0, "rpm": 70.0, "mag": 5, "reserve": 40, "auto": false, "pellets": 9,
 		"spread": 4.4, "ads_spread": 3.4, "recoil": 3.1, "kick": 0.075, "pat": 0.0,
 		"range": 45.0, "velocity": 330.0, "reload": 3.2, "head": 1.50, "zoom": 1.1,
-		"ads_time": 0.2, "bloom": 0.0, "bloom_max": 0.0, "sound": "shotgun", "tier": 2, "len": 1.0, "mag_at": "none",
+		"ads_time": 0.2, "bloom": 0.0, "bloom_max": 0.0, "sound": "shotgun", "tier": 2, "len": 1.0, "mag_at": "none", "pump": true,
 	},
 	"autoshotgun": {
 		"name": "S-12 AUTO", "short": "S-12", "cls": "shotgun", "cal": "12ga", "model": "res://assets/guns/q/Shotgun_1.obj",

@@ -893,6 +893,12 @@ func surface_at(pos: Vector3) -> String:
 	var h := terrain.height_at(pos.x, pos.z)
 	if h < 3.6 or terrain.slope_at(pos.x, pos.z) > 0.35:
 		return "stone"
+	if world != null:
+		# Dirt roads crunch; paved squares and courtyards click.
+		if world._road_distance(pos.x, pos.z) < 2.2:
+			return "dirt"
+		if world.grass_blocked(pos.x, pos.z):
+			return "stone"
 	return "grass"
 
 

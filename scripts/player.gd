@@ -984,16 +984,27 @@ func _update_weapon(delta: float) -> void:
 		_mag_node.position = _mag_rest
 		_mag_node.rotation = Vector3.ZERO
 
-	# Bolt-action cycle after each sniper shot.
+	# Bolt-action cycle after each sniper shot; pump-action racks the slide.
 	if bolt_t >= 0.0:
-		bolt_t += delta / 0.95
-		var b := _bump(bolt_t, 0.2, 0.85)
-		pos += Vector3(0.015, -0.035, 0.035) * b
-		rot += Vector3(0.12, 0.0, 0.42) * b
-		if not _bolt_sound and bolt_t > 0.32:
-			_bolt_sound = true
-			_sfx("bolt", -1.0)
-			_eject_casing(false)
+		if bool(d.get("pump", false)):
+			bolt_t += delta / 0.62
+			var pb := _bump(bolt_t, 0.28, 0.6)
+			var pf := _bump(bolt_t, 0.6, 0.9)
+			pos += Vector3(0.0, -0.012, 0.055) * pb - Vector3(0.0, 0.0, 0.01) * pf
+			rot += Vector3(0.05, 0.0, 0.06) * (pb + pf)
+			if not _bolt_sound and bolt_t > 0.22:
+				_bolt_sound = true
+				_sfx("rl_shotgun_pump", -1.0)
+				_eject_casing(true)
+		else:
+			bolt_t += delta / 0.95
+			var b := _bump(bolt_t, 0.2, 0.85)
+			pos += Vector3(0.015, -0.035, 0.035) * b
+			rot += Vector3(0.12, 0.0, 0.42) * b
+			if not _bolt_sound and bolt_t > 0.32:
+				_bolt_sound = true
+				_sfx("bolt", -1.0)
+				_eject_casing(false)
 		if bolt_t >= 1.0:
 			bolt_t = -1.0
 
@@ -1035,11 +1046,11 @@ func _reload_pose(t: float, id: String) -> Array:
 			var a := 0.14 + span * float(i)
 			pos.y += _bump(t, a, a + span * 0.8) * 0.018
 			rot.x -= _bump(t, a, a + span * 0.8) * 0.05
-			_reload_event("shell%d" % i, t >= a + span * 0.5, "reload_in", -6.0)
+			_reload_event("shell%d" % i, t >= a + span * 0.5, "rl_shotgun_shell", -3.0)
 		var pump := _bump(t, 0.80, 0.94)
 		pos.z += pump * 0.05
 		rot.x += pump * 0.05
-		_reload_event("pump", t >= 0.84, "bolt", 0.0)
+		_reload_event("pump", t >= 0.84, "rl_shotgun_pump", 0.0)
 		return [pos, rot]
 
 	# Magazine weapons: tilt, mag out, new mag in, slap, charge.
@@ -1051,22 +1062,33 @@ func _reload_pose(t: float, id: String) -> Array:
 		var drop := out * (1.0 - back_in)
 		_mag_node.position = _mag_rest + Vector3(0.0, -0.42 * drop, 0.05 * drop)
 		_mag_node.rotation.x = 0.4 * drop
-	_reload_event("out", t >= 0.18, "reload_out", -2.0)
+	var rs := _reload_set(id)
+	_reload_event("out", t >= 0.16, rs + "out", -2.0)
+	_reload_event("grab", t >= 0.33, rs + "grab", -6.0)
 	# Hand reaching for the new mag: the gun dips a touch.
 	pos.y -= _bump(t, 0.30, 0.50) * 0.012
 	# Slap it home.
 	var slap := _bump(t, 0.56, 0.66)
 	pos.y += slap * 0.022
 	rot.x += slap * 0.06
-	_reload_event("in", t >= 0.58, "reload_in", 0.0)
+	_reload_event("in", t >= 0.53, rs + "in", 0.0)
+	_reload_event("slap", t >= 0.6, rs + "slap", -3.0)
 	# Charging handle when the gun ran dry.
 	if _reload_was_empty:
 		var rack := _bump(t, 0.68, 0.84)
 		pos.z += rack * 0.035
 		rot.z -= rack * 0.30
 		rot.y += rack * 0.12
-		_reload_event("rack", t >= 0.74, "bolt", -3.0)
+		_reload_event("rack", t >= 0.72, rs + "rack", -1.0)
 	return [pos, rot]
+
+
+## Reload sound set for a gun: "rl_<type>_" + out/grab/in/slap/rack.
+func _reload_set(id: String) -> String:
+	var c := Weapons.cls(id)
+	if c not in ["ar", "smg", "pistol", "lmg", "dmr", "sniper"]:
+		c = "ar"
+	return "rl_%s_" % c
 
 
 func _reload_event(key: String, cond: bool, sound: String, db: float) -> void:
@@ -1163,11 +1185,12 @@ func _try_fire() -> void:
 	flash_light.light_energy = 2.2
 	add_trauma(clampf(kick_amt * 2.2, 0.02, 0.3))
 	shots_fired += 1
-	if not bool(d.get("bolt", false)):
+	var pump := bool(d.get("pump", false))
+	if not bool(d.get("bolt", false)) and not pump:
 		_eject_casing(Weapons.cls(id) == "shotgun")
 	if game != null and game.has_method("spawn_smoke") and muzzle != null:
 		game.spawn_smoke(muzzle.global_position, 1.4 if Weapons.cls(id) in ["shotgun", "sniper"] else 0.8)
-	if bool(d.get("bolt", false)):
+	if bool(d.get("bolt", false)) or pump:
 		bolt_t = 0.0
 		_bolt_sound = false
 
