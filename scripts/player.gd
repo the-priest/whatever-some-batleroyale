@@ -128,7 +128,7 @@ var _boost_acc := 0.0
 var _throw_cd := 0.0
 var heal_timer := 0.0
 var healing := false
-var heal_view: HealView
+var hands: HandsView
 var heal_blend := 0.0
 var in_water := false
 
@@ -162,12 +162,12 @@ func _ready() -> void:
 	camera.add_child(view)
 	gun_holder = Node3D.new()
 	view.add_child(gun_holder)
-	heal_view = HealView.new()
-	view.add_child(heal_view)
-	heal_view.sound.connect(func(n: String, db: float) -> void:
+	hands = HandsView.new()
+	view.add_child(hands)
+	hands.sound.connect(func(n: String, db: float) -> void:
 		if game != null and game.get("sfx") != null:
 			game.sfx.play_2d(n, db, 0.05))
-	heal_view.jolt.connect(add_trauma)
+	hands.jolt.connect(add_trauma)
 
 	flash = MeshInstance3D.new()
 	var q := QuadMesh.new()
@@ -587,6 +587,7 @@ func _ground(delta: float) -> void:
 	if _ajp("use_energy"):
 		use_item("energy")
 	_throw_cd = maxf(0.0, _throw_cd - delta)
+	_tick_throw(delta)
 	if _ajp("grenade"):
 		throw_grenade()
 	_tick_boost(delta)
@@ -606,6 +607,8 @@ func _ground(delta: float) -> void:
 		_spray_n = 0
 	if has_gun() and not swimming:
 		want_fire = _ap("fire") if is_auto() else _ajp("fire")
+	if _throw_t >= 0.0:
+		want_fire = false
 	if want_fire and healing:
 		cancel_heal()
 	if want_fire and sprinting:
@@ -805,7 +808,7 @@ func _update_camera(delta: float) -> void:
 	var sx := (sin(t * 37.0) + sin(t * 23.0 + 1.3)) * 0.5 * shake_amt * 0.035
 	var sy := (sin(t * 31.0 + 0.7) + sin(t * 19.0)) * 0.5 * shake_amt * 0.035
 	var sz := sin(t * 27.0 + 2.1) * shake_amt * 0.03
-	camera.rotation.x = pitch + recoil_pitch + sx + _scope_sway.y + heal_view.cam_pitch
+	camera.rotation.x = pitch + recoil_pitch + sx + _scope_sway.y + hands.cam_pitch
 	camera.rotation.y = yaw + recoil_yaw + sy + _scope_sway.x
 	# Lean slightly into strafes.
 	var side_speed := (Basis(Vector3.UP, yaw).inverse() * velocity).x if mode == Mode.GROUND else 0.0
@@ -882,9 +885,39 @@ static func _bump(t: float, a: float, b: float) -> float:
 	return sin(clampf((t - a) / (b - a), 0.0, 1.0) * PI)
 
 
+## Which hand animation runs: vault > grenade > healing > swimming.
+var _swim_phase := 0.0
+
+
+func _update_hands(delta: float) -> void:
+	var act := ""
+	var t := 0.0
+	if _throw_t >= 0.0 and mode != Mode.GROUND:
+		_throw_t = -1.0
+	if not alive:
+		pass
+	elif not _mantle.is_empty():
+		act = "vault"
+		t = float(_mantle[2])
+	elif _throw_t >= 0.0:
+		act = "grenade"
+		t = _throw_t
+	elif healing:
+		act = heal_item
+		t = heal_progress()
+	elif swimming and mode == Mode.GROUND:
+		act = "swim"
+		var planar := Vector2(velocity.x, velocity.z).length()
+		var period := 2.6 if planar < 0.8 else (0.87 if planar > SWIM_SPEED + 0.3 else 1.26)
+		_swim_phase = fmod(_swim_phase + delta / period, 1.0)
+		t = _swim_phase
+	hands.update(act != "", act, t, delta)
+	var busy := act in ["vault", "grenade"] or healing
+	heal_blend = move_toward(heal_blend, 1.0 if busy else 0.0, delta / (0.12 if busy else 0.2))
+
+
 func _update_weapon(delta: float) -> void:
-	heal_view.update(healing and alive, heal_item, heal_progress(), delta)
-	heal_blend = move_toward(heal_blend, 1.0 if healing else 0.0, delta / 0.2)
+	_update_hands(delta)
 	if not has_gun() or mode != Mode.GROUND or not alive:
 		gun_holder.visible = false
 		if game != null and game.hud != null:
@@ -936,7 +969,7 @@ func _update_weapon(delta: float) -> void:
 	pos.y -= land_dip * 0.05
 	rot.x -= land_dip * 0.15
 
-	# Healing: the gun drops out of the way of the hands.
+	# Healing, throwing, vaulting: the gun drops out of the way of the hands.
 	var hb := heal_blend * heal_blend * (3.0 - 2.0 * heal_blend)
 	pos += Vector3(0.04, -0.3, 0.06) * hb
 	rot += Vector3(-0.9, 0.3, 0.35) * hb
@@ -1615,28 +1648,62 @@ var last_killer: Node = null
 
 
 # ---------------------------------------------------------------- grenades --
+## G: pull the pin and wind up; the grenade leaves the hand part-way
+## through the throw animation (_release_grenade).
+const THROW_TIME := 0.85
+const THROW_RELEASE := 0.6
+var _throw_t := -1.0
+var _thrown := false
+
+
 func throw_grenade() -> void:
 	if grenades <= 0:
 		notice.emit("NO GRENADES")
 		return
-	if _throw_cd > 0.0:
+	if _throw_cd > 0.0 or _throw_t >= 0.0 or swimming or not alive:
+		return
+	cancel_heal()
+	reloading = false
+	_throw_t = 0.0
+	_thrown = false
+	_throw_cd = THROW_TIME + 0.1
+
+
+func _tick_throw(delta: float) -> void:
+	if _throw_t < 0.0:
+		return
+	if swimming or not alive or mode != Mode.GROUND:
+		_throw_t = -1.0
+		return
+	_throw_t += delta / THROW_TIME
+	if not _thrown and _throw_t >= THROW_RELEASE:
+		_thrown = true
+		_release_grenade()
+	if _throw_t >= 1.0:
+		_throw_t = -1.0
+		equip_t = minf(equip_t, 0.3)
+
+
+func _release_grenade() -> void:
+	if grenades <= 0:
 		return
 	grenades -= 1
-	_throw_cd = 0.9
 	inventory_changed.emit()
 	var dir := -camera.global_basis.z
 	var g := Grenade.new()
 	g.game = game
 	g.thrower = self
 	game.add_child(g)
-	g.global_position = camera.global_position + dir * 0.6 + Vector3(0, -0.1, 0)
+	var hand := camera.global_transform * Vector3(0.06, 0.0, -0.55)
+	g.global_position = hand
 	g.linear_velocity = dir * 17.0 + Vector3(0, 3.5, 0) + velocity * 0.5
 	g.angular_velocity = Vector3(randf_range(-8, 8), randf_range(-8, 8), randf_range(-8, 8))
 	if game.has_method("net_grenade_thrown"):
 		game.net_grenade_thrown(g.global_position, g.linear_velocity)
-	kick_vel += Vector3(0.0, -0.6, 0.4)
-	equip_t = 0.35
-	_sfx("equip", -4.0)
+
+
+func is_throwing() -> bool:
+	return _throw_t >= 0.0
 
 
 func force_respawn() -> void:

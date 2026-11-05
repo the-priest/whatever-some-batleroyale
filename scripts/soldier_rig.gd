@@ -31,7 +31,7 @@ static func _camo_shader() -> Shader:
 
 const VEST_COLORS := [Color(0.55, 0.50, 0.38), Color(0.30, 0.34, 0.24), Color(0.10, 0.11, 0.12)]
 const LEG_ANIMS := ["Idle", "Walk", "Jog_Fwd", "Sprint", "Jump", "Crouch_Idle", "Crouch_Fwd", "Swim_Fwd", "Swim_Idle"]
-const ARM_ANIMS := ["Pistol_Idle", "Pistol_Aim_Neutral", "Pistol_Reload", "Idle_Talking", "Interact", "Idle_Torch"]
+const ARM_ANIMS := ["Pistol_Idle", "Pistol_Aim_Neutral", "Pistol_Reload", "Idle_Talking", "Interact", "Idle_Torch", "Punch_Cross"]
 ## Upper-body clip per healing item: hands busy in front of the chest for a
 ## bandage, reaching for the kit, can held up (then lifted to the mouth by
 ## _drink_ik, as no clip has a hand-to-mouth pose).
@@ -248,7 +248,7 @@ func set_legs(name: String, speed := 1.0) -> void:
 ## "reload", or a healing item ("bandage", "med", "energy"): the gun is put
 ## away and the item shows in the hands.
 func set_arms(mode: String) -> void:
-	if _dead or tree == null or mode == _arms:
+	if _dead or tree == null or mode == _arms or _throw_hold > 0.0:
 		return
 	_arms = mode
 	var heal := str(mode) if HEAL_ARMS.has(mode) else ""
@@ -266,6 +266,22 @@ func set_arms(mode: String) -> void:
 			a = HEAL_ARMS[heal]
 		tree.set("parameters/arms/transition_request", a)
 		tree.set("parameters/blend/blend_amount", 1.0)
+
+
+## Overarm throw (a grenade left this soldier's hand): a short swing of the
+## arms that the regular arm state cannot interrupt.
+var _throw_hold := 0.0
+
+
+func play_throw() -> void:
+	if _dead or tree == null:
+		return
+	_show_props("")
+	_busy = true
+	_arms = "throw"
+	_throw_hold = 0.55
+	tree.set("parameters/arms/transition_request", "Punch_Cross")
+	tree.set("parameters/blend/blend_amount", 1.0)
 
 
 func is_swimming() -> bool:
@@ -490,6 +506,11 @@ func _process_body(delta: float) -> void:
 				gun_holder.visible = near
 				if tree != null:
 					tree.active = near
+	if _throw_hold > 0.0:
+		_throw_hold -= delta
+		if _throw_hold <= 0.0:
+			_busy = false
+			_arms = "?"
 	# Swim strokes lie the body flat: float it up to the waterline.
 	var lift := SWIM_LIFT if _legs == "Swim_Fwd" else 0.0
 	if absf(_swim_lift - lift) > 0.001:

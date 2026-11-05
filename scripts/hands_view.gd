@@ -1,14 +1,17 @@
 extends Node3D
-class_name HealView
+class_name HandsView
 
-## First-person healing: two gloved hands and the item, animated in camera
-## space over the use time. The player passes the item and its normalised
-## progress every frame; sounds are timed to the motion and fire once per use.
+## First-person hands: two gloved hands and whatever they hold, animated in
+## camera space. The player passes the action and its normalised progress
+## every frame; sounds are timed to the motion and fire once per use.
 ##
 ##   bandage  tear a strip, wrap three turns round the forearm, press it flat
 ##   med      unzip the kit, take the syringe, cap off, inject into the thigh,
 ##            toss it, zip the kit shut
 ##   energy   crack the tab, tip it back in three gulps, crush the can
+##   grenade  pull the pin, wind up, throw (the spoon flies off)
+##   swim     breaststroke; t is the stroke phase and loops
+##   vault    both palms planted on the ledge, pushing up and over
 
 signal sound(name: String, db: float)
 signal jolt(amount: float)
@@ -57,6 +60,10 @@ var can_tab: Node3D
 var can_body: Node3D
 var can_hole: MeshInstance3D
 
+var grenade: Node3D
+var g_ring: Node3D
+var g_spoon: Node3D
+
 var _drops: Array[MeshInstance3D] = []
 var _debris: Dictionary = {}
 
@@ -68,6 +75,7 @@ func _ready() -> void:
 	_build_kit()
 	_build_syringe()
 	_build_can()
+	_build_grenade()
 	for i in 8:
 		var d := _mi(self, _sphere(0.004), _mat("drop", Color(0.75, 1.0, 0.5, 0.7), 0.1, 0.0, 0.6))
 		d.visible = false
@@ -315,6 +323,35 @@ func _build_can() -> void:
 	can_hole = _mi(can_body, _box(Vector3(0.013, 0.0012, 0.016)), _mat("can_hole", Color(0.04, 0.05, 0.04), 0.6), Vector3(0, 0.0632, -0.01))
 
 
+## Frag along its local Y, fuse up; ring and spoon on the sides.
+func _build_grenade() -> void:
+	grenade = _node(self)
+	var olive := _mat("gren_body", Color(0.27, 0.32, 0.2), 0.55, 0.15)
+	var steel := _mat("steel", Color(0.82, 0.83, 0.86), 0.18, 1.0)
+	var dark := _mat("gren_fuse", Color(0.2, 0.21, 0.2), 0.4, 0.7)
+	var body := _mi(grenade, _sphere(0.03), olive)
+	body.scale = Vector3(1.0, 1.2, 1.0)
+	# Cast segment grooves.
+	for i in 3:
+		var ring := TorusMesh.new()
+		ring.inner_radius = 0.026 - absf(float(i) - 1.0) * 0.006
+		ring.outer_radius = ring.inner_radius + 0.006
+		ring.rings = 16
+		ring.ring_segments = 6
+		_mi(grenade, ring, _mat("gren_groove", Color(0.2, 0.24, 0.15), 0.6), Vector3(0, (float(i) - 1.0) * 0.016, 0))
+	_mi(grenade, _cyl(0.011, 0.013, 0.02, 12), dark, Vector3(0, 0.041, 0))
+	g_spoon = _node(grenade, Vector3(0.014, 0.046, 0))
+	_mi(g_spoon, _box(Vector3(0.006, 0.055, 0.013)), dark, Vector3(0.012, -0.022, 0), Vector3(0, 0, -0.32))
+	g_ring = _node(grenade, Vector3(-0.016, 0.044, 0))
+	var tr := TorusMesh.new()
+	tr.inner_radius = 0.008
+	tr.outer_radius = 0.0115
+	tr.rings = 14
+	tr.ring_segments = 6
+	_mi(g_ring, tr, steel, Vector3(-0.012, 0, 0), Vector3(0, 0, PI * 0.5))
+	_mi(g_ring, _cyl(0.0015, 0.0015, 0.03, 6), steel, Vector3(0.006, 0, 0), Vector3(0, 0, PI * 0.5))
+
+
 # -------------------------------------------------------------------- frame --
 func reset() -> void:
 	_fired.clear()
@@ -336,6 +373,15 @@ func reset() -> void:
 	can.visible = true
 	can_tab.rotation = Vector3.ZERO
 	roll.visible = true
+	for n in [g_ring, g_spoon]:
+		var nd := n as Node3D
+		if nd.get_parent() != grenade:
+			nd.get_parent().remove_child(nd)
+			grenade.add_child(nd)
+		nd.visible = true
+	g_ring.transform = Transform3D(Basis.IDENTITY, Vector3(-0.016, 0.044, 0))
+	g_spoon.transform = Transform3D(Basis.IDENTITY, Vector3(0.014, 0.046, 0))
+	grenade.visible = true
 
 
 ## active: an item is in use right now; t: its progress 0..1.
@@ -345,7 +391,8 @@ func update(active: bool, p_item: String, t: float, delta: float) -> void:
 		reset()
 	if active:
 		_t = t
-	_show = move_toward(_show, 1.0 if active else 0.0, delta / (0.2 if active else 0.17))
+	var t_in: float = {"vault": 0.06, "grenade": 0.12, "swim": 0.3}.get(item, 0.2)
+	_show = move_toward(_show, 1.0 if active else 0.0, delta / (t_in if active else 0.17))
 	if _show <= 0.0:
 		visible = false
 		cam_pitch = lerpf(cam_pitch, 0.0, clampf(delta * 10.0, 0.0, 1.0))
@@ -362,6 +409,7 @@ func update(active: bool, p_item: String, t: float, delta: float) -> void:
 	kit.visible = item == "med"
 	syringe.visible = item == "med" and not _debris.has("syr_gone")
 	can.visible = item == "energy" and not _debris.has("can_gone")
+	grenade.visible = item == "grenade" and _t < 0.6
 	for w in wraps:
 		w.visible = w.visible and item == "bandage"
 	var pitch := 0.0
@@ -372,6 +420,12 @@ func update(active: bool, p_item: String, t: float, delta: float) -> void:
 			pitch = _med(_t)
 		"energy":
 			pitch = _energy(_t)
+		"grenade":
+			pitch = _grenade(_t)
+		"swim":
+			pitch = _swim(_t)
+		"vault":
+			pitch = _vault(_t)
 	cam_pitch = lerpf(cam_pitch, pitch * e, clampf(delta * 9.0, 0.0, 1.0))
 	_tick_debris(delta)
 
@@ -634,6 +688,106 @@ func _energy(t: float) -> float:
 	_curl(arm_l, lerpf(0.35, 0.95, _s(t, 0.13, 0.17)), 0.2)
 	arm_l.visible = lk > 0.01
 	return 0.17 * _s(t, 0.32, 0.44) * (1.0 - _s(t, 0.76, 0.86)) + 0.015 * (_bump(t, 0.41, 0.49) + _bump(t, 0.53, 0.61) + _bump(t, 0.65, 0.73))
+
+
+# ------------------------------------------------------------------ grenade --
+func _grenade(t: float) -> float:
+	var g0 := _xf(Vector3(0.12, -0.14, -0.34), Vector3(0.12, 0.35, -0.08))
+	var g1 := _xf(Vector3(0.2, -0.04, -0.19), Vector3(-0.55, 0.5, -0.35))
+	var g2 := _xf(Vector3(0.03, 0.02, -0.6), Vector3(0.7, 0.1, 0.1))
+	var gx := g0
+	if t >= 0.32:
+		gx = g0.interpolate_with(g1, _s(t, 0.32, 0.5))
+	if t >= 0.52:
+		gx = g1.interpolate_with(g2, _s(t, 0.52, 0.6))
+	grenade.transform = gx
+	_event("pin", t >= 0.19, "grenade_pin", -3.0)
+	_event("whoosh", t >= 0.5, "throw_whoosh", -5.0)
+	if _event("spoon", t >= 0.6, "casing_2", -12.0):
+		_throw("spoon", g_spoon, gx.basis * Vector3(0.7, 0.9, 0.3), Vector3(25, 6, 12))
+	# Left hand: index through the ring, pull it out sideways, drop away.
+	var on_pin := gx * Transform3D(Basis(Vector3(0, 0, 1), Vector3(0, 1, 0), Vector3(-1, 0, 0)), Vector3(-0.15, 0.06, -0.01))
+	var off_l := Transform3D(Basis.from_euler(Vector3(-0.6, -0.5, -0.3)), OFF_L)
+	var come := _s(t, 0.04, 0.15)
+	var lx := off_l.interpolate_with(on_pin, come)
+	var pull := _s(t, 0.18, 0.3)
+	lx.origin += Vector3(-0.09, -0.02, 0.03) * pull
+	lx = lx.interpolate_with(off_l, _s(t, 0.34, 0.5))
+	_place(arm_l, lx, Vector3(-0.34, -0.42, -0.2))
+	_curl(arm_l, lerpf(0.4, 1.1, _s(t, 0.14, 0.19)), 0.2)
+	arm_l.visible = t < 0.5
+	if t >= 0.19 and g_ring.get_parent() == grenade:
+		grenade.remove_child(g_ring)
+		add_child(g_ring)
+	if g_ring.get_parent() == self:
+		g_ring.transform = lx * Transform3D(Basis.IDENTITY, Vector3(0.012, -0.03, -0.125))
+		g_ring.visible = t < 0.48
+	# Right hand round the body, then the follow-through after release.
+	var rx := gx * _grip_cyl(0.03, false)
+	var follow := _xf(Vector3(-0.04, -0.3, -0.42), Vector3(0.9, -0.3, 0.5))
+	if t >= 0.6:
+		rx = (g2 * _grip_cyl(0.03, false)).interpolate_with(follow, _s(t, 0.6, 0.9))
+	var elbow := Vector3(0.32, -0.46, -0.16).lerp(Vector3(0.34, -0.2, 0.08), _s(t, 0.32, 0.5) * (1.0 - _s(t, 0.52, 0.62)))
+	_place(arm_r, rx, elbow)
+	_curl(arm_r, 1.0 if t < 0.6 else lerpf(0.5, 0.25, _s(t, 0.6, 0.8)))
+	return 0.03 * _s(t, 0.32, 0.5) * (1.0 - _s(t, 0.52, 0.62)) - 0.025 * _bump(t, 0.56, 0.85)
+
+
+# --------------------------------------------------------------------- swim --
+## Breaststroke key poses for the right hand (the left mirrors it):
+## together at the chest, reach forward, sweep out, pull back in.
+const STROKE := [
+	[Vector3(0.07, -0.2, -0.28), Vector3(0.0, 0.0, -1.0), 0.35],
+	[Vector3(0.06, -0.13, -0.56), Vector3(0.05, 0.05, -1.0), 0.0],
+	[Vector3(0.33, -0.16, -0.42), Vector3(0.65, 0.0, -0.75), -0.95],
+	[Vector3(0.17, -0.27, -0.26), Vector3(-0.45, 0.1, -0.85), -0.45],
+]
+
+
+func _swim(t: float) -> float:
+	var n := STROKE.size()
+	# Catmull-Rom round the loop so the stroke never snaps.
+	var f := t * float(n)
+	var i: int = int(floorf(f)) % n
+	var u: float = f - floorf(f)
+	for side in [-1.0, 1.0]:
+		var arm := arm_l if side < 0.0 else arm_r
+		var pts: Array = []
+		var dirs: Array = []
+		var rolls: Array = []
+		for k in [-1, 0, 1, 2]:
+			var kf: Array = STROKE[(i + k + n) % n]
+			var p: Vector3 = kf[0]
+			var d: Vector3 = kf[1]
+			pts.append(Vector3(p.x * side, p.y, p.z))
+			dirs.append(Vector3(d.x * side, d.y, d.z))
+			rolls.append(float(kf[2]) * side)
+		var pos := _catmull(pts[0], pts[1], pts[2], pts[3], u)
+		var dir := (dirs[1] as Vector3).lerp(dirs[2], smoothstep(0.0, 1.0, u)).normalized()
+		var roll := lerpf(float(rolls[1]), float(rolls[2]), smoothstep(0.0, 1.0, u))
+		var b := Basis.looking_at(dir, Vector3.UP) * Basis(Vector3(0, 0, 1), -roll)
+		_place(arm, Transform3D(b, pos), Vector3(side * 0.3, -0.52, -0.08))
+		_curl(arm, 0.18, 0.15)
+	return sin(t * TAU) * 0.012
+
+
+static func _catmull(p0: Vector3, p1: Vector3, p2: Vector3, p3: Vector3, u: float) -> Vector3:
+	var u2 := u * u
+	var u3 := u2 * u
+	return 0.5 * ((2.0 * p1) + (-p0 + p2) * u + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * u2 + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * u3)
+
+
+# -------------------------------------------------------------------- vault --
+func _vault(t: float) -> float:
+	var push := _s(t, 0.0, 0.7)
+	var away := _s(t, 0.7, 1.0)
+	for side in [-1.0, 1.0]:
+		var arm := arm_l if side < 0.0 else arm_r
+		var pos := Vector3(side * 0.17, lerpf(-0.17, -0.36, push) - away * 0.2, -0.42 + push * 0.08 + away * 0.1)
+		var b := Basis.looking_at(Vector3(-side * 0.25, -0.35, -1.0).normalized(), Vector3.UP) * Basis(Vector3(0, 0, 1), side * 0.15)
+		_place(arm, Transform3D(b, pos), Vector3(side * 0.32, -0.5, -0.12))
+		_curl(arm, 0.08, 0.4)
+	return -0.05 * _bump(t, 0.0, 0.8)
 
 
 # ------------------------------------------------------------------- debris --

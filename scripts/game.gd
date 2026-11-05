@@ -2569,18 +2569,37 @@ func _run_shot() -> void:
 			p.energy = 2
 			p.hp = 40.0
 			p.boost = 0.0
-			p.use_item(it)
+			p.grenades = 2
 			var at := 0.5
 			for b in args:
 				if b.begins_with("--at_t="):
 					at = float(b.substr(7))
+			# Hand actions other than healing are frozen by setting their clocks.
+			var set_t := func(x: float) -> void:
+				match it:
+					"grenade":
+						p._throw_t = x
+						p._thrown = x >= Player.THROW_RELEASE
+					"vault":
+						p._mantle = [p.global_position, p.global_position, x, 99.0]
+					"swim":
+						p._swim_phase = x
+						p.swimming = true
+						p.equip_t = 0.0
+					_:
+						p.heal_timer = p.heal_dur * (1.0 - x)
+			if it == "grenade":
+				p.throw_grenade()
+			elif it != "vault" and it != "swim":
+				p.use_item(it)
 			var steps := 6
 			for i in steps + 1:
-				p.heal_timer = p.heal_dur * (1.0 - at * float(i) / float(steps))
+				set_t.call(at * float(i) / float(steps))
 				await get_tree().process_frame
 			p.set_physics_process(false)
+			p.hands._show = 1.0
 			for i in 4:
-				p.heal_timer = p.heal_dur * (1.0 - at)
+				set_t.call(at)
 				p._update_weapon(1.0 / 60.0)
 				p._update_camera(1.0 / 60.0)
 				await get_tree().process_frame
@@ -2933,7 +2952,10 @@ func _run_sim() -> void:
 	player.global_position = spot + Vector3(0, 1.0, 0)
 	var g_before := player.grenades
 	player.throw_grenade()
-	_check("grenade thrown", player.grenades == g_before - 1)
+	_check("grenade still in hand at the start of the throw", player.grenades == g_before and player.is_throwing())
+	for i in 60:
+		await get_tree().physics_frame
+	_check("grenade thrown", player.grenades == g_before - 1 and not player.is_throwing())
 	for i in 240:
 		await get_tree().physics_frame
 	# Full match fast-forward.
@@ -3542,6 +3564,11 @@ func net_remote_grenade(key: String, from: Vector3, vel: Vector3) -> void:
 	var g := Grenade.new()
 	g.game = self
 	g.thrower = node_for_key(key)
+	var who = g.thrower
+	if who is Bot and is_instance_valid(who) and (who as Bot).body != null:
+		(who as Bot).body.play_throw()
+		if player != null and player.global_position.distance_to(from) < 30.0:
+			play_sfx_at("throw_whoosh", from, -4.0)
 	g.visual = true
 	add_child(g)
 	g.global_position = from

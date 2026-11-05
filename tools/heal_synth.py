@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Healing item sounds for Block Royale, synthesized from filtered noise.
+"""Healing item and hand-action sounds for Block Royale, synthesized from
+filtered noise.
 
   bandage_wrap.wav   cloth bandage pulled and wrapped (one pass)
   kit_zip_open.wav   medkit zipper opening
@@ -11,6 +12,8 @@
   drink_ahh.wav      satisfied breath out
   can_crush.wav      empty can crumpled in the fist
   bandage_tear.wav   strip torn off the roll
+  grenade_pin.wav    pin drawn out of a grenade, ring clink
+  throw_whoosh.wav   arm swinging through a throw
 
 Run: python3 tools/heal_synth.py
 """
@@ -148,6 +151,38 @@ def tear(seed):
     return rasp * 0.5 + snaps * 0.7
 
 
+def pin(seed):
+    rng = np.random.default_rng(seed)
+    n = int(0.4 * SR)
+    t = np.arange(n) / SR
+    # Steel pin scraping out of the fuse, then the ring clinks.
+    s0 = int(0.02 * SR)
+    ln = int(0.09 * SR)
+    scrape = np.zeros(n)
+    scrape[s0:s0 + ln] = bp(rng.normal(0, 1, ln), 3000, 11000) * np.sin(np.linspace(0, np.pi, ln)) * 0.5
+    ring = np.zeros(n)
+    c = int(0.12 * SR)
+    tt = t[: n - c]
+    for f in (2900, 4650, 7100):
+        ring[c:] += np.sin(2 * np.pi * f * tt + rng.uniform(0, 6)) * np.exp(-tt * rng.uniform(25, 45))
+    click = bp(rng.normal(0, 1, n), 1500, 9000) * env(n, 0.0003, 0.004)
+    return scrape + ring * 0.35 + click * 0.8
+
+
+def whoosh(seed):
+    rng = np.random.default_rng(seed)
+    n = int(0.35 * SR)
+    t = np.arange(n) / SR
+    # Air past a swinging arm: band-passed noise with a rising, falling sweep.
+    x = rng.normal(0, 1, n)
+    out = np.zeros(n)
+    k = 256
+    for i in range(0, n - k, k):
+        f = 300 + 1500 * np.sin(np.pi * min(1.0, i / n * 1.4)) ** 2
+        out[i:i + k] = bp(x[i:i + k + 0], f, f * 2.2)[:k]
+    return lp(out, 4000) * np.sin(np.pi * np.minimum(t / 0.3, 1.0)) ** 2
+
+
 def write(name, x, peak=0.7):
     x = x / (np.max(np.abs(x)) + 1e-9) * peak
     with wave.open(os.path.join(OUT, name + ".wav"), "wb") as w:
@@ -169,6 +204,8 @@ def main():
     write("drink_ahh", ahh(8), 0.45)
     write("can_crush", crush(9), 0.5)
     write("bandage_tear", tear(10), 0.5)
+    write("grenade_pin", pin(11), 0.5)
+    write("throw_whoosh", whoosh(12), 0.45)
     print("healing sounds written")
 
 
