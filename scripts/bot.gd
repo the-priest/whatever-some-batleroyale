@@ -243,6 +243,15 @@ func _move() -> void:
 
 
 func _physics_process(delta: float) -> void:
+	if Prof.on:
+		var t0 := Time.get_ticks_usec()
+		_physics_process_body(delta)
+		Prof.add("bots", Time.get_ticks_usec() - t0)
+	else:
+		_physics_process_body(delta)
+
+
+func _physics_process_body(delta: float) -> void:
 	if puppet:
 		_puppet_tick(delta)
 		return
@@ -554,7 +563,7 @@ func _ground(delta: float) -> void:
 		if _probe_blocked and not (routing and bool(_route[0][1])):
 			dir = dir.rotated(Vector3.UP, deg_to_rad(70.0))
 		if game != null and game.terrain != null and bool(game.terrain.is_water(global_position.x, global_position.z)):
-			speed *= 0.6
+			speed *= 0.5
 		velocity.x = move_toward(velocity.x, dir.x * speed, 26.0 * delta)
 		velocity.z = move_toward(velocity.z, dir.z * speed, 26.0 * delta)
 		if not fighting or fight_moving:
@@ -766,9 +775,11 @@ func _ground_safety() -> void:
 	# body that ends up buried gets lifted back out instead of falling forever.
 	var gy := game_ground_y()
 	if game != null and game.terrain != null and bool(game.terrain.is_water(global_position.x, global_position.z)):
-		var surface: float = Terrain.WATER_LEVEL + 0.15
-		if global_position.y < surface:
-			global_position.y = surface
+		# Deep water: float chest-deep like a swimmer (sea, river or lake).
+		var ws: float = game.terrain.water_surface_at(global_position.x, global_position.z)
+		var swim_y: float = ws - 1.38
+		if ws - gy > 1.43 and global_position.y < swim_y:
+			global_position.y = move_toward(global_position.y, swim_y, 0.08)
 			velocity.y = maxf(velocity.y, 0.0)
 	elif global_position.y < gy - 0.4:
 		global_position.y = gy + 1.4
@@ -994,14 +1005,15 @@ func _find_loot() -> LootPickup:
 	var best: LootPickup = null
 	var best_d := 130.0 if not armed else 28.0
 	var my_tier := int(Weapons.def(weapon_id).get("tier", 0)) if armed else 0
-	for l in game.loot_pool:
-		if not is_instance_valid(l) or l.taken:
+	# Nearby cells only, distance first (cheap), then the wish list.
+	for l in game.loot_near(global_position, best_d):
+		var d: float = l.global_position.distance_to(global_position)
+		if d >= best_d:
 			continue
 		if not _wants(l, my_tier):
 			continue
 		if _skip_loot.has(l.get_instance_id()):
 			continue
-		var d: float = l.global_position.distance_to(global_position)
 		if d < best_d:
 			best_d = d
 			best = l

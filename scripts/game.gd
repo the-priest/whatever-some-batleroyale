@@ -49,6 +49,30 @@ var MAX_BOTS := 49
 var lobby_ready := false
 var seed_value := 20261101
 var loot_pool: Array = []
+## Loot bucketed by 24 m cells so "what is near me" never scans the island.
+var loot_grid: Dictionary = {}
+const LOOT_CELL := 24.0
+
+
+func _loot_cell(p: Vector3) -> Vector2i:
+	return Vector2i(int(floor(p.x / LOOT_CELL)), int(floor(p.z / LOOT_CELL)))
+
+
+## Live (valid, not taken) loot within roughly `r` of `pos` (cell accuracy:
+## callers still check exact distance).
+func loot_near(pos: Vector3, r: float) -> Array:
+	var out: Array = []
+	var a := _loot_cell(pos - Vector3(r, 0, r))
+	var b := _loot_cell(pos + Vector3(r, 0, r))
+	for cz in range(a.y, b.y + 1):
+		for cx in range(a.x, b.x + 1):
+			var cell = loot_grid.get(Vector2i(cx, cz))
+			if cell == null:
+				continue
+			for l in cell:
+				if is_instance_valid(l) and not l.taken:
+					out.append(l)
+	return out
 var bots: Array = []
 var airdrops: Array = []
 var alive := 1
@@ -202,6 +226,8 @@ func _ready() -> void:
 		_run_shot()
 	elif OS.get_cmdline_user_args().has("--houses"):
 		_run_house_walk_test()
+	elif OS.get_cmdline_user_args().has("--swim"):
+		_run_swim_test()
 	elif OS.get_cmdline_user_args().has("--fantasy"):
 		_run_fantasy_test()
 	elif OS.get_cmdline_user_args().has("--raybench"):
@@ -448,6 +474,7 @@ func _start_match() -> void:
 
 	# Loot.
 	loot_pool.clear()
+	loot_grid.clear()
 	for p in world.loot_points:
 		var kind := str(p.get("kind", "weapon"))
 		var base := Vector3(p["pos"])
@@ -583,6 +610,10 @@ func _spawn_loot(kind: String, id: String, pos: Vector3, mag := -1, reserve := -
 	l.net_id = net_id
 	add_child(l)
 	loot_pool.append(l)
+	var lc := _loot_cell(pos)
+	if not loot_grid.has(lc):
+		loot_grid[lc] = []
+	loot_grid[lc].append(l)
 	loot_by_id[net_id] = l
 	# Loot that appears mid-match (drops, crates, airdrops) is announced.
 	if announce and net_on():
@@ -611,6 +642,7 @@ func _cleanup_match() -> void:
 		if is_instance_valid(l):
 			l.queue_free()
 	loot_pool.clear()
+	loot_grid.clear()
 	loot_by_id.clear()
 	_next_loot_id = 1
 	for id in humans:
@@ -730,7 +762,7 @@ func _route_fraction(p: Vector3) -> float:
 func surface_at(pos: Vector3) -> String:
 	if terrain == null:
 		return "grass"
-	if terrain.is_water(pos.x, pos.z) and pos.y < Terrain.WATER_LEVEL + 0.8:
+	if terrain.is_water(pos.x, pos.z) and pos.y < terrain.water_surface_at(pos.x, pos.z) + 0.3:
 		return "water"
 	var q := PhysicsRayQueryParameters3D.create(pos + Vector3.UP * 0.4, pos + Vector3.DOWN * 1.2, 1)
 	var hit := get_world_3d().direct_space_state.intersect_ray(q)
@@ -759,6 +791,15 @@ func ground_at(pos: Vector3) -> Vector3:
 
 # ------------------------------------------------------------------- update --
 func _process(delta: float) -> void:
+	if Prof.on:
+		var t0 := Time.get_ticks_usec()
+		_process_body(delta)
+		Prof.add("game", Time.get_ticks_usec() - t0)
+	else:
+		_process_body(delta)
+
+
+func _process_body(delta: float) -> void:
 	match phase:
 		"menu":
 			menu_t += delta
@@ -778,7 +819,9 @@ func _process(delta: float) -> void:
 			_update_end_cam(delta)
 			_update_world_sim(delta)
 	if phase in ["plane", "playing", "end"]:
+		_pt = Time.get_ticks_usec()
 		_update_social(delta)
+		Prof.add("g_social", Time.get_ticks_usec() - _pt)
 	var want_match: bool = phase in ["plane", "playing"]
 	if music != null and music.in_match != want_match:
 		music.set_in_match(want_match)
@@ -803,7 +846,7 @@ func _auto_pickup(delta: float) -> void:
 	var cals := {}
 	for id in player.loadout:
 		cals[Weapons.caliber(id)] = true
-	for l in loot_pool.duplicate():
+	for l in loot_near(pp, 2.0):
 		if not is_instance_valid(l) or l.taken:
 			continue
 		var d: Vector3 = l.position - pp
@@ -828,6 +871,118 @@ func _auto_pickup(delta: float) -> void:
 		if l.pickup(player):
 			sfx.play_at("ammo_pickup" if kind == "ammo" else "pickup", l.global_position, -6.0)
 			loot_pool.erase(l)
+
+
+# ------------------------------------------------------------------ water --
+
+var _ripple_mat: StandardMaterial3D = null
+
+
+## A splash where someone hits the water: sound, spray and a ring.
+func water_splash(pos: Vector3, big: bool) -> void:
+	if sfx != null:
+		sfx.play_at("splash_big" if big else "splash_small", pos, 2.0 if big else -4.0)
+	var p := CPUParticles3D.new()
+	p.one_shot = true
+	p.emitting = true
+	p.amount = 46 if big else 18
+	p.lifetime = 1.0 if big else 0.7
+	p.explosiveness = 0.92
+	p.direction = Vector3.UP
+	p.spread = 32.0
+	p.initial_velocity_min = 2.5 if big else 1.4
+	p.initial_velocity_max = 6.0 if big else 3.0
+	p.gravity = Vector3(0, -12.0, 0)
+	p.scale_amount_min = 0.06
+	p.scale_amount_max = 0.16
+	var qm := QuadMesh.new()
+	qm.size = Vector2(1, 1)
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.albedo_color = Color(0.9, 0.97, 1.0, 0.8)
+	m.albedo_texture = Weapons.flash_texture()
+	qm.material = m
+	p.mesh = qm
+	p.position = pos + Vector3(0, 0.05, 0)
+	add_child(p)
+	get_tree().create_timer(1.6).timeout.connect(p.queue_free)
+	water_ripple(pos + Vector3(0, 0.02, 0), 1.8 if big else 1.1)
+
+
+## An expanding ring on the surface (swim strokes, wading, splashes).
+func water_ripple(pos: Vector3, size: float) -> void:
+	var mi := MeshInstance3D.new()
+	var tm := TorusMesh.new()
+	tm.inner_radius = 0.9
+	tm.outer_radius = 1.0
+	tm.rings = 24
+	tm.ring_segments = 4
+	mi.mesh = tm
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.albedo_color = Color(0.85, 0.95, 1.0, 0.45)
+	mi.material_override = m
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.position = pos
+	mi.scale = Vector3(0.3, 0.02, 0.3) * size
+	add_child(mi)
+	var tw := mi.create_tween().set_parallel(true).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+	tw.tween_property(mi, "scale", Vector3(2.2, 0.02, 2.2) * size, 1.6)
+	tw.tween_property(m, "albedo_color:a", 0.0, 1.6)
+	tw.chain().tween_callback(mi.queue_free)
+
+
+var _underwater := false
+var _uw_saved: Array = []
+var _uw_loop: AudioStreamPlayer = null
+
+
+## Under the surface: thick blue-green fog, muffled sound, bubbling rumble.
+func set_underwater(on: bool) -> void:
+	if on == _underwater or world == null or world.environment == null:
+		return
+	_underwater = on
+	var env: Environment = world.environment
+	if on:
+		_uw_saved = [env.fog_enabled, env.fog_density, env.fog_light_color, env.fog_sky_affect]
+		env.fog_enabled = true
+		env.fog_density = 0.09
+		env.fog_light_color = Color(0.05, 0.28, 0.33)
+		env.fog_sky_affect = 1.0
+	elif not _uw_saved.is_empty():
+		env.fog_enabled = _uw_saved[0]
+		env.fog_density = _uw_saved[1]
+		env.fog_light_color = _uw_saved[2]
+		env.fog_sky_affect = _uw_saved[3]
+	var bus := AudioServer.get_bus_index("Master")
+	var fx := -1
+	for i in AudioServer.get_bus_effect_count(bus):
+		if AudioServer.get_bus_effect(bus, i) is AudioEffectLowPassFilter:
+			fx = i
+	if fx < 0 and on:
+		var lpf := AudioEffectLowPassFilter.new()
+		lpf.cutoff_hz = 650.0
+		AudioServer.add_bus_effect(bus, lpf)
+		fx = AudioServer.get_bus_effect_count(bus) - 1
+	if fx >= 0:
+		AudioServer.set_bus_effect_enabled(bus, fx, on)
+	if _uw_loop == null and sfx != null:
+		_uw_loop = AudioStreamPlayer.new()
+		var st = sfx.stream("underwater_loop")
+		if st is AudioStreamWAV:
+			(st as AudioStreamWAV).loop_mode = AudioStreamWAV.LOOP_FORWARD
+			(st as AudioStreamWAV).loop_end = (st as AudioStreamWAV).data.size() / 2
+		_uw_loop.stream = st
+		_uw_loop.volume_db = -6.0
+		add_child(_uw_loop)
+	if _uw_loop != null:
+		if on:
+			_uw_loop.play()
+		else:
+			_uw_loop.stop()
 
 
 ## Heartbeat when hurt, storm rumble when outside the zone.
@@ -904,16 +1059,29 @@ func _update_airborne_bots() -> void:
 			b.jump_from_plane()
 
 
+var _pt := 0
+
+
 func _update_play(delta: float) -> void:
 	match_time += delta
 	survive_time += delta
+	_pt = Time.get_ticks_usec()
 	_update_wind(delta)
+	Prof.add("g_update_wind", Time.get_ticks_usec() - _pt)
+	_pt = Time.get_ticks_usec()
 	_update_ambience(delta)
+	Prof.add("g_update_ambience", Time.get_ticks_usec() - _pt)
+	_pt = Time.get_ticks_usec()
 	_auto_pickup(delta)
+	Prof.add("g_auto_pickup", Time.get_ticks_usec() - _pt)
 	if player == null or not is_instance_valid(player):
 		return
+	_pt = Time.get_ticks_usec()
 	_update_airborne_bots()
+	Prof.add("g_update_airborne_bots", Time.get_ticks_usec() - _pt)
+	_pt = Time.get_ticks_usec()
 	_update_driving(delta)
+	Prof.add("g_update_driving", Time.get_ticks_usec() - _pt)
 	if zone != null and not zone.is_processing() and (player.landed or match_time > 50.0) and not net_is_client():
 		zone.set_process(true)
 	hud.set_crosshair_visible(player.mode == Player.Mode.GROUND and player.has_gun() and player.aim_blend < 0.6)
@@ -924,14 +1092,26 @@ func _update_play(delta: float) -> void:
 			sfx.play_ui("zone_warn", -8.0)
 		elif not zone.warning:
 			zone_was_warning = false
-		_hud_zone()
+		_pt = Time.get_ticks_usec()
+	_hud_zone()
+	Prof.add("g_hud_zone", Time.get_ticks_usec() - _pt)
 	hud.set_storm(zone != null and player.alive and zone.is_outside(player.global_position) and (player.mode == Player.Mode.GROUND or player.mode == Player.Mode.VEHICLE))
 
+	_pt = Time.get_ticks_usec()
 	_hud_player()
+	Prof.add("g_hud_player", Time.get_ticks_usec() - _pt)
+	_pt = Time.get_ticks_usec()
 	_update_prompt()
+	Prof.add("g_update_prompt", Time.get_ticks_usec() - _pt)
+	_pt = Time.get_ticks_usec()
 	_update_minimap()
+	Prof.add("g_update_minimap", Time.get_ticks_usec() - _pt)
+	_pt = Time.get_ticks_usec()
 	_update_progress()
+	Prof.add("g_update_progress", Time.get_ticks_usec() - _pt)
+	_pt = Time.get_ticks_usec()
 	hud.set_crosshair_spread(_crosshair_spread())
+	Prof.add("g_xhair", Time.get_ticks_usec() - _pt)
 
 	if alive <= 1 and player.alive and phase == "playing" and not net_on():
 		_win()
@@ -1015,9 +1195,7 @@ func _nearest_loot(pos: Vector3, max_d: float) -> LootPickup:
 	var best_score := 1e9
 	var fwd := -player.camera.global_basis.z
 	var max_d2 := max_d * max_d
-	for l in loot_pool:
-		if not is_instance_valid(l) or l.taken:
-			continue
+	for l in loot_near(pos, max_d):
 		var to: Vector3 = l.position - pos
 		if to.x * to.x + to.z * to.z > max_d2:
 			continue
@@ -1066,9 +1244,7 @@ func _update_prompt() -> void:
 		# Only touch items near you: name tag on the one you are about to take,
 		# a faint ground ring on the rest within reach.
 		var near_now: Array = []
-		for l in loot_pool:
-			if not is_instance_valid(l) or l.taken:
-				continue
+		for l in loot_near(pp, 14.0):
 			var dx: float = l.position.x - pp.x
 			var dz: float = l.position.z - pp.z
 			if dx * dx + dz * dz < 196.0:
@@ -1860,7 +2036,29 @@ func _sweep(spec: String) -> void:
 		var off := Vector2(r * 0.55, r * 0.35)
 		var gy: float = terrain.height_at(c.x + off.x, c.y + off.y)
 		shots.append(["%s_%s" % [v.type, String(v.name).replace(" ", "_").replace("'", "")], Vector3(c.x + off.x, gy + 2.0, c.y + off.y), Vector3(c.x, float(v.pad) + 2.0, c.y)])
-	for nm in ["castle", "henge", "lighthouse", "temple", "oak", "bridge", "falls", "spire", "crystals", "crystals2", "dragon", "grove"]:
+	var ri := 0
+	for pp in world.villages.poi_pads:
+		if String(pp.type) != "ruin" and String(pp.type) != "tower":
+			continue
+		ri += 1
+		if ri % 3 != 0:
+			continue
+		var pc: Vector2 = pp.center
+		var off2 := Vector2(14.0, 9.0)
+		var gy2: float = terrain.height_at(pc.x + off2.x, pc.y + off2.y)
+		shots.append(["%s_%d" % [pp.type, ri], Vector3(pc.x + off2.x, gy2 + 2.2, pc.y + off2.y), Vector3(pc.x, terrain.height_at(pc.x, pc.y) + 2.0, pc.y)])
+	for k in 6:
+		# Along the shore, looking along the beach.
+		var a := TAU * float(k) / 6.0 + 0.3
+		var p := Vector2(cos(a), sin(a)) * 900.0
+		for step in 60:
+			if terrain.height_at(p.x, p.y) > Terrain.WATER_LEVEL + 1.0:
+				break
+			p *= 0.985
+		var gy3: float = terrain.height_at(p.x, p.y)
+		var tang := Vector2(-sin(a), cos(a))
+		shots.append(["coast_%d" % k, Vector3(p.x, gy3 + 2.0, p.y), Vector3(p.x + tang.x * 20.0, gy3, p.y + tang.y * 20.0)])
+	for nm in ["castle", "castlein", "field", "henge", "lighthouse", "temple", "oak", "bridge", "falls", "spire", "crystals", "crystals2", "dragon", "grove"]:
 		var pose := _landmark_pose(nm)
 		shots.append(["lm_" + nm, pose[0], pose[1]])
 	var start := int(parts[1]) if parts.size() > 1 else 0
@@ -1876,8 +2074,11 @@ func _sweep(spec: String) -> void:
 		for i in 8:
 			await get_tree().process_frame
 		await RenderingServer.frame_post_draw
-		get_viewport().get_texture().get_image().save_png("%s/%02d_%s.png" % [dir, k, e[0]])
-		print("[sweep] %02d %s at %s" % [k, e[0], str((e[1] as Vector3).round())])
+		if OS.get_environment("SWEEP_NOPNG") == "":
+			get_viewport().get_texture().get_image().save_png("%s/%02d_%s.png" % [dir, k, e[0]])
+		print("[sweep] %02d %s at %s  objects=%d draws=%d prims=%dk" % [k, e[0], str((e[1] as Vector3).round()),
+			int(Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME)), int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)),
+			int(Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)) / 1000])
 
 
 func _landmark_pose(name: String) -> Array:
@@ -1988,7 +2189,7 @@ func _run_shot() -> void:
 			print("[shot] frame ", i, " ", Time.get_ticks_msec() - tf, " ms")
 		await RenderingServer.frame_post_draw
 		get_viewport().get_texture().get_image().save_png(out)
-		print("[shot] saved ", out)
+		print("[shot] saved ", out, " objects=%d draws=%d prims=%dk" % [int(Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME)), int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)), int(Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)) / 1000])
 		get_tree().quit()
 		return
 	if OS.get_cmdline_user_args().has("--menu"):
@@ -2021,7 +2222,7 @@ func _run_shot() -> void:
 			await get_tree().process_frame
 		await RenderingServer.frame_post_draw
 		get_viewport().get_texture().get_image().save_png(out)
-		print("[shot] saved ", out)
+		print("[shot] saved ", out, " objects=%d draws=%d prims=%dk" % [int(Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME)), int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)), int(Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)) / 1000])
 		get_tree().quit()
 		return
 	print("[shot] starting match")
@@ -2036,7 +2237,7 @@ func _run_shot() -> void:
 			await get_tree().process_frame
 		await RenderingServer.frame_post_draw
 		get_viewport().get_texture().get_image().save_png(out)
-		print("[shot] saved ", out)
+		print("[shot] saved ", out, " objects=%d draws=%d prims=%dk" % [int(Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME)), int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)), int(Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)) / 1000])
 		get_tree().quit()
 		return
 	await get_tree().process_frame
@@ -2130,9 +2331,11 @@ func _run_shot() -> void:
 	var h: float = float(terrain.height_at(spot.x, spot.z))
 	if spot_y != INF:
 		h = spot_y - 2.4
-	if h < Terrain.WATER_LEVEL + 0.5:
+	if h < Terrain.WATER_LEVEL + 0.5 and not OS.get_cmdline_user_args().has("--water"):
 		spot = _random_ground_point(200.0)
 		h = spot.y
+	elif OS.get_cmdline_user_args().has("--water"):
+		h = maxf(h, Terrain.WATER_LEVEL)
 	p.global_position = Vector3(spot.x, h + 2.4, spot.z)
 	p.velocity = Vector3.ZERO
 	p.yaw = ang
@@ -2228,6 +2431,10 @@ func _run_shot() -> void:
 				jeep.steer_in = 0.25
 				await get_tree().physics_frame
 			_update_driving(0.5)
+	if args.has("--dive"):
+		p.test_hold["crouch"] = true
+		for i in 150:
+			await get_tree().physics_frame
 	if args.has("--camper"):
 		# A cautious bot on the upper floor of the framed house takes a window.
 		var hh: Dictionary = world.villages.house_at(Vector2(p.global_position.x, p.global_position.z) + Vector2(-sin(p.yaw), -cos(p.yaw)) * 9.0, 1.0)
@@ -2326,7 +2533,7 @@ func _run_shot() -> void:
 		print("[shot] no image")
 	else:
 		img.save_png(out)
-		print("[shot] saved ", out, " size=", img.get_size())
+		print("[shot] saved ", out, " size=", img.get_size(), " objects=%d draws=%d prims=%dk" % [int(Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME)), int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)), int(Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)) / 1000])
 		# Report what the frame actually contains so a blind run is still useful.
 		var dark := 0
 		var bright := 0
@@ -2741,20 +2948,71 @@ func _run_perf() -> void:
 		for b in bots:
 			if is_instance_valid(b):
 				b.set_physics_process(false)
+	if OS.get_environment("PERF_GRASS") != "" and world.grass != null:
+		world.grass.set_radius(38.0)
+	var exp_mode := OS.get_environment("PERF_EXP")
+	if exp_mode == "noanim":
+		for n in find_children("*", "AnimationMixer", true, false):
+			(n as AnimationMixer).active = false
+	elif exp_mode == "noaudio":
+		for n in find_children("*", "AudioStreamPlayer3D", true, false):
+			(n as AudioStreamPlayer3D).stop()
+			(n as AudioStreamPlayer3D).process_mode = Node.PROCESS_MODE_DISABLED
+	print("[perf] exp=", exp_mode, " anim mixers=", find_children("*", "AnimationMixer", true, false).size(), " audio3d=", find_children("*", "AudioStreamPlayer3D", true, false).size(), " lights=", find_children("*", "Light3D", true, false).size())
 	for window in 3:
+		Prof.reset()
+		Prof.on = true
 		var phys := 0.0
 		var proc := 0.0
 		var n := 0
 		var worst := 0.0
+		var last_us := Time.get_ticks_usec()
+		var snap: Dictionary = {}
+		var spikes := 0
+		var wall_sum := 0.0
+		var wall_max := 0.0
 		for i in 60 * 15:
 			await get_tree().physics_frame
+			var now_us := Time.get_ticks_usec()
+			var wall := float(now_us - last_us) / 1000.0
+			last_us = now_us
+			wall_sum += wall
+			wall_max = maxf(wall_max, wall)
+			if wall > 33.0:
+				spikes += 1
+				var diff: Array = []
+				for k in Prof.acc:
+					var dv2 := float(int(Prof.acc[k]) - int(snap.get(k, 0))) / 1000.0
+					if dv2 > 1.0:
+						diff.append("%s %.1f" % [k, dv2])
+				if spikes <= 6:
+					print("[perf]   SPIKE frame %d: %.1f ms wall | %s" % [i, wall, ", ".join(diff)])
+			snap = Prof.acc.duplicate()
+			if OS.get_environment("PERF_SEC") != "" and i % 60 == 59:
+				var parts2: Array = []
+				for k in Prof.acc:
+					if float(Prof.acc[k]) > 2000.0:
+						parts2.append("%s %.1f" % [k, float(Prof.acc[k]) / 1000.0])
+				print("[perf]     sec %d phys %.1f ms | %s" % [i / 60, Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0, ", ".join(parts2)])
 			var p := Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0
+			if OS.get_environment("PERF_SEC") != "" and i % 30 == 0:
+				var awake := 0
+				for v in vehicles:
+					if is_instance_valid(v) and not v.freeze:
+						awake += 1
+				print("[perf]       f%d phys %.1f active=%d pairs=%d islands=%d awake_jeeps=%d" % [i, p, PhysicsServer3D.get_process_info(PhysicsServer3D.INFO_ACTIVE_OBJECTS), PhysicsServer3D.get_process_info(PhysicsServer3D.INFO_COLLISION_PAIRS), PhysicsServer3D.get_process_info(PhysicsServer3D.INFO_ISLAND_COUNT), awake])
 			phys += p
 			proc += Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0
 			worst = maxf(worst, p)
 			n += 1
 		print("[perf] window %d: physics avg %.2f ms (worst %.2f)  process avg %.2f ms  alive=%d bullets=%d nodes=%d" % [
 			window, phys / n, worst, proc / n, alive, ballistics.bullets.size(), int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT))])
+		print("[perf]   wall frame avg %.2f ms, max %.1f ms, frames over 33 ms: %d" % [wall_sum / float(n), wall_max, spikes])
+		var parts: Array = []
+		for k in Prof.acc:
+			parts.append("%s %.2f" % [k, float(Prof.acc[k]) / 1000.0 / float(n)])
+		print("[perf]   per frame ms: ", ", ".join(parts))
+		Prof.on = false
 	get_tree().quit()
 
 
@@ -2888,6 +3146,14 @@ func net_is_client() -> bool:
 
 
 ## Stable network name for anything that can shoot or be shot.
+## Where a remote player is (host side), or INF if unknown.
+func net_peer_position(pid: int) -> Vector3:
+	var h = humans.get(pid)
+	if h != null and is_instance_valid(h):
+		return (h as Node3D).global_position
+	return Vector3.INF
+
+
 func node_key(n: Object) -> String:
 	if n == null or not is_instance_valid(n):
 		return ""
@@ -2943,10 +3209,21 @@ func _make_human(peer_id: int, pname: String) -> Bot:
 
 ## Host: package the match that _start_match just set up.
 func _net_send_setup() -> void:
-	var loot: Array = []
+	# Loot packed tight: a table of kind/item names and 7 floats per item,
+	# zstd-compressed (a few dozen KB instead of a quarter megabyte).
+	var names_t: Array = []
+	var name_i: Dictionary = {}
+	var fl := PackedFloat32Array()
 	for l in loot_pool:
-		if is_instance_valid(l):
-			loot.append([l.net_id, l.kind, l.item_id, l.position, l.mag_override, l.reserve_override])
+		if not is_instance_valid(l):
+			continue
+		var nk := "%s|%s" % [l.kind, l.item_id]
+		if not name_i.has(nk):
+			name_i[nk] = names_t.size()
+			names_t.append(nk)
+		fl.append_array([float(l.net_id), float(name_i[nk]), l.position.x, l.position.y, l.position.z, float(l.mag_override), float(l.reserve_override)])
+	var raw := fl.to_byte_array()
+	var loot := [names_t, raw.size(), raw.compress(FileAccess.COMPRESSION_ZSTD)]
 	var bot_names: Array = []
 	for b in bots:
 		bot_names.append(b.bot_name)
@@ -2990,10 +3267,16 @@ func net_start_match(setup: Dictionary) -> void:
 	phase = "plane"
 	player.global_position = plane.seat_position()
 	loot_pool.clear()
+	loot_grid.clear()
 	loot_by_id.clear()
-	for e in setup["loot"]:
-		var l := _spawn_loot(str(e[1]), str(e[2]), e[3], int(e[4]), int(e[5]), int(e[0]), false)
-		l.position = e[3]
+	var lp: Array = setup["loot"]
+	var names_t: Array = lp[0]
+	var fl: PackedFloat32Array = (lp[2] as PackedByteArray).decompress(int(lp[1]), FileAccess.COMPRESSION_ZSTD).to_float32_array()
+	for o in range(0, fl.size() - 6, 7):
+		var nk: String = names_t[int(fl[o + 1])]
+		var pos := Vector3(fl[o + 2], fl[o + 3], fl[o + 4])
+		var l := _spawn_loot(nk.get_slice("|", 0), nk.get_slice("|", 1), pos, int(fl[o + 5]), int(fl[o + 6]), int(fl[o]), false)
+		l.position = pos
 	bots.clear()
 	var names: Array = setup["bots"]
 	for i in names.size():
@@ -3051,15 +3334,16 @@ func net_snapshot() -> Array:
 	return [bp, zp, misc]
 
 
-func net_apply_snapshot(bp: PackedFloat32Array, zp: PackedFloat32Array, misc: PackedFloat32Array) -> void:
+func net_apply_snapshot(bp: PackedFloat32Array, zp: PackedFloat32Array, misc: PackedFloat32Array, first := 0) -> void:
 	if not _net_setup_ok:
 		return
-	var n := mini(bots.size(), bp.size() / 8)
-	for i in n:
+	var n := mini(bots.size() - first, bp.size() / 8)
+	for j in n:
+		var i := first + j
 		var b = bots[i]
 		if b == null or not is_instance_valid(b):
 			continue
-		var o := i * 8
+		var o := j * 8
 		var flags := int(bp[o + 5])
 		if (flags & Bot.NF_ALIVE) == 0:
 			continue
@@ -3378,7 +3662,7 @@ func _run_net_test(as_host: bool) -> void:
 			c += 0.25
 		print("[net] countdown started the match after %.1fs phase=%s" % [c, phase])
 	else:
-		net.join("127.0.0.1")
+		net.join(OS.get_environment("NET_JOIN") if OS.get_environment("NET_JOIN") != "" else "127.0.0.1")
 		net.chat.connect(func(id, n, t2, sys): print("[net] client chat <%s> %s sys=%s" % [n, t2, sys]))
 		net.countdown.connect(func(sec): print("[net] client countdown ", sec))
 		net.marker.connect(func(id, pos): print("[net] client marker from ", id, " at ", pos.round()))
@@ -3418,7 +3702,7 @@ func _run_net_test(as_host: bool) -> void:
 			if is_instance_valid(h):
 				hs.append("%s@%s st=%d" % [h.bot_name, str(h.global_position.round()), h.state])
 		if i % 5 == 0:
-			print("[net] %s t=%d alive=%d landed=%d moving=%d loot=%d zone=%.0f hp=%.0f kills=%d humans=%s" % ["host" if as_host else "client", i, alive, landed, moving, loot_pool.size(), zone.radius if zone != null else -1.0, player.hp, player_kills, str(hs)])
+			print("[net] %s t=%d alive=%d landed=%d moving=%d loot=%d zone=%.0f hp=%.0f kills=%d ping=%d fps=%d humans=%s" % ["host" if as_host else "client", i, alive, landed, moving, loot_pool.size(), zone.radius if zone != null else -1.0, player.hp, player_kills, net.ping_of(net.my_id()) if not as_host else 0, Engine.get_frames_per_second(), str(hs)])
 		var near: Bot = null
 		var bd := 1e9
 		for b in bots:
@@ -4177,6 +4461,88 @@ func _run_stairs_test() -> void:
 
 ## Walk into every house through its door (and upstairs if it has one),
 ## steering through waypoints like a player would.
+## Swimming: float at the right depth, dive and come up, run out of air,
+## swim to the beach and walk out; the plateau lake floats you too.
+func _run_swim_test() -> void:
+	_start_match()
+	await get_tree().physics_frame
+	_land_player_now()
+	for bt in bots:
+		if is_instance_valid(bt):
+			bt.set_physics_process(false)
+	if zone != null:
+		zone.set_process(false)
+	player.spawn_protect = 9999.0
+	var ok := true
+	# Find deep sea a little way off a beach: walk out from the centre.
+	var spot := Vector3.INF
+	var shore := Vector3.INF
+	for k in 24:
+		var a := TAU * float(k) / 24.0
+		var d := 300.0
+		while d < 1200.0:
+			var x := cos(a) * d
+			var z := sin(a) * d
+			if terrain.height_at(x, z) < Terrain.WATER_LEVEL - 3.0:
+				spot = Vector3(x, Terrain.WATER_LEVEL + 2.0, z)
+				shore = Vector3(cos(a) * (d - 40.0), 0, sin(a) * (d - 40.0))
+				break
+			d += 4.0
+		if spot != Vector3.INF and terrain.slope_at(shore.x, shore.z) < 0.25:
+			break
+	player.global_position = spot
+	player.velocity = Vector3(0, -8.0, 0)
+	player.mode = Player.Mode.GROUND
+	for i in 120:
+		await get_tree().physics_frame
+	var surf := Terrain.WATER_LEVEL
+	var depth_ok := absf(player.global_position.y - (surf - Player.FLOAT_DEPTH)) < 0.25
+	print("[swim] sea: swimming=%s y=%.2f (want %.2f) cam above water=%s" % [player.swimming, player.global_position.y, surf - Player.FLOAT_DEPTH, player.camera.global_position.y > surf])
+	ok = ok and player.swimming and depth_ok
+	# Dive.
+	player.test_hold["crouch"] = true
+	for i in 240:
+		await get_tree().physics_frame
+	var dived := player.global_position.y < surf - 3.0
+	var air_used := player.air < 90.0
+	print("[swim] dive: y=%.2f air=%.0f underwater fx=%s" % [player.global_position.y, player.air, _underwater])
+	player.test_hold.clear()
+	for i in 240:
+		await get_tree().physics_frame
+	var back_up := absf(player.global_position.y - (surf - Player.FLOAT_DEPTH)) < 0.3
+	print("[swim] surfaced=%s air=%.0f underwater fx=%s" % [back_up, player.air, _underwater])
+	ok = ok and dived and air_used and back_up and not _underwater
+	# Swim to the beach and walk out.
+	var t := 0.0
+	var out := false
+	while t < 40.0:
+		var to := shore - player.global_position
+		to.y = 0.0
+		player.yaw = atan2(-to.x, -to.z)
+		player.test_input = Vector2(0, -1)
+		if player.swimming and player.is_on_wall():
+			player.test_jump = true
+		await get_tree().physics_frame
+		t += get_physics_process_delta_time()
+		if not player.swimming and not player.in_water and player.global_position.y > surf + 0.3:
+			out = true
+			break
+	player.test_input = Vector2.INF
+	print("[swim] walked out onto the beach=%s after %.0fs at %s" % [out, t, str(player.global_position.round())])
+	ok = ok and out
+	# Plateau lake.
+	var lc := Terrain.LAKE_C
+	player.global_position = Vector3(lc.x, terrain.lake_level + 3.0, lc.y)
+	player.velocity = Vector3.ZERO
+	for i in 150:
+		await get_tree().physics_frame
+	var lake_ok: bool = player.swimming and absf(player.global_position.y - (terrain.lake_level - Player.FLOAT_DEPTH)) < 0.3
+	print("[swim] lake: swimming=%s y=%.2f lake level %.2f (deep %.1f)" % [player.swimming, player.global_position.y, terrain.lake_level, terrain.lake_level - terrain.height_at(lc.x, lc.y)])
+	ok = ok and lake_ok
+	print("[swim] %s" % ("ALL GOOD" if ok else "FAIL"))
+	get_tree().quit()
+
+
 ## Climb the new set pieces: the Arcane Spire's outside stair to the top
 ## deck, and the Faerie Grove's mushroom caps (vaulting cap to cap).
 func _run_fantasy_test() -> void:

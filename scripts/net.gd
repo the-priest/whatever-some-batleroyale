@@ -18,10 +18,12 @@ signal marker(from_id: int, pos: Vector3)
 
 const PORT := 24555
 const DISCOVERY_PORT := 24556
-const VERSION := "br-3"
+const VERSION := "br-4"
 const SNAP_RATE := 12.0
 const STATE_RATE := 20.0
 const MAX_PLAYERS := 8
+## Shots further than this from a player are not sent to them at all.
+const SHOT_RANGE := 600.0
 ## One colour per player slot: lobby cards, name tags, map dots, markers.
 const COLORS := [
 	Color(0.96, 0.66, 0.24), Color(0.36, 0.80, 0.98), Color(0.52, 0.92, 0.44), Color(0.96, 0.42, 0.62),
@@ -114,7 +116,13 @@ func join(address: String) -> void:
 	leave("")
 	stop_discovery()
 	peer = ENetMultiplayerPeer.new()
-	var err := peer.create_client(address.strip_edges(), PORT)
+	# "host" or "host:port".
+	var addr := address.strip_edges()
+	var port := PORT
+	if addr.count(":") == 1:
+		port = int(addr.get_slice(":", 1))
+		addr = addr.get_slice(":", 0)
+	var err := peer.create_client(addr, port)
 	if err != OK:
 		status.emit("COULD NOT CONNECT (%s)" % error_string(err))
 		peer = null
@@ -408,7 +416,7 @@ func _update_pings() -> void:
 			pings_updated.emit()
 
 
-@rpc("authority", "call_remote", "unreliable")
+@rpc("authority", "call_remote", "unreliable", 5)
 func _pings(pings: Dictionary) -> void:
 	for id in pings:
 		if info.has(id) and int(id) != my_id():
@@ -519,16 +527,51 @@ func _tick_match(delta: float) -> void:
 		if _snap_t <= 0.0:
 			_snap_t = 1.0 / SNAP_RATE
 			var snap: Array = game.net_snapshot()
-			_snap.rpc(snap[0], snap[1], snap[2])
+			# Under the MTU per packet: 32 bots (8 floats each) at a time, so a
+			# lost packet only costs half the bots one update, not everyone.
+			var bp: PackedFloat32Array = snap[0]
+			var per := 32 * 8
+			var off := 0
+			while off < bp.size() or off == 0:
+				_snap.rpc(bp.slice(off, off + per), off / 8, snap[1] if off == 0 else PackedFloat32Array(), snap[2] if off == 0 else PackedFloat32Array())
+				off += per
+				if off >= bp.size():
+					break
 	_state_t -= delta
 	if _state_t <= 0.0:
 		_state_t = 1.0 / STATE_RATE
 		var st = game.net_player_state()
 		if st != null:
 			_pstate.rpc(st)
-	if not _shots.is_empty():
-		_shot_batch.rpc(_shots)
+	# Shot effects (tracers, sound) at up to 30 Hz, unreliable, and each
+	# client only hears shots within earshot of where they are.
+	_shot_t -= delta
+	if _shot_t <= 0.0 and (not _shots.is_empty() or not _relay.is_empty()):
+		_shot_t = 1.0 / 30.0
+		if hosting:
+			for id in roster:
+				var pid := int(id)
+				if pid == 1:
+					continue
+				var where: Vector3 = game.net_peer_position(pid)
+				var out: Array = []
+				for e in _shots:
+					if where == Vector3.INF or (e[1] as Vector3).distance_to(where) < SHOT_RANGE:
+						out.append(e)
+				for r in _relay:
+					if int(r[0]) != pid and (where == Vector3.INF or (r[1][1] as Vector3).distance_to(where) < SHOT_RANGE):
+						out.append(r[1])
+				var j := 0
+				while j < out.size():
+					_shot_batch.rpc_id(pid, out.slice(j, j + 12))
+					j += 12
+		elif not _shots.is_empty():
+			var j2 := 0
+			while j2 < _shots.size():
+				_shot_batch.rpc_id(1, _shots.slice(j2, j2 + 12))
+				j2 += 12
 		_shots = []
+		_relay = []
 	if not _loot_out.is_empty():
 		_loot_spawned.rpc(_loot_out)
 		_loot_out = []
@@ -540,30 +583,42 @@ func _tick_match(delta: float) -> void:
 	if _veh_fast <= 0.0 or full:
 		_veh_fast = 1.0 / 20.0
 		var vs: Array = game.net_vehicle_states(full)
-		if not vs.is_empty():
-			_vstate.rpc(vs)
+		# A dozen jeeps per packet keeps each one under the MTU.
+		var i := 0
+		while i < vs.size():
+			_vstate.rpc(vs.slice(i, i + 12))
+			i += 12
 
 
-@rpc("authority", "call_remote", "unreliable_ordered")
-func _snap(bots: PackedFloat32Array, zone: PackedFloat32Array, misc: PackedFloat32Array) -> void:
+@rpc("authority", "call_remote", "unreliable_ordered", 1)
+func _snap(bots: PackedFloat32Array, first: int, zone: PackedFloat32Array, misc: PackedFloat32Array) -> void:
 	if game != null:
-		game.net_apply_snapshot(bots, zone, misc)
+		game.net_apply_snapshot(bots, zone, misc, first)
 
 
-@rpc("any_peer", "call_remote", "unreliable_ordered")
+@rpc("any_peer", "call_remote", "unreliable_ordered", 2)
 func _pstate(st: Array) -> void:
 	if game != null:
 		game.net_apply_player_state(multiplayer.get_remote_sender_id(), st)
+
+
+var _relay: Array = []
+var _shot_t := 0.0
 
 
 func queue_shot(key: String, from: Vector3, dir: Vector3, weapon: String, vis: Vector3, shot_id: int) -> void:
 	_shots.append([key, from, dir, weapon, vis, shot_id])
 
 
-@rpc("any_peer", "call_remote", "reliable")
+@rpc("any_peer", "call_remote", "unreliable", 4)
 func _shot_batch(list: Array) -> void:
 	if game != null:
 		game.net_remote_shots(list)
+	# The host passes a client's shots on to the other clients near them.
+	if hosting:
+		var from := multiplayer.get_remote_sender_id()
+		for e in list:
+			_relay.append([from, e])
 
 
 func send_grenade(key: String, from: Vector3, vel: Vector3) -> void:
@@ -648,7 +703,7 @@ func _loot_taken(id: int) -> void:
 		game.net_loot_taken(id)
 
 
-@rpc("any_peer", "call_remote", "unreliable_ordered")
+@rpc("any_peer", "call_remote", "unreliable_ordered", 3)
 func _vstate(list: Array) -> void:
 	if game != null:
 		game.net_apply_vehicle_states(list)

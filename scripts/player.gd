@@ -204,7 +204,13 @@ func _locked() -> bool:
 	return game != null and game.get("input_locked") == true
 
 
+## Tests hold actions down with this.
+var test_hold: Dictionary = {}
+
+
 func _ap(action: String) -> bool:
+	if test_hold.has(action):
+		return true
 	return not _locked() and Input.is_action_pressed(action)
 
 
@@ -250,6 +256,15 @@ func _ads_sens_scale() -> float:
 
 
 func _physics_process(delta: float) -> void:
+	if Prof.on:
+		var t0 := Time.get_ticks_usec()
+		_physics_process_body(delta)
+		Prof.add("player", Time.get_ticks_usec() - t0)
+	else:
+		_physics_process_body(delta)
+
+
+func _physics_process_body(delta: float) -> void:
 	if not _pending_hits.is_empty():
 		_flush_hits()
 	if not alive:
@@ -338,10 +353,120 @@ func _chute(delta: float) -> void:
 var _mantle: Array = []
 
 
+## Swimming: afloat chest-deep with your eyes just over the water, weapon
+## away. Hold crouch to dive, jump to climb out onto a bank or jetty.
+const FLOAT_DEPTH := 1.38
+const SWIM_SPEED := 2.9
+const SWIM_SPRINT := 4.2
+var swimming := false
+var diving := false
+var _was_wading := false
+var air := 100.0
+var _stroke_t := 0.0
+var _gasp_ok := false
+var _drown_t := 0.0
+
+
+## Water surface under the player, or INF on dry land.
+func water_surface() -> float:
+	if game == null or game.terrain == null:
+		return INF
+	var t: Terrain = game.terrain
+	var s: float = t.water_surface_at(global_position.x, global_position.z)
+	if t.height_at(global_position.x, global_position.z) >= s:
+		return INF
+	return s
+
+
+func _swim(delta: float, surf: float, gy: float) -> void:
+	if not swimming:
+		swimming = true
+		var hard := _fall_speed < -7.0
+		if game != null:
+			game.water_splash(Vector3(global_position.x, surf, global_position.z), hard)
+		if hard:
+			add_trauma(0.15)
+	in_water = true
+	sprinting = false
+	aiming = false
+	# Weapon lowered out of sight while you swim; it comes back up on land.
+	equip_t = 0.0
+	if reloading:
+		reloading = false
+	if healing:
+		cancel_heal()
+	var input := _vec("move_left", "move_right", "move_forward", "move_back")
+	var fast := _ap("sprint") and input.y < -0.3
+	diving = _ap("crouch")
+	var spd := SWIM_SPRINT if fast else SWIM_SPEED
+	if diving:
+		spd *= 0.8
+	var wish := Basis(Vector3.UP, yaw) * Vector3(input.x, 0.0, input.y) * spd
+	velocity.x = move_toward(velocity.x, wish.x, 9.0 * delta)
+	velocity.z = move_toward(velocity.z, wish.z, 9.0 * delta)
+	# Float at the surface (gentle bob), sink while diving.
+	var bobv := sin(Time.get_ticks_msec() * 0.0021) * 0.05
+	var target_y := surf - FLOAT_DEPTH + bobv
+	if diving:
+		target_y = maxf(gy + 0.15, global_position.y - 3.0)
+	velocity.y = clampf((target_y - global_position.y) * 3.2, -2.0 if diving else -3.5, 2.2)
+	_fall_speed = 0.0
+	# Climb out: vault onto whatever is in front (bank, jetty, rock).
+	if _ajp("jump") and not diving and global_position.y > surf - FLOAT_DEPTH - 0.3:
+		if _try_mantle():
+			swimming = false
+			return
+		velocity.y = 2.6
+	move_and_slide()
+	# Strokes, ripples.
+	var planar := Vector2(velocity.x, velocity.z).length()
+	_stroke_t -= delta
+	var under := camera.global_position.y < surf - 0.05
+	if planar > 0.8 and _stroke_t <= 0.0:
+		_stroke_t = 0.62 if fast else 0.9
+		if not under and game != null:
+			if game.sfx != null:
+				game.sfx.play_2d("swim_stroke_%d" % (randi() % 3 + 1), -9.0, 0.08)
+			game.water_ripple(Vector3(global_position.x, surf + 0.02, global_position.z), 1.0 if fast else 0.8)
+	bob += delta * planar * 0.9
+	# Air.
+	if under:
+		air = maxf(0.0, air - delta * 7.0)
+		_gasp_ok = true
+		if air <= 0.0:
+			_drown_t -= delta
+			if _drown_t <= 0.0:
+				_drown_t = 1.0
+				take_damage(10.0, global_position, false, null)
+	else:
+		if _gasp_ok and air < 70.0 and game != null and game.sfx != null:
+			game.sfx.play_2d("gasp", -6.0, 0.05)
+		_gasp_ok = false
+		air = minf(100.0, air + delta * 35.0)
+	if game != null and game.hud != null:
+		game.hud.set_swim(under, air, air < 99.0)
+	if game != null:
+		game.set_underwater(under)
+
+
 func _ground(delta: float) -> void:
 	if not _mantle.is_empty():
 		_do_mantle(delta)
 		return
+	# Deep enough to swim?
+	var surf := water_surface()
+	if surf != INF and game != null:
+		var gy0: float = game.terrain.height_at(global_position.x, global_position.z)
+		if surf - gy0 > FLOAT_DEPTH + 0.05 and global_position.y < surf - 0.35:
+			_swim(delta, surf, gy0)
+			return
+	if swimming:
+		swimming = false
+		diving = false
+		if game != null:
+			game.set_underwater(false)
+			if game.hud != null:
+				game.hud.set_swim(false, air, false)
 	var input := _vec("move_left", "move_right", "move_forward", "move_back")
 	var crouch := _ap("crouch")
 	_sprint_lock = maxf(0.0, _sprint_lock - delta)
@@ -356,7 +481,10 @@ func _ground(delta: float) -> void:
 	if absf(lean) > 0.2:
 		speed *= 0.75
 	if in_water:
-		speed *= 0.6
+		# Wading: the deeper it is, the slower you go.
+		var ws := water_surface()
+		var depth := (ws - global_position.y) if ws != INF else 0.0
+		speed *= clampf(1.0 - depth * 0.45, 0.45, 0.9)
 	if boost > 50.0:
 		speed *= 1.06
 	var basis_yaw := Basis(Vector3.UP, yaw)
@@ -395,17 +523,18 @@ func _ground(delta: float) -> void:
 				game.sfx.play_2d("step_%s_%d" % [game.surface_at(global_position), randi() % 4 + 1], -6.0, 0.05)
 		_fall_speed = 0.0
 	_was_on_floor = is_on_floor()
+	_was_wading = in_water
 	# Terrain mesh vs bilinear height can differ by up to a metre on a slope, and a
 	# one-sided trimesh lets a buried capsule fall straight through the island.
 	in_water = false
 	if game != null and game.terrain != null:
 		var gy: float = float(game.terrain.height_at(global_position.x, global_position.z))
-		if bool(game.terrain.is_water(global_position.x, global_position.z)):
-			in_water = global_position.y < Terrain.WATER_LEVEL + 0.6
-			var surface: float = Terrain.WATER_LEVEL + 0.15
-			if global_position.y < surface:
-				global_position.y = surface
-				velocity.y = maxf(velocity.y, 0.0)
+		var ws2 := water_surface()
+		if ws2 != INF:
+			# Wading in the shallows (deep water is handled by _swim).
+			in_water = global_position.y < ws2 - 0.05
+			if in_water and not _was_wading and game != null:
+				game.water_splash(Vector3(global_position.x, ws2, global_position.z), false)
 		elif global_position.y < gy - 0.6:
 			global_position.y = gy + 1.2
 			velocity.y = 0.0
@@ -451,7 +580,7 @@ func _ground(delta: float) -> void:
 	if _ajp("grenade"):
 		throw_grenade()
 	_tick_boost(delta)
-	aiming = _ap("aim") and not reloading and not healing
+	aiming = _ap("aim") and not reloading and not healing and not swimming
 	fire_timer = maxf(0.0, fire_timer - delta)
 	if reloading:
 		reload_timer -= delta
@@ -465,7 +594,7 @@ func _ground(delta: float) -> void:
 	_since_shot += delta
 	if _since_shot > 0.32:
 		_spray_n = 0
-	if has_gun():
+	if has_gun() and not swimming:
 		want_fire = _ap("fire") if is_auto() else _ajp("fire")
 	if want_fire and healing:
 		cancel_heal()
@@ -1634,6 +1763,13 @@ func reset_for_match() -> void:
 	recoil_yaw = 0.0
 	holding_breath = false
 	in_water = false
+	swimming = false
+	diving = false
+	air = 100.0
+	if game != null:
+		game.set_underwater(false)
+		if game.hud != null:
+			game.hud.set_swim(false, 100.0, false)
 	_scope_sway = Vector2.ZERO
 	_pending_hits.clear()
 	_spray_n = 0

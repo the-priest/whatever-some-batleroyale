@@ -1116,7 +1116,7 @@ func _build_grids() -> void:
 					grid[k] = []
 				grid[k].append(item)
 	for v in villages.village_pads:
-		add.call(_pad_grid, v.center, float(v.radius) + 45.0, {"center": v.center, "radius": float(v.radius), "kind": "village", "square": 13.5 if v.type == "city" else 9.5})
+		add.call(_pad_grid, v.center, float(v.radius) + 45.0, {"center": v.center, "radius": float(v.radius), "kind": "village", "square": 13.5 if v.type == "city" else (0.0 if v.type == "farm" else 9.5)})
 	for p in villages.poi_pads:
 		add.call(_pad_grid, p.center, float(p.radius) + 12.0, {"center": p.center, "radius": float(p.radius), "kind": "poi"})
 	for a in villages.landmarks.clear_areas:

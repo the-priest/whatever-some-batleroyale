@@ -1559,15 +1559,40 @@ func _build_ruin(c: Vector2, pad: float) -> void:
 					wall_yaw = -PI * 0.5
 			var pos: Vector3 = origin + b * local
 			var roll := rng.randf()
-			if roll < 0.2:
+			if roll < 0.18:
 				_place("Wall_Arch", pos, yaw + wall_yaw)
 				_add_wall_for("Wall_Arch", pos, yaw + wall_yaw)
-			elif roll < 0.45:
+			elif roll < 0.38:
 				_place("Wall_UnevenBrick_Window_Wide_Round", pos, yaw + wall_yaw)
 				_add_wall_for("Wall_UnevenBrick_Window_Wide_Round", pos, yaw + wall_yaw)
-			else:
+				if rng.randf() < 0.5:
+					_place("Prop_Vine%d" % [1, 2, 5][rng.randi() % 3], pos + Basis(Vector3.UP, yaw + wall_yaw) * Vector3(rng.randf_range(-0.6, 0.6), 0, 0.24), yaw + wall_yaw)
+			elif roll < 0.6:
 				_place("Wall_UnevenBrick_Straight", pos, yaw + wall_yaw)
 				_add_wall_collider(pos, yaw + wall_yaw, false)
+				if rng.randf() < 0.5:
+					_place("Prop_Vine%d" % [1, 2, 5][rng.randi() % 3], pos + Basis(Vector3.UP, yaw + wall_yaw) * Vector3(rng.randf_range(-0.6, 0.6), 0, 0.24), yaw + wall_yaw)
+			else:
+				# Broken down to a jagged stub: waist or chest high cover.
+				var wb := Basis(Vector3.UP, yaw + wall_yaw)
+				var h1 := rng.randf_range(0.8, 1.7)
+				_proc_box(Transform3D(wb.scaled_local(Vector3(1.98, h1, 0.42)), pos + Vector3(0, h1 * 0.5, 0)), "stone")
+				_add_box_collider(pos + Vector3(0, h1 * 0.5, 0), Vector3(1.98, h1, 0.42), yaw + wall_yaw)
+				var h2 := rng.randf_range(0.3, 0.9)
+				var sx2 := rng.randf_range(-0.5, 0.5)
+				_proc_box(Transform3D(wb.scaled_local(Vector3(0.9, h2, 0.42)), pos + wb * Vector3(sx2, h1 + h2 * 0.5, 0)), "stone")
+				_add_box_collider(pos + wb * Vector3(sx2, h1 + h2 * 0.5, 0), Vector3(0.9, h2, 0.42), yaw + wall_yaw)
+				for k in 2:
+					_place("Prop_Brick%d" % rng.randi_range(1, 4), pos + wb * Vector3(rng.randf_range(-0.9, 0.9), 0, rng.randf_range(0.5, 1.4) * (1.0 if rng.randf() < 0.5 else -1.0)), rng.randf() * TAU)
+	# What is left of the floor.
+	var fx := -float(w) + 1.0
+	while fx < float(w):
+		var fz := -float(d) + 1.0
+		while fz < float(d):
+			if rng.randf() < 0.75:
+				_place("Floor_UnevenBrick", origin + b * Vector3(fx, 0.012, fz), yaw + float(rng.randi_range(0, 3)) * PI * 0.5)
+			fz += 2.0
+		fx += 2.0
 	# Rubble and crates for low cover.
 	for i in rng.randi_range(2, 4):
 		var p := origin + b * Vector3(rng.randf_range(-w, w), 0, rng.randf_range(-d - 3.0, d + 3.0))

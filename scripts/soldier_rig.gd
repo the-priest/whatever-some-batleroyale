@@ -296,6 +296,15 @@ var _anim_every := 1
 
 
 func _process(delta: float) -> void:
+	if Prof.on:
+		var t0 := Time.get_ticks_usec()
+		_process_body(delta)
+		Prof.add("rigs", Time.get_ticks_usec() - t0)
+	else:
+		_process_body(delta)
+
+
+func _process_body(delta: float) -> void:
 	if tree != null and tree.active:
 		_anim_acc += delta
 		_anim_frame += 1

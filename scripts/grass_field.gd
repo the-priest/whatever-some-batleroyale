@@ -23,6 +23,8 @@ func setup(p_world: WorldBuilder) -> void:
 	_mat = ShaderMaterial.new()
 	_mat.shader = load("res://shaders/grass.gdshader")
 	_mat.set_shader_parameter("tex_grass", load("res://assets/textures/tex_grass.png"))
+	# Build the lazy house lookup here, before worker threads read it.
+	world.villages.house_at(Vector2.ZERO)
 	set_radius(radius)
 
 
@@ -66,6 +68,15 @@ func _tuft_mesh() -> ArrayMesh:
 
 
 func _process(_delta: float) -> void:
+	if Prof.on:
+		var t0 := Time.get_ticks_usec()
+		_process_body(_delta)
+		Prof.add("grass", Time.get_ticks_usec() - t0)
+	else:
+		_process_body(_delta)
+
+
+func _process_body(_delta: float) -> void:
 	if world == null or radius <= 0.0:
 		return
 	var cam := get_viewport().get_camera_3d()
@@ -78,37 +89,25 @@ func _process(_delta: float) -> void:
 	var reach := radius + CHUNK * 0.75
 	var c0 := Vector2i(int(floor(cp.x / CHUNK)), int(floor(cp.z / CHUNK)))
 	var n := int(ceil(reach / CHUNK))
-	var best := Vector2i(1 << 30, 0)
-	var best_d := 1e9
+	# Ask worker threads for the nearest missing chunks; place finished ones.
 	if not far:
+		var want: Array = []
 		for dz in range(-n, n + 1):
 			for dx in range(-n, n + 1):
 				var k := Vector2i(c0.x + dx, c0.y + dz)
-				if _chunks.has(k):
+				if _chunks.has(k) or _pending.has(k):
 					continue
 				var cc := Vector2((float(k.x) + 0.5) * CHUNK, (float(k.y) + 0.5) * CHUNK)
 				var d := cc.distance_to(Vector2(cp.x, cp.z))
-				if d < reach and d < best_d:
-					best_d = d
-					best = k
-	if best.x != 1 << 30:
-		_chunks[best] = _build_chunk(best)
-		# A second one per frame when catching up (landing, driving fast).
-		if not far:
-			var nb := Vector2i(1 << 30, 0)
-			var nd := 1e9
-			for dz in range(-n, n + 1):
-				for dx in range(-n, n + 1):
-					var k2 := Vector2i(c0.x + dx, c0.y + dz)
-					if _chunks.has(k2):
-						continue
-					var cc2 := Vector2((float(k2.x) + 0.5) * CHUNK, (float(k2.y) + 0.5) * CHUNK)
-					var d2 := cc2.distance_to(Vector2(cp.x, cp.z))
-					if d2 < reach and d2 < nd:
-						nd = d2
-						nb = k2
-			if nb.x != 1 << 30:
-				_chunks[nb] = _build_chunk(nb)
+				if d < reach:
+					want.append([d, k])
+		want.sort_custom(func(x, y): return x[0] < y[0])
+		for w in want:
+			if _pending.size() >= 4:
+				break
+			var k: Vector2i = w[1]
+			_pending[k] = WorkerThreadPool.add_task(_compute_chunk.bind(k))
+	_collect_done()
 	# Drop chunks well out of range.
 	var drop: Array = []
 	for k in _chunks:
@@ -121,15 +120,29 @@ func _process(_delta: float) -> void:
 		_chunks.erase(k)
 
 
-func _build_chunk(k: Vector2i) -> Node3D:
+var _pending: Dictionary = {}
+var _done: Dictionary = {}
+var _mutex := Mutex.new()
+
+
+func _exit_tree() -> void:
+	for k in _pending:
+		WorkerThreadPool.wait_for_task_completion(_pending[k])
+	_pending.clear()
+
+
+## Worker thread: placement for one chunk as a MultiMesh buffer (3x4
+## transform + colour per instance). Only reads the terrain and the
+## settlement grids, which are fixed after the island is built.
+func _compute_chunk(k: Vector2i) -> void:
 	var rr := RandomNumberGenerator.new()
 	rr.seed = hash(k)
 	var t: Terrain = world.terrain
-	var xs: Array[Transform3D] = []
-	var cols: Array[Color] = []
+	var buf := PackedFloat32Array()
 	var steps := int(CHUNK / SPACING)
 	var x0 := float(k.x) * CHUNK
 	var z0 := float(k.y) * CHUNK
+	var count := 0
 	for iz in steps:
 		for ix in steps:
 			var x := x0 + (float(ix) + rr.randf()) * SPACING
@@ -146,20 +159,37 @@ func _build_chunk(k: Vector2i) -> Node3D:
 				continue
 			var s := rr.randf_range(0.75, 1.35)
 			var b := Basis(Vector3.UP, rr.randf() * TAU).scaled(Vector3(s, s * rr.randf_range(0.8, 1.35), s))
-			xs.append(Transform3D(b, Vector3(x, h - 0.03, z)))
 			var tint := rr.randf_range(0.88, 1.12)
-			cols.append(Color(tint, tint * rr.randf_range(0.97, 1.05), tint * 0.95))
-	var mm := MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.use_colors = true
-	mm.mesh = _mesh
-	mm.instance_count = xs.size()
-	for i in xs.size():
-		mm.set_instance_transform(i, xs[i])
-		mm.set_instance_color(i, cols[i])
-	var mmi := MultiMeshInstance3D.new()
-	mmi.multimesh = mm
-	mmi.material_override = _mat
-	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(mmi)
-	return mmi
+			buf.append_array([b.x.x, b.y.x, b.z.x, x, b.x.y, b.y.y, b.z.y, h - 0.03, b.x.z, b.y.z, b.z.z, z,
+				tint, tint * rr.randf_range(0.97, 1.05), tint * 0.95, 1.0])
+			count += 1
+	_mutex.lock()
+	_done[k] = [count, buf]
+	_mutex.unlock()
+
+
+func _collect_done() -> void:
+	_mutex.lock()
+	var ready := _done.duplicate()
+	_done.clear()
+	_mutex.unlock()
+	for k in ready:
+		if _pending.has(k):
+			WorkerThreadPool.wait_for_task_completion(_pending[k])
+			_pending.erase(k)
+		if radius <= 0.0 or _chunks.has(k):
+			continue
+		var e: Array = ready[k]
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.use_colors = true
+		mm.mesh = _mesh
+		mm.instance_count = int(e[0])
+		if int(e[0]) > 0:
+			mm.buffer = e[1]
+		var mmi := MultiMeshInstance3D.new()
+		mmi.multimesh = mm
+		mmi.material_override = _mat
+		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(mmi)
+		_chunks[k] = mmi

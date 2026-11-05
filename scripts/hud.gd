@@ -1472,6 +1472,15 @@ func _unhandled_input(event: InputEvent) -> void:
 
 # -------------------------------------------------------------------- draw --
 func _process(delta: float) -> void:
+	if Prof.on:
+		var t0 := Time.get_ticks_usec()
+		_process_body(delta)
+		Prof.add("hud", Time.get_ticks_usec() - t0)
+	else:
+		_process_body(delta)
+
+
+func _process_body(delta: float) -> void:
 	if hit_t > 0.0:
 		hit_t = maxf(0.0, hit_t - delta)
 		hitmarker.queue_redraw()
@@ -1496,8 +1505,49 @@ func _process(delta: float) -> void:
 		big_map_draw.queue_redraw()
 
 
+## Swimming: underwater tint and the air left in your lungs.
+var underwater := false
+var air_val := 100.0
+var air_show := false
+
+
+func set_swim(under: bool, air: float, show_air: bool) -> void:
+	if under != underwater or show_air != air_show or absf(air - air_val) > 0.5:
+		underwater = under
+		air_val = air
+		air_show = show_air
+		vignette.queue_redraw()
+
+
 func _draw_vignette() -> void:
 	var sz := vignette.size
+	if underwater:
+		# Murky blue-green with darker edges and slow light ripples.
+		vignette.draw_rect(Rect2(Vector2.ZERO, sz), Color(0.03, 0.2, 0.26, 0.42))
+		var st := 10
+		var dep := minf(sz.x, sz.y) * 0.3
+		for i in st:
+			var f := float(i) / float(st)
+			var c := Color(0.0, 0.05, 0.08, 0.5 * pow(1.0 - f, 1.8))
+			var d := dep * f
+			var w := dep / float(st) + 1.0
+			vignette.draw_rect(Rect2(0, d, sz.x, w), c)
+			vignette.draw_rect(Rect2(0, sz.y - d - w, sz.x, w), c)
+			vignette.draw_rect(Rect2(d, 0, w, sz.y), c)
+			vignette.draw_rect(Rect2(sz.x - d - w, 0, w, sz.y), c)
+		var t := Time.get_ticks_msec() * 0.001
+		for k in 7:
+			var x := fmod(float(k) * 0.17 * sz.x + t * 22.0 * (1.0 + float(k % 3) * 0.3), sz.x)
+			vignette.draw_line(Vector2(x, 0), Vector2(x - sz.y * 0.25, sz.y * 0.55), Color(0.6, 0.9, 1.0, 0.035 + 0.02 * sin(t * 2.0 + float(k))), 26.0)
+	if air_show:
+		var bw := 220.0
+		var bx := sz.x * 0.5 - bw * 0.5
+		var by := sz.y * 0.7
+		vignette.draw_rect(Rect2(bx - 2, by - 2, bw + 4, 10), Color(0, 0, 0, 0.55))
+		var low := air_val < 30.0
+		var col := Color(0.45, 0.85, 1.0, 0.95) if not low else Color(1.0, 0.35 + 0.25 * sin(Time.get_ticks_msec() * 0.012), 0.3, 0.95)
+		vignette.draw_rect(Rect2(bx, by, bw * air_val / 100.0, 6), col)
+		vignette.draw_string(ThemeDB.fallback_font, Vector2(bx, by - 6), "AIR", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(0.85, 0.95, 1.0, 0.9))
 	var storm_a := 0.0
 	if in_storm:
 		storm_a = 0.20 + sin(Time.get_ticks_msec() * 0.004) * 0.04
@@ -1906,6 +1956,17 @@ func _build_social() -> void:
 	scoreboard.add_child(_sb_footer)
 
 
+## unproject_position errors (every frame) for a point exactly on the
+## camera plane; nudge such points just in front of it.
+func _project(p: Vector3) -> Vector2:
+	var fwd := -camera_3d.global_basis.z
+	var rel := p - camera_3d.global_position
+	var depth := rel.dot(fwd)
+	if absf(depth) < 0.05:
+		p += fwd * (0.05 - depth)
+	return camera_3d.unproject_position(p)
+
+
 func _draw_social() -> void:
 	if camera_3d == null or not is_instance_valid(camera_3d) or not camera_3d.is_inside_tree():
 		return
@@ -1915,7 +1976,7 @@ func _draw_social() -> void:
 		var p: Vector3 = t.pos
 		if camera_3d.is_position_behind(p):
 			continue
-		var sp := camera_3d.unproject_position(p)
+		var sp := _project(p)
 		if sp.x < -50 or sp.y < -50 or sp.x > vp.x + 50 or sp.y > vp.y + 50:
 			continue
 		var d := eye.distance_to(p)
@@ -1930,7 +1991,7 @@ func _draw_social() -> void:
 	for w in waypoints:
 		var p: Vector3 = w.pos + Vector3(0, 1.5, 0)
 		var behind := camera_3d.is_position_behind(p)
-		var sp := camera_3d.unproject_position(p)
+		var sp := _project(p)
 		if behind:
 			sp = vp - sp
 		# Pin to the screen edge when off-screen so you can always turn to it.

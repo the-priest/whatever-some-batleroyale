@@ -121,6 +121,15 @@ func _choose_next() -> void:
 
 
 func _process(delta: float) -> void:
+	if Prof.on:
+		var t0 := Time.get_ticks_usec()
+		_process_body(delta)
+		Prof.add("zone", Time.get_ticks_usec() - t0)
+	else:
+		_process_body(delta)
+
+
+func _process_body(delta: float) -> void:
 	if finished:
 		return
 	if state == "hold":

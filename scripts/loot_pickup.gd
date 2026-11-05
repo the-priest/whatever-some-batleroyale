@@ -98,16 +98,19 @@ func _ready() -> void:
 	torus.rings = 20
 	torus.ring_segments = 6
 	ring.mesh = torus
-	var rm := StandardMaterial3D.new()
-	rm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	rm.albedo_color = Color(accent.r, accent.g, accent.b, 0.85)
-	rm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	var rkey := "ring|" + accent.to_html()
+	var rm: StandardMaterial3D = _mats.get(rkey)
+	if rm == null:
+		rm = StandardMaterial3D.new()
+		rm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		rm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		rm.albedo_color = Color(accent.r, accent.g, accent.b, 0.35)
+		_mats[rkey] = rm
 	ring.material_override = rm
 	ring.position.y = 0.02
 	ring.scale = Vector3(1.0, 0.25, 1.0) * (0.9 if kind == "weapon" else 0.6)
 	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	# A faint ground marker only shows when you are close (see game.gd).
-	rm.albedo_color.a = 0.35
 	ring.visible = false
 	add_child(ring)
 
@@ -121,12 +124,16 @@ func _ready() -> void:
 	cyl.rings = 1
 	beacon.mesh = cyl
 	beacon.visible = false
-	var bmm := StandardMaterial3D.new()
-	bmm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	bmm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	bmm.albedo_color = Color(accent.r, accent.g, accent.b, 0.22 + tier * 0.03)
-	bmm.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	bmm.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var bkey := "beacon|%s|%d" % [accent.to_html(), tier]
+	var bmm: StandardMaterial3D = _mats.get(bkey)
+	if bmm == null:
+		bmm = StandardMaterial3D.new()
+		bmm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		bmm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		bmm.albedo_color = Color(accent.r, accent.g, accent.b, 0.22 + tier * 0.03)
+		bmm.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		bmm.cull_mode = BaseMaterial3D.CULL_DISABLED
+		_mats[bkey] = bmm
 	beacon.material_override = bmm
 	beacon.position.y = cyl.height * 0.5
 	beacon.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -147,10 +154,27 @@ func _ready() -> void:
 	label.position.y = 0.55
 	label.visible = false
 	add_child(label)
+	# Small things on the ground: no shadow casting, and not drawn from
+	# further than you could make them out anyway.
+	for g in spin.find_children("*", "GeometryInstance3D", true, false):
+		var gi := g as GeometryInstance3D
+		gi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		gi.visibility_range_end = 100.0
+		gi.visibility_range_end_margin = 10.0
+	beacon.visibility_range_end = 400.0
+
+
+## Shared materials: thousands of pickups use a handful of looks, and one
+## material per item would make every one a separate draw state.
+static var _mats: Dictionary = {}
 
 
 func _mat(c: Color, metal := 0.3, rough := 0.5, glow := 0.0) -> StandardMaterial3D:
+	var key := "%s|%.2f|%.2f|%.2f" % [c.to_html(), metal, rough, glow]
+	if _mats.has(key):
+		return _mats[key]
 	var m := StandardMaterial3D.new()
+	_mats[key] = m
 	m.albedo_color = c
 	m.metallic = metal
 	m.roughness = rough

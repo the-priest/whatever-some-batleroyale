@@ -275,11 +275,45 @@ func driver() -> Node:
 
 
 func set_puppet(v: bool) -> void:
+	_asleep = false
+	_parked_t = 0.0
 	freeze_mode = RigidBody3D.FREEZE_MODE_KINEMATIC
 	freeze = v
 
 
+## A parked jeep that has settled is frozen in place so the physics engine
+## and its suspension raycasts stop costing anything; it wakes when someone
+## gets in, shoots it, or drives into it.
+var _asleep := false
+var _parked_t := 0.0
+
+
+func wake() -> void:
+	if not _asleep:
+		return
+	_asleep = false
+	_parked_t = 0.0
+	freeze = false
+
+
+func _park() -> void:
+	_asleep = true
+	freeze_mode = RigidBody3D.FREEZE_MODE_STATIC
+	freeze = true
+	linear_velocity = Vector3.ZERO
+	angular_velocity = Vector3.ZERO
+
+
 func _physics_process(delta: float) -> void:
+	if Prof.on:
+		var t0 := Time.get_ticks_usec()
+		_physics_process_body(delta)
+		Prof.add("vehicles", Time.get_ticks_usec() - t0)
+	else:
+		_physics_process_body(delta)
+
+
+func _physics_process_body(delta: float) -> void:
 	_crash_cd = maxf(0.0, _crash_cd - delta)
 	speed = linear_velocity.dot(-global_basis.z)
 	if wrecked:
@@ -292,10 +326,22 @@ func _physics_process(delta: float) -> void:
 		_sound(delta)
 		return
 	var has_driver: bool = seats[0] != null
+	if has_driver:
+		wake()
+	elif _asleep:
+		return
 	if not has_driver:
 		throttle = 0.0
 		steer_in = 0.0
 		handbrake = true
+		if linear_velocity.length() < 0.3 and angular_velocity.length() < 0.3:
+			_parked_t += delta
+			if _parked_t > 2.0 and _grounded >= 2:
+				_park()
+				_sound(delta)
+				return
+		else:
+			_parked_t = 0.0
 	var space := get_world_3d().direct_space_state
 	var b := global_basis
 	var up := b.y
@@ -506,8 +552,10 @@ func _crash(dv: float) -> void:
 				(s as Player).take_damage((dv - 18.0) * 3.0, global_position, false, null)
 
 
-func _on_body_entered(_other: Node) -> void:
-	pass
+func _on_body_entered(other: Node) -> void:
+	# Ploughing into a parked jeep shoves it.
+	if other is Vehicle:
+		(other as Vehicle).wake()
 
 
 # ------------------------------------------------------------------ damage --
@@ -526,6 +574,7 @@ func take_damage(amount: float, pos: Vector3 = Vector3.ZERO, _headshot := false,
 func apply_damage(amount: float, source: Node) -> void:
 	if wrecked or amount <= 0.0:
 		return
+	wake()
 	if not is_local():
 		if game != null and game.has_method("net_vehicle_hit"):
 			game.net_vehicle_hit(self, amount)
@@ -547,6 +596,7 @@ func destroy(source: Node = null) -> void:
 func explode(source: Node = null) -> void:
 	if wrecked:
 		return
+	wake()
 	wrecked = true
 	alive = false
 	hp = 0.0

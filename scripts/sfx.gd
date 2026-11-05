@@ -34,6 +34,42 @@ func _ready() -> void:
 		f.bus = "Master"
 		add_child(f)
 		flat.append(f)
+	_preload_all()
+
+
+## Load every sound up front on background threads: loading a WAV the first
+## time it plays (first shot of a gun, first step on gravel) hitches a frame.
+var _loading: Dictionary = {}
+
+
+func _preload_all() -> void:
+	var names: PackedStringArray = ResourceLoader.list_directory(DIR)
+	for f in names:
+		var file := f.trim_suffix(".import").trim_suffix(".remap")
+		if not file.ends_with(".wav"):
+			continue
+		var nm := file.get_basename()
+		if cache.has(nm) or _loading.has(nm):
+			continue
+		var path := DIR + file
+		if ResourceLoader.load_threaded_request(path) == OK:
+			_loading[nm] = path
+
+
+func _process(_delta: float) -> void:
+	if _loading.is_empty():
+		set_process(false)
+		return
+	var done: Array = []
+	for nm in _loading:
+		var st := ResourceLoader.load_threaded_get_status(_loading[nm])
+		if st == ResourceLoader.THREAD_LOAD_LOADED:
+			cache[nm] = ResourceLoader.load_threaded_get(_loading[nm])
+			done.append(nm)
+		elif st == ResourceLoader.THREAD_LOAD_FAILED or st == ResourceLoader.THREAD_LOAD_INVALID_RESOURCE:
+			done.append(nm)
+	for nm in done:
+		_loading.erase(nm)
 
 
 ## Non-positional one-shots that may overlap (your own footsteps, cloth).
@@ -53,6 +89,12 @@ func stream(name: String) -> AudioStream:
 	if cache.has(name):
 		return cache[name]
 	var path := DIR + name + ".wav"
+	if _loading.has(name):
+		# Still streaming in on a thread: take it now (rare, early on).
+		var r = ResourceLoader.load_threaded_get(_loading[name])
+		_loading.erase(name)
+		cache[name] = r
+		return r
 	if not ResourceLoader.exists(path):
 		_missing[name] = true
 		cache[name] = null
