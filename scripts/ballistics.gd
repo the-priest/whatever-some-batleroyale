@@ -91,7 +91,9 @@ func fire(shooter: Node, from: Vector3, dir: Vector3, weapon_id: String, visual_
 		"rid": (shooter as CollisionObject3D).get_rid() if shooter is CollisionObject3D else RID(),
 		"id": weapon_id,
 		"dist": 0.0,
-		"max": float(d["range"]) * 1.7,
+		# Rounds fly on (dropping) until they hit something: long shots are a
+		# thing. Buckshot pellets are spent quickly.
+		"max": _max_flight(weapon_id),
 		"range": float(d["range"]),
 		"shot": shot_id,
 		"off": visual_from - from,
@@ -257,3 +259,13 @@ func _resolve_hit(b: Dictionary, hit: Dictionary) -> void:
 				game.play_sfx_at(surf, pos, -4.0)
 				if surf == "impact_stone" and randf() < 0.35:
 					game.play_sfx_at("ricochet", pos, -6.0)
+
+
+static func _max_flight(weapon_id: String) -> float:
+	match Weapons.cls(weapon_id):
+		"shotgun":
+			return 300.0
+		"pistol", "smg":
+			return 1000.0
+		_:
+			return 1600.0

@@ -1082,7 +1082,28 @@ var map_zoom := 1.0
 
 
 func toggle_map() -> void:
-	big_map.visible = not big_map.visible
+	set_map_open(not big_map.visible)
+
+
+## The full map frees the mouse so you can point at a landing spot or a
+## place to mark; closing it hands the mouse back to the camera.
+func set_map_open(v: bool) -> void:
+	big_map.visible = v
+	var g = get_parent()
+	var in_match: bool = g != null and str(g.get("phase")) in ["plane", "playing"]
+	if v:
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		# Start the cursor on yourself.
+		await get_tree().process_frame
+		if big_map.visible and _bm_inner.size.x > 0.0:
+			var me := _bm_inner.position + (Vector2(player_pos.x, player_pos.z) - _bm_origin) / _bm_span * _bm_inner.size.x
+			get_viewport().warp_mouse(me.clamp(_bm_inner.position, _bm_inner.end))
+	elif in_match and not pause_panel.visible and not chat_open:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+func map_open() -> bool:
+	return big_map != null and big_map.visible
 
 
 func update_health(hp: float, armor: float) -> void:
@@ -1503,6 +1524,76 @@ func _process_body(delta: float) -> void:
 		minimap_draw.queue_redraw()
 	if big_map.visible:
 		big_map_draw.queue_redraw()
+	if _scare_layer != null and _scare_layer.visible:
+		_scare_layer.queue_redraw()
+
+
+# ----------------------------------------------------------- the warden --
+## Anti-cheat dread: darkness closing in from the edges (0..1), and the
+## jumpscare's red-to-black flash (0..1). Drawn above everything.
+var _dread := 0.0
+var _scare := 0.0
+var _scare_layer: Control
+var _dread_tex: GradientTexture2D
+
+
+func set_dread(k: float) -> void:
+	_dread = clampf(k, 0.0, 1.0)
+	_ensure_scare_layer()
+
+
+func set_scare(k: float) -> void:
+	_scare = clampf(k, 0.0, 1.0)
+	_ensure_scare_layer()
+
+
+func _ensure_scare_layer() -> void:
+	if _scare_layer != null:
+		_scare_layer.visible = _dread > 0.0 or _scare > 0.0
+		_scare_layer.queue_redraw()
+		return
+	_scare_layer = Control.new()
+	_scare_layer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_scare_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_scare_layer.draw.connect(_draw_scare)
+	add_child(_scare_layer)
+	var g := Gradient.new()
+	g.offsets = PackedFloat32Array([0.0, 0.35, 0.75, 1.0])
+	g.colors = PackedColorArray([Color(0, 0, 0, 0.0), Color(0.02, 0, 0, 0.25), Color(0.02, 0, 0, 0.8), Color(0, 0, 0, 0.98)])
+	_dread_tex = GradientTexture2D.new()
+	_dread_tex.gradient = g
+	_dread_tex.fill = GradientTexture2D.FILL_RADIAL
+	_dread_tex.fill_from = Vector2(0.5, 0.5)
+	_dread_tex.fill_to = Vector2(1.0, 0.5)
+	_dread_tex.width = 256
+	_dread_tex.height = 256
+
+
+func _draw_scare() -> void:
+	var sz := _scare_layer.size
+	var t := Time.get_ticks_msec() * 0.001
+	if _dread > 0.0:
+		# The edges of the world go black and pulse with the heartbeat.
+		var pulse := 1.0 + sin(t * 7.0) * 0.04 * _dread
+		var grow := lerpf(1.6, 0.95, _dread) * pulse
+		var r := Rect2(sz * 0.5 - sz * grow * 0.5, sz * grow)
+		_scare_layer.draw_rect(Rect2(Vector2.ZERO, sz), Color(0.05, 0.0, 0.01, 0.18 * _dread))
+		_scare_layer.draw_texture_rect(_dread_tex, r, false, Color(1, 1, 1, _dread))
+		# Outside the gradient rect: solid black so nothing leaks at the corners.
+		if r.position.x > 0.0:
+			_scare_layer.draw_rect(Rect2(0, 0, r.position.x + 1, sz.y), Color(0, 0, 0, _dread * 0.98))
+			_scare_layer.draw_rect(Rect2(r.end.x - 1, 0, sz.x - r.end.x + 1, sz.y), Color(0, 0, 0, _dread * 0.98))
+		if r.position.y > 0.0:
+			_scare_layer.draw_rect(Rect2(0, 0, sz.x, r.position.y + 1), Color(0, 0, 0, _dread * 0.98))
+			_scare_layer.draw_rect(Rect2(0, r.end.y - 1, sz.x, sz.y - r.end.y + 1), Color(0, 0, 0, _dread * 0.98))
+	if _scare > 0.0:
+		# Blood-red flash, torn scanlines, then black.
+		_scare_layer.draw_rect(Rect2(Vector2.ZERO, sz), Color(0.55, 0.0, 0.0, minf(0.75, _scare * 1.6)))
+		for i in 18:
+			var y := fmod(randf() * sz.y + t * 900.0, sz.y)
+			_scare_layer.draw_rect(Rect2(0, y, sz.x, randf_range(2.0, 14.0)), Color(0, 0, 0, 0.55 * _scare))
+		if _scare > 0.7:
+			_scare_layer.draw_rect(Rect2(Vector2.ZERO, sz), Color(0, 0, 0, (_scare - 0.7) / 0.3))
 
 
 ## Swimming: underwater tint and the air left in your lungs.
@@ -1840,7 +1931,23 @@ func _draw_big_map() -> void:
 		if i < cells:
 			big_map_draw.draw_string(font_bold, Vector2(x + inner.size.x / cells * 0.5 - 4, inner.position.y - 10), "ABCDEFGH"[i], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, MUTED)
 			big_map_draw.draw_string(font_bold, Vector2(inner.position.x - 18, y + inner.size.y / cells * 0.5 + 4), str(i + 1), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, MUTED)
-	big_map_draw.draw_string(font_bold, Vector2(inner.position.x, inner.end.y + 26), "M  CLOSE MAP      ·      WHEEL  ZOOM      ·      WHITE CIRCLE = NEXT SAFE ZONE      ·      RED RINGS = GUNFIRE", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, MUTED)
+	big_map_draw.draw_string(font_bold, Vector2(inner.position.x, inner.end.y + 26), "M  CLOSE MAP      ·      LEFT CLICK  MARK      ·      RIGHT CLICK  REMOVE      ·      WHEEL  ZOOM      ·      WHITE CIRCLE = NEXT SAFE ZONE", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, MUTED)
+	# Cursor readout: grid square and how far that is from you.
+	var mp := big_map_draw.get_local_mouse_position()
+	if inner.has_point(mp) and Input.mouse_mode == Input.MOUSE_MODE_VISIBLE:
+		var w := origin + (mp - inner.position) / inner.size.x * span
+		var d := Vector2(player_pos.x, player_pos.z).distance_to(w)
+		var col := int(clampf((w.x + MAP_EXTENT) / (MAP_EXTENT * 2.0) * 8.0, 0.0, 7.0))
+		var row := int(clampf((w.y + MAP_EXTENT) / (MAP_EXTENT * 2.0) * 8.0, 0.0, 7.0))
+		var txt := "%s%d   ·   %s" % ["ABCDEFGH"[col], row + 1, ("%.1f KM" % (d / 1000.0)) if d >= 1000.0 else ("%d M" % int(d))]
+		big_map_draw.draw_arc(mp, 9.0, 0.0, TAU, 24, Color(1, 1, 1, 0.85), 1.5, true)
+		big_map_draw.draw_line(mp + Vector2(-15, 0), mp + Vector2(-5, 0), Color(1, 1, 1, 0.85), 1.5)
+		big_map_draw.draw_line(mp + Vector2(5, 0), mp + Vector2(15, 0), Color(1, 1, 1, 0.85), 1.5)
+		big_map_draw.draw_line(mp + Vector2(0, -15), mp + Vector2(0, -5), Color(1, 1, 1, 0.85), 1.5)
+		big_map_draw.draw_line(mp + Vector2(0, 5), mp + Vector2(0, 15), Color(1, 1, 1, 0.85), 1.5)
+		var tp := mp + Vector2(16, -14)
+		big_map_draw.draw_rect(Rect2(tp + Vector2(-4, -14), Vector2(font_bold.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x + 8, 20)), Color(0, 0, 0, 0.6))
+		big_map_draw.draw_string(font_bold, tp, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, WHITE)
 
 
 

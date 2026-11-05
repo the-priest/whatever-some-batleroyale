@@ -636,6 +636,38 @@ var _shape_cache: Dictionary = {}
 
 ## Collision made of a nature model's own triangles (only surfaces whose
 ## material name contains `filter`, e.g. "Bark"; all when empty).
+## Trunk radius at chest height, collider height (to the canopy) and the
+## trunk's sideways offset from the model origin (x only), unscaled.
+func _trunk_dims(name: String, canopy: float) -> Vector3:
+	var data := _nature_mesh(name)
+	var r := 0.0
+	var cx := 0.0
+	var cz := 0.0
+	var n := 0
+	var top := 0.0
+	if not data.is_empty():
+		var mesh: Mesh = data.mesh
+		for si in mesh.get_surface_count():
+			var mat := mesh.surface_get_material(si)
+			if mat == null or not mat.resource_name.contains("Bark"):
+				continue
+			var verts: PackedVector3Array = mesh.surface_get_arrays(si)[Mesh.ARRAY_VERTEX]
+			for v in verts:
+				top = maxf(top, v.y)
+				if v.y > 0.4 and v.y < 1.6:
+					cx += v.x
+					cz += v.z
+					n += 1
+			if n > 0:
+				cx /= float(n)
+				cz /= float(n)
+			for v in verts:
+				if v.y > 0.4 and v.y < 1.6:
+					r = maxf(r, Vector2(v.x - cx, v.z - cz).length())
+	var h := canopy if canopy < INF else top * 0.6
+	return Vector3(maxf(0.1, r * 0.9), maxf(1.5, h), cx)
+
+
 func _mesh_shape(name: String, filter: String, max_y := INF) -> ConcavePolygonShape3D:
 	var ck := name + "|" + filter + "|" + str(max_y)
 	if _shape_cache.has(ck):
@@ -710,12 +742,14 @@ func _find_mesh(node: Node) -> MeshInstance3D:
 
 func _scatter_trees() -> void:
 	var species := [
-		{"name": "CommonTree_3", "w": 0.26, "scale": Vector2(0.85, 1.35)},
-		{"name": "CommonTree_4", "w": 0.24, "scale": Vector2(0.85, 1.30)},
-		{"name": "CommonTree_5", "w": 0.18, "scale": Vector2(0.80, 1.20)},
-		{"name": "Pine_4", "w": 0.18, "scale": Vector2(0.80, 1.25)},
-		{"name": "Pine_5", "w": 0.10, "scale": Vector2(0.80, 1.20)},
-		{"name": "DeadTree_5", "w": 0.02, "scale": Vector2(0.42, 0.62)},
+		# Full-grown: 12-22 m broadleaves, 14-24 m pines (the kit's trees are
+		# saplings at scale 1).
+		{"name": "CommonTree_3", "w": 0.26, "scale": Vector2(1.25, 2.15)},
+		{"name": "CommonTree_4", "w": 0.24, "scale": Vector2(1.25, 2.1)},
+		{"name": "CommonTree_5", "w": 0.18, "scale": Vector2(1.3, 2.2)},
+		{"name": "Pine_4", "w": 0.18, "scale": Vector2(1.35, 2.3)},
+		{"name": "Pine_5", "w": 0.10, "scale": Vector2(1.4, 2.4)},
+		{"name": "DeadTree_5", "w": 0.02, "scale": Vector2(0.6, 0.9)},
 	]
 	var picks: Dictionary = {}
 	for s in species:
@@ -740,7 +774,7 @@ func _scatter_trees() -> void:
 		chance = clampf(chance, 0.0, 0.92)
 		if rng.randf() > chance:
 			continue
-		var spacing := 4.4 if forest > 0.62 else 6.5
+		var spacing := 5.6 if forest > 0.62 else 7.5
 		var cell := "%d_%d_%d" % [int(x / spacing), int(z / spacing), int(spacing)]
 		if grid.has(cell):
 			continue
@@ -753,8 +787,13 @@ func _scatter_trees() -> void:
 			if r <= acc:
 				chosen = s.name
 				break
-		placements.append({"name": chosen, "pos": Vector3(x, h - 0.15, z), "rot": rng.randf_range(0.0, TAU),
-			"scale": rng.randf_range(picks[chosen].scale.x, picks[chosen].scale.y)})
+		# Mostly mature trees, some young ones, the odd giant.
+		var sr: Vector2 = picks[chosen].scale
+		var k := pow(rng.randf(), 0.8)
+		var sc := lerpf(sr.x, sr.y, k)
+		if rng.randf() < 0.06:
+			sc *= 1.25
+		placements.append({"name": chosen, "pos": Vector3(x, h - 0.25, z), "rot": rng.randf_range(0.0, TAU), "scale": sc})
 
 	# Batch into 300 m tiles per species so frustum culling can do its job.
 	for p in placements:
@@ -784,7 +823,7 @@ func _scatter_trees() -> void:
 		var mm := MultiMesh.new()
 		mm.transform_format = MultiMesh.TRANSFORM_3D
 		mm.mesh = data.mesh
-		if key == "DeadTree_5":
+		if parts[0] == "DeadTree_5":
 			# The kit's dead bark is a cold blue-grey; weather it to warm grey.
 			var dm: Mesh = (data.mesh as Mesh).duplicate()
 			for si in dm.get_surface_count():
@@ -811,7 +850,7 @@ func _scatter_trees() -> void:
 		# species, scaled per tree): shots hit exactly the wood you can see.
 		# Above the lowest leaves the wood is hidden in the canopy anyway.
 		var canopy := INF
-		var leafy := _nature_mesh(key)
+		var leafy := _nature_mesh(parts[0])
 		if not leafy.is_empty():
 			var lm: Mesh = leafy.mesh
 			for si in lm.get_surface_count():
@@ -822,12 +861,18 @@ func _scatter_trees() -> void:
 					for v in lv:
 						low = minf(low, v.y)
 					canopy = minf(canopy, low + 0.8)
-		var bark := _mesh_shape(key, "Bark", canopy)
+		# One upright cylinder per trunk, sized to the bark at chest height:
+		# thousands of detailed bark meshes cost every walker and bullet far
+		# more than they add.
+		var dims := _trunk_dims(parts[0], canopy)
 		for it in list:
 			var sc: float = it.scale
+			var cyl := CylinderShape3D.new()
+			cyl.radius = maxf(0.12, dims.x * sc)
+			cyl.height = maxf(1.5, dims.y * sc)
 			var shape := CollisionShape3D.new()
-			shape.shape = bark
-			shape.transform = Transform3D(Basis(Vector3.UP, it.rot).scaled(Vector3.ONE * sc), it.pos)
+			shape.shape = cyl
+			shape.position = Vector3(it.pos.x + dims.z * sc * cos(it.rot), it.pos.y + cyl.height * 0.5, it.pos.z - dims.z * sc * sin(it.rot))
 			trunk_body.add_child(shape)
 			stats.colliders += 1
 	# Into the tree only once every shape is attached: adding shapes to a live

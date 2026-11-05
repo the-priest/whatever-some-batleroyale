@@ -29,7 +29,7 @@ const SNAP_RATE := 12.0
 const STATE_RATE := 20.0
 const MAX_PLAYERS := 8
 ## Shots further than this from a player are not sent to them at all.
-const SHOT_RANGE := 600.0
+const SHOT_RANGE := 1300.0
 ## One colour per player slot: lobby cards, name tags, map dots, markers.
 const COLORS := [
 	Color(0.96, 0.66, 0.24), Color(0.36, 0.80, 0.98), Color(0.52, 0.92, 0.44), Color(0.96, 0.42, 0.62),
@@ -507,6 +507,11 @@ func _resume(id: int, ghost_key: String, kept_state: bool) -> void:
 	else:
 		_setup.rpc_id(id, game.net_resume_setup(id))
 	_system_chat("%s RECONNECTED" % n)
+	if game.condemned_names.has(n):
+		# Leaving does not shake the Warden off.
+		var why := str(game.condemned_names[n])
+		game.anticheat.mark_condemned(id, why)
+		_ac_hunt.rpc_id(id, id, why)
 
 
 @rpc("authority", "call_remote", "reliable")
@@ -1037,6 +1042,54 @@ func send_vehicle_destroyed(id: int) -> void:
 func _vdestroyed(id: int) -> void:
 	if game != null:
 		game.net_vehicle_destroyed_received(id)
+
+
+## Anti-cheat: we caught ourselves (our own machine saw the cheat).
+func send_self_condemned(reason: String) -> void:
+	if not active:
+		return
+	if hosting:
+		_announce_hunt(1, reason)
+	else:
+		_ac_self.rpc_id(1, reason)
+
+
+@rpc("any_peer", "reliable")
+func _ac_self(reason: String) -> void:
+	if not hosting or game == null:
+		return
+	var pid := multiplayer.get_remote_sender_id()
+	game.anticheat.mark_condemned(pid, reason)
+	game.condemned_names[str(roster.get(pid, ""))] = reason
+	_announce_hunt(pid, reason)
+	game._hunt_other(pid, reason)
+
+
+func _announce_hunt(pid: int, reason: String) -> void:
+	for id in multiplayer.get_peers():
+		if id != pid:
+			_ac_hunt.rpc_id(id, pid, reason)
+
+
+## Host: the anti-cheat caught a client. Everyone is told; the cheater's own
+## machine sends the Warden.
+func send_hunt(pid: int, reason: String) -> void:
+	if not active or not hosting:
+		return
+	for id in multiplayer.get_peers():
+		_ac_hunt.rpc_id(id, pid, reason)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _ac_hunt(pid: int, reason: String) -> void:
+	if game == null:
+		return
+	if pid == my_id():
+		game.anticheat.mark_condemned(0, reason)
+		game._hunt_me(reason)
+	else:
+		game.anticheat.mark_condemned(pid, reason)
+		game._hunt_other(pid, reason)
 
 
 func send_airdrop(p: Vector2, ground: float) -> void:

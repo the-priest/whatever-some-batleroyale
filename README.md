@@ -13,7 +13,7 @@ Open the project in Godot 4.7 and press Play, or export with the presets in `exp
 | WASD | Move |
 | Shift | Sprint (hold breath while scoped) |
 | C / Ctrl | Crouch · dive while swimming |
-| Space | Jump · vault/climb over low walls, fences and crates · jump from plane · open parachute |
+| Space | Jump · vault/climb over low walls, fences and crates · dive in or out through a window · jump from plane · open parachute |
 | Left mouse | Fire |
 | Right mouse | Aim down sights |
 | R | Reload |
@@ -25,7 +25,7 @@ Open the project in Godot 4.7 and press Play, or export with the presets in `exp
 | H | Use the best healing item |
 | 4 / 5 / 6 | Bandage / medkit / energy drink |
 | G | Throw frag grenade |
-| M | Full map |
+| M | Full map (frees the mouse: left click marks a spot, e.g. where to land; right click removes it) |
 | M then mouse wheel | Zoom the map |
 | Esc | Pause menu (sensitivity, volume) |
 
@@ -40,7 +40,9 @@ hands, and you can hear someone healing nearby. You cannot heal while swimming.
 
 ## Gunplay
 
-- Every bullet is a simulated projectile with muzzle velocity and gravity drop, so long shots need
+- Every bullet is a simulated projectile with muzzle velocity and gravity drop, flying up to 1.6 km
+  (rifles and snipers) until it hits something; soldiers are drawn out to the same range, so long
+  shots are real. Long shots need
   holdover and moving targets need lead. Tracers show the path.
 - Each weapon has a learnable recoil pattern; part of the kick stays as muzzle climb you pull down.
 - Spread grows with movement, jumping and sustained fire, and shrinks when aiming or crouching.
@@ -180,3 +182,15 @@ door and up every stair, `--stairs` climbs every house and tower, `--botstairs` 
 to loot every upper floor and back out, `--camp` checks bots holding windows, `--shootthru`
 fires rays through every window and door opening on the map, `--fantasy` climbs the spire and
 the mushroom caps, and `--drive` tests the jeep.
+
+## Anti-cheat
+
+Each machine watches its own player and the host watches everyone: speed hacks (game clock
+against the system clock), time-scale changes, running faster than legs allow, teleporting,
+flying, firing faster than the gun cycles, magazines that refill themselves, health/armour/items
+above their limits, edited weapon stats, aim that snaps onto heads, hits through solid ground,
+impossible damage or range, and impossible kill streaks. Blatant cheats are caught at once;
+borderline signs have to repeat. A cheater is hunted by the Warden: the world darkens around them,
+it closes in faster whenever they look away, and when it reaches them its face fills the screen and
+they die. Everyone else sees it stalk them and is told why. Leaving and rejoining does not help.
+`--cheattest` (with `CHEAT=speed|rapid|ammo|hp|time|fly|legit`) checks each detection end to end.

@@ -107,6 +107,11 @@ var _last_best: LootPickup = null
 var _lit_loot: Array = []
 var _wind: AudioStreamPlayer3D = null
 var net: Net
+var anticheat: AntiCheat
+var wardens: Array = []
+var _dark_saved: Array = []
+## Host: names of players caught cheating this session (they stay hunted).
+var condemned_names: Dictionary = {}
 var music: Music
 var music_menu := 0.7
 var music_match := 0.35
@@ -176,6 +181,10 @@ func _ready() -> void:
 	net.name = "Net"
 	net.game = self
 	add_child(net)
+	anticheat = AntiCheat.new()
+	anticheat.name = "AntiCheat"
+	add_child(anticheat)
+	anticheat.setup(self)
 	lobby = LobbyUI.new()
 	lobby.setup(hud, net, self)
 	hud.root.add_child(lobby)
@@ -263,6 +272,10 @@ func _ready() -> void:
 		_run_drive_test()
 	elif OS.get_cmdline_user_args().has("--carexit"):
 		_run_carexit_test()
+	elif OS.get_cmdline_user_args().has("--cheattest"):
+		_run_cheat_test()
+	elif OS.get_cmdline_user_args().has("--windows"):
+		_run_window_test()
 	elif OS.get_cmdline_user_args().has("--lootaudit"):
 		_run_loot_audit()
 	elif OS.get_cmdline_user_args().has("--netstress"):
@@ -460,6 +473,7 @@ func _start_match() -> void:
 	hud.set_spectate("")
 	_cleanup_match()
 	player.reset_for_match()
+	anticheat.reset_match()
 	player.global_position = Vector3(0, 120, 0)
 
 	# Flight path across the island, offset so it does not always cross centre.
@@ -517,7 +531,8 @@ func _start_match() -> void:
 				if sp3 != Vector3.INF:
 					_spawn_loot(g2[0], g2[1], sp3)
 
-	print("[game] loot: %d items from %d spots (%d spots had no room) in %d ms  rejects=%s" % [loot_pool.size(), points.size(), skipped, Time.get_ticks_msec() - t_loot, str(spot_why)])
+	print("[game] loot: %d items from %d spots (%d spots had no room) in %d ms (finding spots %d ms)  rejects=%s" % [loot_pool.size(), points.size(), skipped, Time.get_ticks_msec() - t_loot, _spot_us / 1000, str(spot_why)])
+	_spot_us = 0
 	# Bots: most drop near a weapon so the first minute has real fights.
 	var weapon_spots: Array = []
 	for l in loot_pool:
@@ -625,7 +640,17 @@ const LOOT_GAP := 1.4
 ## the spot itself first), resting on the floor right below, not inside a
 ## wall or prop, nothing solid between it and `from`, and LOOT_GAP clear of
 ## other items on the same floor. Vector3.INF when there is none.
+var _spot_us := 0
+
+
 func _loot_spot(from: Vector3, rmin: float, rmax: float) -> Vector3:
+	var t0 := Time.get_ticks_usec()
+	var r := _loot_spot_body(from, rmin, rmax)
+	_spot_us += Time.get_ticks_usec() - t0
+	return r
+
+
+func _loot_spot_body(from: Vector3, rmin: float, rmax: float) -> Vector3:
 	var space := get_world_3d().direct_space_state
 	var tries: Array = []
 	if rmin <= 0.0:
@@ -643,6 +668,11 @@ func _loot_spot(from: Vector3, rmin: float, rmax: float) -> Vector3:
 	sq.collision_mask = 1
 	for off in tries:
 		var c: Vector3 = from + off
+		# Cheapest test first: most candidates are simply too close to loot
+		# already placed, and need no physics queries at all.
+		if _spot_taken(c):
+			_why("taken")
+			continue
 		if off != Vector3.ZERO:
 			# Same room: nothing between the two at knee height.
 			var los := PhysicsRayQueryParameters3D.create(from + Vector3.UP * 0.35, c + Vector3.UP * 0.35, 1)
@@ -723,6 +753,7 @@ func _spawn_loot(kind: String, id: String, pos: Vector3, mag := -1, reserve := -
 
 func _cleanup_match() -> void:
 	_net_setup_ok = false
+	_clear_wardens()
 	if player != null and player.mode == Player.Mode.VEHICLE:
 		player.vehicle = null
 		player.mode = Player.Mode.PLANE
@@ -1437,7 +1468,11 @@ func _update_mouse_capture() -> void:
 	if get_tree().paused:
 		return
 	if phase == "playing" or phase == "plane":
-		if Input.mouse_mode == Input.MOUSE_MODE_VISIBLE and Input.is_action_just_pressed("fire"):
+		# The open map keeps the cursor (clicks there mark the map).
+		if hud.map_open():
+			if Input.mouse_mode != Input.MOUSE_MODE_VISIBLE:
+				Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		elif Input.mouse_mode == Input.MOUSE_MODE_VISIBLE and Input.is_action_just_pressed("fire") and not hud.chat_open:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	elif phase == "menu" or phase == "end":
 		if Input.mouse_mode != Input.MOUSE_MODE_VISIBLE:
@@ -1631,6 +1666,8 @@ func _on_notice(text: String) -> void:
 
 func _on_bot_eliminated(victim: Bot, killer: String) -> void:
 	alive = maxi(0, alive - 1)
+	if net_on() and net.hosting and victim.last_killer_node is Bot and is_instance_valid(victim.last_killer_node) and (victim.last_killer_node as Bot).is_human:
+		anticheat.host_peer_kill((victim.last_killer_node as Bot).peer_id)
 	if net_on() and net.hosting:
 		var src0 = victim.last_killer_node
 		var kkey := node_key(src0)
@@ -1743,6 +1780,8 @@ func on_player_damaged(_amount: float, _from: Vector3) -> void:
 func on_player_hit(_pos: Vector3, dmg: float, _headshot: bool) -> void:
 	# No floating numbers: the hitmarker and sound are the feedback.
 	damage_dealt += dmg
+	if player != null:
+		anticheat.on_local_hit(player.global_position.distance_to(_pos), _headshot)
 
 
 ## Every gunshot: nearby bots hear it, distant ones show on the map.
@@ -2091,6 +2130,7 @@ func clamp_airborne(pos: Vector3, vel: Vector3, delta: float) -> Vector3:
 func respawn_player() -> void:
 	if player == null:
 		return
+	anticheat.grace(3.0)
 	var p := _random_ground_point(900.0)
 	player.global_position = p + Vector3(0, 3, 0)
 	player.velocity = Vector3.ZERO
@@ -2725,6 +2765,30 @@ func _run_shot() -> void:
 				p._update_weapon(1.0 / 60.0)
 				p._update_camera(1.0 / 60.0)
 				await get_tree().process_frame
+	if args.has("--warden"):
+		# The Warden, posed in front of the camera; --scare=k freezes the jumpscare.
+		var w := Warden.new()
+		w.game = self
+		w.target = p
+		w.local_victim = false
+		add_child(w)
+		var fwd := Basis(Vector3.UP, p.yaw) * Vector3(0, 0, -1)
+		var wp := p.global_position + fwd * 13.0
+		wp.y = terrain.height_at(wp.x, wp.z)
+		w.global_position = wp
+		w.look_at(Vector3(p.global_position.x, wp.y, p.global_position.z), Vector3.UP)
+		for i in 3:
+			await get_tree().process_frame
+		w.set_process(false)
+		for a in args:
+			if a.begins_with("--scare="):
+				w._scare_t = float(a.substr(8))
+				w._jumpscare(0.0)
+				hud.set_scare(clampf((w._scare_t - 0.25) / 0.5, 0.0, 1.0))
+		if args.has("--dread"):
+			hud.set_dread(0.7)
+		for i in 3:
+			await get_tree().process_frame
 	if args.has("--fire"):
 		# One volley right before capture so tracers are in flight in the frame.
 		get_tree().paused = false
@@ -2777,6 +2841,23 @@ func _run_shot() -> void:
 # --------------------------------------------------------------- smoke test --
 func _run_smoke() -> void:
 	print("[smoke] lobby ready, world loot=", world.loot_points.size())
+	# Tree trunks must stop bullets and bodies.
+	var tcol := world.get_node_or_null("TreeCollision")
+	if tcol != null:
+		await get_tree().physics_frame
+		var tsp := get_world_3d().direct_space_state
+		var th := 0
+		var tn := 0
+		for c in tcol.get_children():
+			if tn >= 200:
+				break
+			tn += 1
+			var tp: Vector3 = (c as Node3D).global_position + Vector3.UP * 1.2
+			var tq := PhysicsRayQueryParameters3D.create(tp + Vector3(3, 0, 0), tp - Vector3(3, 0, 0), 1)
+			var thit := tsp.intersect_ray(tq)
+			if not thit.is_empty() and str((thit["collider"] as Node).name) == "TreeCollision":
+				th += 1
+		print("[smoke] tree trunks hit by rays: %d / %d" % [th, tn])
 	await get_tree().process_frame
 	var tb := world.get_node_or_null("TerrainCollision")
 	print("[smoke] terrain node=", tb != null, " shapes=", (tb.get_child_count() if tb != null else -1), " layer=", (tb.collision_layer if tb != null else -1))
@@ -3113,6 +3194,7 @@ func _census() -> String:
 
 
 func _land_player_now() -> void:
+	anticheat.grace(2.0)
 	_player_jump(true)
 	var drop := _random_ground_point(250.0)
 	player.global_position = drop + Vector3(0, 0.5, 0)
@@ -3503,6 +3585,7 @@ func net_start_match(setup: Dictionary) -> void:
 	hud.set_spectate("")
 	_cleanup_match()
 	player.reset_for_match()
+	anticheat.reset_match()
 	net.squad = bool(setup.get("squad", true))
 	var path: Array = setup["plane"]
 	plane_start = path[0]
@@ -3659,6 +3742,8 @@ func net_apply_player_state(sender: int, st: Array) -> void:
 	var yaw: float = st[1]
 	# The player's yaw faces down -Z of its basis like a bot's.
 	(h as Bot).apply_net(st[0], yaw, int(st[3]), int(st[4]), str(st[5]), int(st[6]), int(st[7]), float(st[2]))
+	if net.hosting:
+		anticheat.host_peer_state(sender, st[0], int(st[3]) == Bot.State.GROUND, st.size() >= 13 and int(st[11]) >= 0)
 	if st.size() >= 13:
 		_seat_remote(h as Bot, int(st[11]), int(st[12]))
 	if st.size() >= 11:
@@ -3743,6 +3828,9 @@ func net_bot_hit(sender: int, idx: int, dmg: float, pos: Vector3, headshot: bool
 	if idx < 0 or idx >= bots.size() or not is_instance_valid(bots[idx]):
 		return
 	var shooter = humans.get(sender)
+	if anticheat.is_condemned(sender):
+		return
+	anticheat.host_peer_hit(sender, (shooter as Node3D).global_position if shooter != null and is_instance_valid(shooter) else Vector3.INF, (bots[idx] as Node3D).global_position, dmg, get_world_3d())
 	(bots[idx] as Bot).take_damage(dmg, pos, headshot, shooter if shooter != null and is_instance_valid(shooter) else _net_dummy)
 
 
@@ -3895,6 +3983,92 @@ func net_match_over(winner_key: String, winner_name: String, squad_win: bool) ->
 
 
 ## Host: a client dropped out mid-match.
+# ------------------------------------------------------------ the warden --
+## The anti-cheat condemned someone. who = 0 is us; otherwise a peer id
+## (the host caught a client, or the network told us about one).
+func on_cheater_condemned(who: int, reason: String) -> void:
+	if who == 0 or (net.active and who == net.my_id()):
+		_hunt_me(reason)
+		if net_on():
+			net.send_self_condemned(reason)
+		return
+	if net_on() and net.hosting:
+		condemned_names[str(net.roster.get(who, ""))] = reason
+		net.send_hunt(who, reason)
+	_hunt_other(who, reason)
+
+
+## Someone else is hunted: everyone watches the Warden stalk them.
+func _hunt_other(who: int, reason: String) -> void:
+	var h = humans.get(who)
+	var nm := str(net.roster.get(who, "A PLAYER"))
+	hud.chat_add("", Color(1.0, 0.25, 0.2), "%s WAS CAUGHT CHEATING (%s). THE WARDEN IS COMING FOR THEM." % [nm, reason.to_upper()], true)
+	print("[anticheat] %s CAUGHT CHEATING: %s" % [nm, reason])
+	if h == null or not is_instance_valid(h) or not (h as Bot).alive:
+		return
+	var w := Warden.new()
+	w.game = self
+	w.target = h
+	w.local_victim = false
+	add_child(w)
+	w.global_position = (h as Node3D).global_position - (h as Node3D).global_basis.z * -30.0
+	wardens.append(w)
+
+
+## We are the cheater: the light goes, and something comes.
+func _hunt_me(reason: String) -> void:
+	anticheat.mark_condemned(0, reason)
+	if player == null or not player.alive or phase != "playing":
+		return
+	for w in wardens:
+		if is_instance_valid(w) and (w as Warden).local_victim:
+			return
+	var w := Warden.new()
+	w.game = self
+	w.target = player
+	w.local_victim = true
+	w.reason = reason
+	add_child(w)
+	w.global_position = w._behind(player, 38.0)
+	wardens.append(w)
+	w.caught.connect(func(): hud.show_big("CHEATING DETECTED  ·  %s" % reason.to_upper(), Color(1.0, 0.15, 0.1), 6.0))
+	hud.show_big("SOMETHING HAS NOTICED YOU", Color(0.85, 0.08, 0.05), 3.5)
+	sfx.play_2d("warden_whisper", 0.0, 0.0)
+	_darken_world(true)
+
+
+## The world drains of colour and light while the Warden hunts you.
+func _darken_world(on: bool) -> void:
+	if world == null or world.environment == null:
+		return
+	var env: Environment = world.environment
+	if on and _dark_saved.is_empty():
+		_dark_saved = [env.adjustment_brightness, env.adjustment_saturation, env.fog_density, env.fog_light_color]
+		var tw := create_tween()
+		tw.set_parallel(true)
+		tw.tween_property(env, "adjustment_brightness", 0.55, 4.0)
+		tw.tween_property(env, "adjustment_saturation", 0.25, 4.0)
+		tw.tween_property(env, "fog_density", 0.006, 4.0)
+		tw.tween_property(env, "fog_light_color", Color(0.12, 0.05, 0.06), 4.0)
+	elif not on and not _dark_saved.is_empty():
+		env.adjustment_brightness = _dark_saved[0]
+		env.adjustment_saturation = _dark_saved[1]
+		env.fog_density = _dark_saved[2]
+		env.fog_light_color = _dark_saved[3]
+		_dark_saved = []
+
+
+func _clear_wardens() -> void:
+	for w in wardens:
+		if is_instance_valid(w):
+			w.queue_free()
+	wardens.clear()
+	_darken_world(false)
+	if hud != null:
+		hud.set_dread(0.0)
+		hud.set_scare(0.0)
+
+
 # ------------------------------------------------------- reconnecting ----
 var _last_setup: Dictionary = {}
 ## Host: what each client last said it carries (for a rejoin after a crash).
@@ -4078,6 +4252,7 @@ func net_resume_setup(id: int) -> Dictionary:
 
 ## Client: we rejoined a running match after restarting the game.
 func _apply_resume(r: Dictionary) -> void:
+	anticheat.grace(5.0)
 	_player_jump(true)
 	if plane != null and is_instance_valid(plane):
 		plane.queue_free()
@@ -4252,6 +4427,12 @@ func _run_net_stress(as_host: bool) -> void:
 		if pad.type == "town":
 			meet = pad.center
 			break
+	anticheat.grace(4.0)
+	var idle := OS.get_environment("NET_IDLE") == "1"
+	var cheat_at := _env_f("NET_CHEAT_AT", -1.0)
+	var cheat_st := {"caught": "", "died": ""}
+	anticheat.condemned.connect(func(w, r): cheat_st["caught"] = r; print("[stress] %s anticheat condemned %d: %s" % [tag, w, r]))
+	player.died.connect(func(k): cheat_st["died"] = k; print("[stress] %s died, killer=%s" % [tag, k]))
 	if not rejoined:
 		var spot := ground_at(Vector3(meet.x + randf_range(-40, 40), 200.0, meet.y + randf_range(-40, 40)))
 		player.global_position = spot + Vector3(0, 1.0, 0)
@@ -4284,7 +4465,15 @@ func _run_net_stress(as_host: bool) -> void:
 			get_tree().quit()
 			return
 		var p := player
-		if p.alive and p.mode == Player.Mode.GROUND:
+		if cheat_at > 0.0 and t >= cheat_at and p.alive:
+			# Speed hack: shove the body along far faster than legs can.
+			p.global_position += (Basis(Vector3.UP, p.yaw) * Vector3(0, 0, -1)) * 6.0
+		if idle:
+			if p.alive and p.mode == Player.Mode.GROUND:
+				p.test_input = Vector2(0, -0.6)
+				if int(t / tick) % 16 == 0:
+					p.yaw += 0.6
+		elif p.alive and p.mode == Player.Mode.GROUND:
 			dir_t -= tick
 			if dir_t <= 0.0:
 				dir_t = randf_range(1.5, 4.0)
@@ -4366,7 +4555,11 @@ func _run_net_stress(as_host: bool) -> void:
 				if is_instance_valid(b) and b.alive:
 					bots_alive += 1
 			print("[stress] %s wall=%.2f t=%.0f phase=%s alive=%d bots=%d zone=%.1f ping=%d fps=%d id=%d pos=%.1f,%.1f,%.1f mode=%d hp=%d loot=%d humans=%s" % [tag, Time.get_unix_time_from_system(), t, phase, alive, bots_alive, zone.radius if zone != null else -1.0, net.ping_of(net.my_id()), Engine.get_frames_per_second(), net.my_id(), p.global_position.x, p.global_position.y, p.global_position.z, p.mode, int(p.hp), loot_pool.size(), " ".join(hs)])
-	print("[stress] %s END t=%.0f phase=%s left=%s" % [tag, t, phase, st["left"]])
+	var wn := 0
+	for w in wardens:
+		if is_instance_valid(w):
+			wn += 1
+	print("[stress] %s END t=%.0f phase=%s left=%s caught=%s died=%s wardens=%d chat_hunts=%s" % [tag, t, phase, st["left"], cheat_st["caught"], cheat_st["died"], wn, str(anticheat._condemned)])
 	if as_host:
 		await get_tree().create_timer(2.0).timeout
 	net.leave("")
@@ -4814,6 +5007,7 @@ var _veh_enter_frame := -100000
 
 
 func _exit_vehicle() -> void:
+	anticheat.grace(1.5)
 	var v: Vehicle = player.vehicle
 	if v == null or not is_instance_valid(v):
 		_leave_seat()
@@ -5253,6 +5447,173 @@ func _apply_graphics() -> void:
 		world.grass.set_radius([0.0, 26.0, 38.0, 52.0][graphics_quality])
 	print("[gfx] renderer=%s quality=%s" % [RenderingServer.get_current_rendering_method(), Graphics.NAMES[graphics_quality]])
 
+
+
+## Cheat in one way (CHEAT=speed|rapid|ammo|hp|time|fly|legit) and check the
+## anti-cheat catches it and the Warden finishes the job. "legit" plays
+## normally (running, jumping, shooting, vaulting) and must not be caught.
+func _run_cheat_test() -> void:
+	var kind := OS.get_environment("CHEAT") if OS.get_environment("CHEAT") != "" else "speed"
+	_start_match()
+	await get_tree().physics_frame
+	_land_player_now()
+	for bt in bots:
+		if is_instance_valid(bt):
+			bt.set_physics_process(false)
+	if zone != null:
+		zone.set_process(false)
+	var p := player
+	p.give_weapon("rifle")
+	for i in 240:
+		await get_tree().physics_frame
+	var t0 := Time.get_ticks_msec()
+	var st := {"caught": -1.0, "died": false, "killer": ""}
+	anticheat.condemned.connect(func(_w, r): st["caught"] = (Time.get_ticks_msec() - t0) / 1000.0; print("[cheat] CONDEMNED after %.1fs: %s" % [st["caught"], r]))
+	print("[cheat] cheating: ", kind)
+	var fwd := Basis(Vector3.UP, p.yaw) * Vector3(0, 0, -1)
+	for i in 600:
+		match kind:
+			"speed":
+				p.test_input = Vector2(0, -1)
+				p.global_position += fwd * 0.42
+			"rapid":
+				p.fire_timer = 0.0
+				p.reloading = false
+				p.mags[p.current_id()] = 30
+				p._try_fire()
+			"ammo":
+				if i % 5 == 0:
+					p.fire_timer = 0.0
+					p._try_fire()
+					p.mags[p.current_id()] = 30
+			"hp":
+				p.hp = 250.0
+			"time":
+				Engine.time_scale = 1.6
+			"fly":
+				p.global_position.y += 0.0 if i > 30 else 0.4
+				p.velocity = Vector3.ZERO
+			"legit":
+				p.test_input = Vector2(sin(i * 0.02), -1)
+				p.sprinting = true
+				if i % 90 == 0:
+					p.test_jump = true
+				if i % 7 == 0 and p.current_mag() > 0:
+					p.fire_timer = 0.0
+					p._try_fire()
+				if p.current_mag() <= 0 and not p.reloading:
+					p.ammo[Weapons.caliber(p.current_id())] = 90
+					p.start_reload()
+				p.yaw += 0.01
+		await get_tree().physics_frame
+		if i % 120 == 0:
+			print("[cheat]   t=%d enabled=%s phase=%s mode=%d grace=%.1f mode_t=%.1f hist=%d pos=%s" % [i, anticheat.enabled, phase, p.mode, anticheat._grace, anticheat._mode_t, anticheat._hist.size(), str(p.global_position.round())])
+		if float(st["caught"]) >= 0.0:
+			break
+	Engine.time_scale = 1.0
+	p.test_input = Vector2.ZERO
+	var w_seen := false
+	p.died.connect(func(k): st["died"] = true; st["killer"] = k)
+	var t1 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t1 < 40000 and not bool(st["died"]) and float(st["caught"]) >= 0.0:
+		await get_tree().process_frame
+		for w in wardens:
+			if is_instance_valid(w):
+				if not w_seen:
+					print("[cheat] warden spawned %.0f m away" % (w as Node3D).global_position.distance_to(p.global_position))
+				w_seen = true
+	var caught := float(st["caught"]) >= 0.0
+	var ok := (caught and w_seen and bool(st["died"]) and str(st["killer"]) == "THE WARDEN") if kind != "legit" else not caught
+	print("[cheat] %s: caught=%s warden=%s died=%s killer=%s -> %s" % [kind, caught, w_seen, st["died"], st["killer"], "PASS" if ok else "FAIL"])
+	for l in anticheat.report():
+		print("[cheat]   ", l)
+	get_tree().quit()
+
+
+## Jump through every ground-floor window: in from outside, out from inside.
+func _run_window_test() -> void:
+	_start_match()
+	await get_tree().physics_frame
+	_land_player_now()
+	for bt in bots:
+		if is_instance_valid(bt):
+			bt.set_physics_process(false)
+	if zone != null:
+		zone.set_process(false)
+	player.spawn_protect = 1.0e9
+	var space := get_world_3d().direct_space_state
+	var tried := 0
+	var ok_in := 0
+	var ok_out := 0
+	var why: Dictionary = {}
+	var limit := int(_env_f("WIN_LIMIT", 60.0))
+	for h in world.villages.houses:
+		if tried >= limit:
+			break
+		var hb := Basis(Vector3.UP, float(h.yaw))
+		var c2: Vector2 = h.center
+		var o := Vector3(c2.x, float(h.pad), c2.y)
+		var seen: Dictionary = {}
+		for op in h.get("openings", []):
+			var l: Vector2 = op
+			var key := "%d,%d" % [int(l.x * 10), int(l.y * 10)]
+			if seen.has(key):
+				continue
+			seen[key] = true
+			var nl := Vector3(0, 0, signf(l.y)) if absf(absf(l.y) - float(h.d) * 0.5) < 0.3 else Vector3(signf(l.x), 0, 0)
+			var n := hb * nl
+			var wc := o + hb * Vector3(l.x, 0.0, l.y)
+			# Doors reach the floor: skip them. So are upper-floor windows
+			# over a solid ground-floor wall.
+			var dq := PhysicsRayQueryParameters3D.create(wc + n * 0.8 + Vector3.UP * 0.5, wc - n * 0.8 + Vector3.UP * 0.5, 1)
+			if space.intersect_ray(dq).is_empty():
+				continue
+			var wq := PhysicsRayQueryParameters3D.create(wc + n * 0.8 + Vector3.UP * 1.3, wc - n * 0.8 + Vector3.UP * 1.3, 1)
+			if not space.intersect_ray(wq).is_empty():
+				continue
+			tried += 1
+			for dir in [1.0, -1.0]:
+				var start: Vector3 = wc + n * 0.75 * float(dir)
+				var g := ground_at(start + Vector3.UP * 1.2) if dir > 0.0 else Vector3(start.x, float(h.pad) + 0.05, start.z)
+				player.mode = Player.Mode.GROUND
+				player.velocity = Vector3.ZERO
+				player.global_position = g + Vector3.UP * 0.05
+				var face: Vector3 = -n * float(dir)
+				player.yaw = atan2(-face.x, -face.z)
+				for i in 3:
+					await get_tree().physics_frame
+				var pre_pos := player.global_position
+				if Vector2(pre_pos.x - g.x, pre_pos.z - g.z).length() > 0.25:
+					# Furniture or stairs in front of this window: nobody can stand there.
+					why["spot blocked"] = int(why.get("spot blocked", 0)) + 1
+					continue
+				var did := player._try_window_vault()
+				for i in 50:
+					await get_tree().physics_frame
+				var through: bool = (player.global_position - wc).dot(n) * float(dir) < -0.25
+				if did and through:
+					if dir > 0.0:
+						ok_in += 1
+					else:
+						ok_out += 1
+				else:
+					var r := player.vault_fail if not did else "stuck"
+					var k2 := ("in " if dir > 0.0 else "out ") + r
+					why[k2] = int(why.get(k2, 0)) + 1
+					if int(why[k2]) <= 3:
+						# What the rays see at each height in front of us.
+						var f2 := -n * float(dir)
+						var feet2 := g + Vector3.UP * 0.05
+						var hits := []
+						for hh in [0.3, 0.55, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0]:
+							var q2 := PhysicsRayQueryParameters3D.create(feet2 + Vector3.UP * hh, feet2 + Vector3.UP * hh + f2 * 2.0, 1 | 4)
+							q2.exclude = [player.get_rid()]
+							var hr := space.intersect_ray(q2)
+							hits.append("%.1f:%s" % [hh, ("%.2f %s" % [(Vector3(hr["position"]) - feet2).dot(f2), str((hr["collider"] as Node).name).substr(0, 10)]) if not hr.is_empty() else "-"])
+						print("[windows]   %s at %s house %s g=%s player=%s  %s" % [k2, str(wc.snapped(Vector3.ONE * 0.01)), str(h.get("style", "")), str(g.snapped(Vector3.ONE * 0.01)), str(player.global_position.snapped(Vector3.ONE * 0.01)), " ".join(hits)])
+	var blocked := int(why.get("spot blocked", 0))
+	print("[windows] tried %d windows: in %d/%d  out %d/%d  (attempts from a blocked spot: %d)  fails=%s" % [tried, ok_in, tried, ok_out, tried, blocked, str(why)])
+	get_tree().quit()
 
 
 func _run_mantle_test() -> void:

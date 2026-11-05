@@ -170,21 +170,30 @@ func _build_gear(pal: Array) -> void:
 	# Backpack.
 	var back := _attach("spine_02", Transform3D(Basis.IDENTITY, Vector3(0, 1.18, 0.0)))
 	var pack := _mesh(back, _box(Vector3(0.30, 0.40, 0.15)), pal[1], Vector3(0, 0.02, 0.2), 0.9)
+	_extra_kit.append(back)
 	_mesh(pack, _box(Vector3(0.26, 0.08, 0.06)), pal[1].darkened(0.25), Vector3(0, 0.18, 0.06))
 	# Belt with pouches.
 	var hips := _attach("pelvis", Transform3D(Basis.IDENTITY, Vector3(0, 0.98, 0.0)))
+	_extra_kit.append(hips)
 	_mesh(hips, _box(Vector3(0.36, 0.06, 0.25)), Color(0.12, 0.12, 0.11), Vector3.ZERO)
 	_mesh(hips, _box(Vector3(0.08, 0.1, 0.06)), pal[1], Vector3(0.18, -0.03, -0.06))
+
+
+var _helmet_on := false
+var _vest_on := false
+var _extra_kit: Array = []
 
 
 func set_gear(vest_level: int, helmet_level: int) -> void:
 	if vest == null:
 		return
-	vest.visible = vest_level > 0
+	_vest_on = vest_level > 0
+	_helmet_on = helmet_level > 0
+	vest.visible = _vest_on and _kit_shown
 	if vest_level > 0:
 		(vest.material_override as StandardMaterial3D).albedo_color = VEST_COLORS[clampi(vest_level - 1, 0, 2)]
-	helmet.visible = helmet_level > 0
-	cap.visible = helmet_level <= 0
+	helmet.visible = _helmet_on and _kit_shown
+	cap.visible = not _helmet_on and _kit_shown
 
 
 # --------------------------------------------------------------- animation ----
@@ -466,6 +475,22 @@ func muzzle_position() -> Vector3:
 
 
 var _lod_t := 0.0
+var _kit_shown := true
+
+
+## Helmet, vest, pack and belt are a few pixels past 300 m: skip them.
+func _set_kit_visible(v: bool) -> void:
+	for n in [helmet, cap, vest]:
+		if n != null:
+			(n as Node3D).set_meta("kit_hidden", not v)
+	if helmet != null:
+		helmet.visible = v and _helmet_on
+	if cap != null:
+		cap.visible = v and not _helmet_on
+	if vest != null:
+		vest.visible = v and _vest_on
+	for n in _extra_kit:
+		(n as Node3D).visible = v
 var _anim_acc := 0.0
 var _anim_frame := 0
 var _anim_every := 1
@@ -491,21 +516,26 @@ func _process_body(delta: float) -> void:
 			_drink_k = move_toward(_drink_k, 1.0 if _arms == "energy" else 0.0, delta * float(_anim_every) * 2.5)
 			if _drink_k > 0.0 and not _dead:
 				_drink_ik(_drink_k)
-	# Far away: stop animating and stop drawing. You could not make out a
-	# soldier past ~260 m, and 50 animated rigs are not free.
+	# Distance LOD: soldiers stay visible out to sniping range (an 8x scope
+	# makes out a figure at a kilometre), but far ones animate rarely and
+	# their small kit is not drawn.
 	_lod_t -= delta
 	if _lod_t <= 0.0 and not _dead:
 		_lod_t = 0.4 + randf() * 0.2
 		var cam := get_viewport().get_camera_3d()
 		if cam != null and model != null:
 			var dist := cam.global_position.distance_to(global_position)
-			_anim_every = 1 if dist < 60.0 else (2 if dist < 120.0 else 3)
-			var near := dist < 260.0
+			_anim_every = 1 if dist < 60.0 else (2 if dist < 120.0 else (3 if dist < 260.0 else (6 if dist < 600.0 else 12)))
+			var near := dist < 1600.0
 			if near != model.visible:
 				model.visible = near
 				gun_holder.visible = near
 				if tree != null:
 					tree.active = near
+			var kit := dist < 300.0
+			if kit != _kit_shown:
+				_kit_shown = kit
+				_set_kit_visible(kit)
 	if _throw_hold > 0.0:
 		_throw_hold -= delta
 		if _throw_hold <= 0.0:

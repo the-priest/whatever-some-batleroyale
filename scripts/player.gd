@@ -24,7 +24,7 @@ const CROUCH := 2.7
 const ACCEL := 42.0
 const AIR_ACCEL := 9.0
 const GRAVITY := 24.0
-const JUMP := 5.0
+const JUMP := 6.3
 const EYE := 1.62
 const CROUCH_EYE := 1.05
 const TERMINAL := -58.0
@@ -208,6 +208,11 @@ func _ready() -> void:
 
 
 ## Chat (or any text box) owns the keyboard while it is open.
+## The big map is open: clicks there are for the map, not the trigger.
+func _map_open() -> bool:
+	return game != null and game.get("hud") != null and game.hud.map_open()
+
+
 func _locked() -> bool:
 	return game != null and game.get("input_locked") == true
 
@@ -508,7 +513,7 @@ func _ground(delta: float) -> void:
 	else:
 		velocity.y -= GRAVITY * delta
 		_coyote = maxf(0.0, _coyote - delta)
-	if _ajp("jump") and not in_water and velocity.y > -6.0 and _try_mantle():
+	if _ajp("jump") and not in_water and velocity.y > -6.0 and (_try_mantle() or _try_window_vault()):
 		return
 	if _ajp("jump") and _coyote > 0.0 and not in_water:
 		velocity.y = JUMP
@@ -591,7 +596,7 @@ func _ground(delta: float) -> void:
 	if _ajp("grenade"):
 		throw_grenade()
 	_tick_boost(delta)
-	aiming = _ap("aim") and not reloading and not healing and not swimming
+	aiming = _ap("aim") and not reloading and not healing and not swimming and not _map_open()
 	fire_timer = maxf(0.0, fire_timer - delta)
 	if reloading:
 		reload_timer -= delta
@@ -605,7 +610,7 @@ func _ground(delta: float) -> void:
 	_since_shot += delta
 	if _since_shot > 0.32:
 		_spray_n = 0
-	if has_gun() and not swimming:
+	if has_gun() and not swimming and not _map_open():
 		want_fire = _ap("fire") if is_auto() else _ajp("fire")
 	if _throw_t >= 0.0:
 		want_fire = false
@@ -732,7 +737,90 @@ func _try_mantle() -> bool:
 	return true
 
 
+## Jump at a window: up onto the sill and through, ducking under the top.
+## Works both ways and from upper floors (you drop out the far side).
+func _try_window_vault() -> bool:
+	var space := get_world_3d().direct_space_state
+	var fwd := Basis(Vector3.UP, yaw) * Vector3(0, 0, -1)
+	var side := Vector3(-fwd.z, 0, fwd.x)
+	var feet := global_position
+	var ex: Array[RID] = [get_rid()]
+	var ray := func(a: Vector3, b: Vector3) -> Dictionary:
+		var q := PhysicsRayQueryParameters3D.create(a, b, 1 | 4)
+		q.exclude = ex
+		return space.intersect_ray(q)
+	# Wall right in front at waist height (the sill under the opening).
+	var low: Dictionary = ray.call(feet + Vector3.UP * 0.55, feet + Vector3.UP * 0.55 + fwd * 1.2)
+	if low.is_empty() or absf(Vector3(low.get("normal", Vector3.UP)).y) > 0.4:
+		vault_fail = "no wall"
+		return false
+	var dist: float = (Vector3(low["position"]) - feet).dot(fwd)
+	# Lowest clear height through the wall.
+	var open_y := -1.0
+	var hy := 0.7
+	while hy <= 1.8:
+		if (ray.call(feet + Vector3.UP * hy, feet + Vector3.UP * hy + fwd * (dist + 0.5)) as Dictionary).is_empty():
+			open_y = hy
+			break
+		hy += 0.1
+	if open_y < 0.0:
+		vault_fail = "no opening"
+		return false
+	# The opening must let a ducking body through: tall and wide enough.
+	if not (ray.call(feet + Vector3.UP * (open_y + 0.55), feet + Vector3.UP * (open_y + 0.55) + fwd * (dist + 0.5)) as Dictionary).is_empty():
+		vault_fail = "too low"
+		return false
+	for sx in [-0.26, 0.26]:
+		var o: Vector3 = feet + side * sx + Vector3.UP * (open_y + 0.25)
+		if not (ray.call(o, o + fwd * (dist + 0.5)) as Dictionary).is_empty():
+			vault_fail = "too narrow"
+			return false
+	# Sill top and wall thickness.
+	var probe := feet + fwd * (dist + 0.08) + Vector3.UP * (open_y + 0.1)
+	var top: Dictionary = ray.call(probe, probe - Vector3.UP * 0.6)
+	var sill_y: float = float(top["position"].y) if not top.is_empty() else feet.y + open_y - 0.05
+	var back: Dictionary = ray.call(feet + fwd * (dist + 0.9) + Vector3.UP * 0.55, feet + Vector3.UP * 0.55)
+	var thick := 0.25
+	if not back.is_empty():
+		thick = clampf((Vector3(back["position"]) - feet).dot(fwd) - dist, 0.05, 0.8)
+	# Room on the far side for the whole body.
+	var beyond := feet + fwd * (dist + thick + 0.5)
+	beyond.y = sill_y + 0.08
+	var cap := CapsuleShape3D.new()
+	cap.radius = 0.3
+	cap.height = 1.0
+	var sq := PhysicsShapeQueryParameters3D.new()
+	sq.shape = cap
+	sq.collision_mask = 1 | 4
+	sq.exclude = ex
+	sq.transform = Transform3D(Basis.IDENTITY, beyond + Vector3.UP * 0.55)
+	if not space.intersect_shape(sq, 1).is_empty():
+		vault_fail = "no room"
+		return false
+	var at_sill := feet + fwd * maxf(0.0, dist - 0.35)
+	at_sill.y = sill_y + 0.08
+	_mantle = [feet, beyond, 0.0, 0.42 + clampf(sill_y - feet.y, 0.0, 1.5) * 0.2, at_sill]
+	velocity = Vector3.ZERO
+	cancel_heal()
+	add_trauma(0.1)
+	land_dip = 0.3
+	if game != null and game.sfx != null:
+		game.sfx.play_2d("gear_rattle", -6.0, 0.1)
+		game.sfx.play_2d("step_wood_%d" % (randi() % 4 + 1), -7.0, 0.05)
+	return true
+
+
+var vault_fail := ""
+
+
+func vaulting_window() -> bool:
+	return _mantle.size() > 4
+
+
 func _do_mantle(delta: float) -> void:
+	if _mantle.size() > 4:
+		_do_window_vault(delta)
+		return
 	var from: Vector3 = _mantle[0]
 	var to: Vector3 = _mantle[1]
 	var dur: float = _mantle[3]
@@ -748,6 +836,30 @@ func _do_mantle(delta: float) -> void:
 		_mantle = []
 		global_position = to
 		_was_on_floor = true
+
+
+func _do_window_vault(delta: float) -> void:
+	var from: Vector3 = _mantle[0]
+	var to: Vector3 = _mantle[1]
+	var mid: Vector3 = _mantle[4]
+	var t: float = minf(1.0, float(_mantle[2]) + delta / float(_mantle[3]))
+	_mantle[2] = t
+	# Step up to the sill, then dive through low and come out the far side.
+	if t < 0.45:
+		var k := smoothstep(0.0, 1.0, t / 0.45)
+		var p := from.lerp(mid, k)
+		p.y = lerpf(from.y, mid.y, smoothstep(0.0, 0.8, t / 0.45))
+		global_position = p
+	else:
+		var k2 := smoothstep(0.0, 1.0, (t - 0.45) / 0.55)
+		global_position = mid.lerp(to, k2)
+	velocity = Vector3.ZERO
+	if t >= 1.0:
+		_mantle = []
+		global_position = to
+		# A little carry so you do not hang in the window frame.
+		velocity = (Vector3(to.x - from.x, 0.0, to.z - from.z)).normalized() * 1.5
+		_was_on_floor = false
 
 
 func _check_ground_contact() -> void:
@@ -834,7 +946,7 @@ func _update_camera(delta: float) -> void:
 
 	# Smooth crouch + land dip + foot bob.
 	var crouching := _ap("crouch") and mode == Mode.GROUND
-	var target_y := CROUCH_EYE if crouching else EYE
+	var target_y := CROUCH_EYE if (crouching or vaulting_window()) else EYE
 	if mode == Mode.FREEFALL or mode == Mode.CHUTE:
 		target_y = cam_base.y
 	cam_base.y = lerpf(cam_base.y, target_y, delta * 12.0)
@@ -1155,8 +1267,11 @@ func _try_fire() -> void:
 		else:
 			notice.emit("OUT OF AMMO  —  FIND AMMO OR SWAP (Q)")
 		return
+	var mag_before := current_mag()
 	mags[id] = current_mag() - 1
 	fire_timer = 60.0 / float(d["rpm"])
+	if game != null and game.get("anticheat") != null:
+		game.anticheat.on_shot(id, mag_before, mags[id])
 	# Spread is measured before this shot adds its own bloom.
 	var spread_deg := current_spread_deg()
 	var rec := float(d["recoil"]) * (0.62 if aim_blend > 0.5 else 1.0) * recoil_mult()
@@ -1271,6 +1386,8 @@ func _finish_reload() -> void:
 	mags[id] = current_mag() + take
 	ammo[Weapons.caliber(id)] = current_reserve() - take
 	bloom = 0.0
+	if game != null and game.get("anticheat") != null:
+		game.anticheat.on_reload()
 	_emit_ammo()
 
 
