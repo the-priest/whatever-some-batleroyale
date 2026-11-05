@@ -263,6 +263,8 @@ func _ready() -> void:
 		_run_drive_test()
 	elif OS.get_cmdline_user_args().has("--carexit"):
 		_run_carexit_test()
+	elif OS.get_cmdline_user_args().has("--lootaudit"):
+		_run_loot_audit()
 	elif OS.get_cmdline_user_args().has("--netstress"):
 		_run_net_stress(OS.get_environment("NET_ROLE") == "host")
 	elif OS.get_cmdline_user_args().has("--nethost"):
@@ -477,31 +479,45 @@ func _start_match() -> void:
 	phase = "plane"
 	player.global_position = plane.seat_position()
 
-	# Loot.
+	# Loot: every item settles on a real floor, clear of walls and props, and
+	# keeps its distance from the others (no piles).
 	loot_pool.clear()
 	loot_grid.clear()
-	for p in world.loot_points:
+	_spot_hash.clear()
+	var points := world.loot_points.duplicate()
+	points.shuffle()
+	var t_loot := Time.get_ticks_msec()
+	var skipped := 0
+	for p in points:
 		var kind := str(p.get("kind", "weapon"))
-		var base := Vector3(p["pos"])
 		var hi := str(p.get("tier", "")) == "hi"
+		var base := _loot_spot(Vector3(p["pos"]), 0.0, 1.3)
+		if base == Vector3.INF:
+			skipped += 1
+			continue
 		if kind == "weapon":
 			_spawn_loot("weapon", HI_WEAPONS[randi() % HI_WEAPONS.size()] if hi else _weighted_weapon(), base)
-			# Guns come with something beside them: usually ammo.
+			# Guns come with something nearby: usually ammo.
 			var gun_id: String = loot_pool[loot_pool.size() - 1].item_id
-			var a := randf() * TAU
 			if randf() < 0.85:
-				_spawn_loot("ammo", Weapons.caliber(gun_id), base + Vector3(cos(a), 0.0, sin(a)) * 0.9)
+				var sp := _loot_spot(base, 1.0, 2.4)
+				if sp != Vector3.INF:
+					_spawn_loot("ammo", Weapons.caliber(gun_id), sp)
 			if randf() < 0.35:
 				var extra := _roll_gear()
-				_spawn_loot(extra[0], extra[1], base + Vector3(cos(a + 2.0), 0.0, sin(a + 2.0)) * 0.9)
+				var sp2 := _loot_spot(base, 1.2, 2.6)
+				if sp2 != Vector3.INF:
+					_spawn_loot(extra[0], extra[1], sp2)
 		else:
 			var g: Array = HI_GEAR[randi() % HI_GEAR.size()] if hi else _roll_gear()
 			_spawn_loot(g[0], g[1], base)
 			if bool(p.get("village", false)) and randf() < 0.5:
-				var a := randf() * TAU
 				var g2 := _roll_gear()
-				_spawn_loot(g2[0], g2[1], base + Vector3(cos(a), 0.0, sin(a)) * 0.9)
+				var sp3 := _loot_spot(base, 1.2, 2.6)
+				if sp3 != Vector3.INF:
+					_spawn_loot(g2[0], g2[1], sp3)
 
+	print("[game] loot: %d items from %d spots (%d spots had no room) in %d ms  rejects=%s" % [loot_pool.size(), points.size(), skipped, Time.get_ticks_msec() - t_loot, str(spot_why)])
 	# Bots: most drop near a weapon so the first minute has real fights.
 	var weapon_spots: Array = []
 	for l in loot_pool:
@@ -598,6 +614,85 @@ func _after_match_setup() -> void:
 	_on_inventory_changed()
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	_attach_plane_audio()
+
+
+## Taken loot spots this match, 2 m cells -> positions.
+var _spot_hash: Dictionary = {}
+const LOOT_GAP := 1.4
+
+
+## A good place for one item near `from`: distance rmin..rmax away (0 = try
+## the spot itself first), resting on the floor right below, not inside a
+## wall or prop, nothing solid between it and `from`, and LOOT_GAP clear of
+## other items on the same floor. Vector3.INF when there is none.
+func _loot_spot(from: Vector3, rmin: float, rmax: float) -> Vector3:
+	var space := get_world_3d().direct_space_state
+	var tries: Array = []
+	if rmin <= 0.0:
+		tries.append(Vector3.ZERO)
+	var a0 := randf() * TAU
+	for ring in 3:
+		var r := lerpf(maxf(rmin, 0.5), rmax, float(ring) / 2.0)
+		for k in 7:
+			var a := a0 + TAU * float(k) / 7.0 + float(ring) * 0.45
+			tries.append(Vector3(cos(a) * r, 0.0, sin(a) * r))
+	var ball := SphereShape3D.new()
+	ball.radius = 0.16
+	var sq := PhysicsShapeQueryParameters3D.new()
+	sq.shape = ball
+	sq.collision_mask = 1
+	for off in tries:
+		var c: Vector3 = from + off
+		if off != Vector3.ZERO:
+			# Same room: nothing between the two at knee height.
+			var los := PhysicsRayQueryParameters3D.create(from + Vector3.UP * 0.35, c + Vector3.UP * 0.35, 1)
+			if not space.intersect_ray(los).is_empty():
+				_why("wall")
+				continue
+		var down := PhysicsRayQueryParameters3D.create(c + Vector3.UP * 0.7, c + Vector3.DOWN * 1.2, 1)
+		var hit := space.intersect_ray(down)
+		if hit.is_empty() or Vector3(hit["normal"]).y < 0.75:
+			_why("nofloor" if hit.is_empty() else "slope")
+			continue
+		var g := Vector3(c.x, float(hit["position"].y) + 0.08, c.z)
+		if terrain.is_water(g.x, g.z) and g.y < terrain.water_surface_at(g.x, g.z) + 0.05:
+			_why("water")
+			continue
+		sq.transform = Transform3D(Basis.IDENTITY, g + Vector3.UP * 0.24)
+		if not space.intersect_shape(sq, 1).is_empty():
+			_why("inside")
+			continue
+		if _spot_taken(g):
+			_why("taken")
+			continue
+		_take_spot(g)
+		return g
+	return Vector3.INF
+
+
+var spot_why: Dictionary = {}
+
+
+func _why(k: String) -> void:
+	spot_why[k] = int(spot_why.get(k, 0)) + 1
+
+
+func _spot_taken(g: Vector3) -> bool:
+	var k := Vector2i(int(floor(g.x / 2.0)), int(floor(g.z / 2.0)))
+	for dz in [-1, 0, 1]:
+		for dx in [-1, 0, 1]:
+			for q in _spot_hash.get(Vector2i(k.x + dx, k.y + dz), []):
+				var o: Vector3 = q
+				if absf(o.y - g.y) < 1.2 and Vector2(o.x, o.z).distance_to(Vector2(g.x, g.z)) < LOOT_GAP:
+					return true
+	return false
+
+
+func _take_spot(g: Vector3) -> void:
+	var k := Vector2i(int(floor(g.x / 2.0)), int(floor(g.z / 2.0)))
+	if not _spot_hash.has(k):
+		_spot_hash[k] = []
+	_spot_hash[k].append(g)
 
 
 func _spawn_loot(kind: String, id: String, pos: Vector3, mag := -1, reserve := -1, net_id := 0, announce := true) -> LootPickup:
@@ -735,10 +830,26 @@ func _random_ground_point(max_r: float, center := Zone.MAP_MID) -> Vector3:
 		if terrain == null:
 			return Vector3(x, 40, z)
 		var h := terrain.height_at(x, z)
-		if h > terrain.water_surface_at(x, z) + 0.5 and terrain.slope_at(x, z) < 0.45:
+		if h > terrain.water_surface_at(x, z) + 0.5 and terrain.slope_at(x, z) < 0.45 and not _on_building(x, z):
 			return Vector3(x, h, z)
 	var c := Vector2(terrain.castle_c) if terrain != null else Vector2.ZERO
 	return Vector3(c.x, (terrain.castle_h if terrain != null else 60.0), c.y)
+
+
+## Inside or on top of a house, tower or anything else solid standing on
+## the ground here (so nobody is dropped onto a roof or into a wall).
+func _on_building(x: float, z: float) -> bool:
+	if world == null or world.villages == null:
+		return false
+	if not world.villages.house_at(Vector2(x, z), 1.2).is_empty():
+		return true
+	for t in world.villages.towers:
+		if (t.center as Vector2).distance_to(Vector2(x, z)) < 6.0:
+			return true
+	var h := terrain.height_at(x, z)
+	var q := PhysicsRayQueryParameters3D.create(Vector3(x, h + 60.0, z), Vector3(x, h - 1.0, z), 1)
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	return not hit.is_empty() and float(hit["position"].y) > h + 0.6
 
 
 ## Where a bot wants to land: mostly within glide range of the flight path,
@@ -1686,11 +1797,13 @@ func _spawn_airdrop() -> void:
 		return
 	var c := zone.next_center()
 	var r := zone.next_radius() * 0.7
-	for i in 12:
+	for i in 40:
 		var a := randf() * TAU
 		var p := c + Vector2(cos(a), sin(a)) * sqrt(randf()) * r
 		var h := terrain.height_at(p.x, p.y)
-		if h > terrain.water_surface_at(p.x, p.y) + 1.0 and terrain.slope_at(p.x, p.y) < 0.4:
+		# Open ground only: not on a roof, a tree or a rock.
+		if h > terrain.water_surface_at(p.x, p.y) + 1.0 and terrain.slope_at(p.x, p.y) < 0.4 and not _on_building(p.x, p.y) \
+				and terrain.forest_density(p.x, p.y) < 0.45:
 			var drop := Airdrop.new()
 			var gy := ground_at(Vector3(p.x, h + 20.0, p.y)).y
 			drop.setup(self, p, gy)
@@ -3989,6 +4102,84 @@ func net_player_left(id: int) -> void:
 	if h != null and is_instance_valid(h):
 		h.queue_free()
 	humans.erase(id)
+
+
+## Spawn a match's loot and check every item: resting on a floor (not
+## floating, not sunk), not inside a wall or prop, and not piled up with
+## others. Prints totals and the worst offenders.
+func _run_loot_audit() -> void:
+	_start_match()
+	for i in 3:
+		await get_tree().physics_frame
+	var space := get_world_3d().direct_space_state
+	var ball := SphereShape3D.new()
+	ball.radius = 0.12
+	var sq := PhysicsShapeQueryParameters3D.new()
+	sq.shape = ball
+	sq.collision_mask = 1
+	var floating := 0
+	var sunk := 0
+	var inside := 0
+	var piles := 0
+	var bad: Array = []
+	var pts: Array = []
+	for l in loot_pool:
+		if is_instance_valid(l):
+			pts.append(l.global_position)
+	var grid: Dictionary = {}
+	for i in pts.size():
+		var p: Vector3 = pts[i]
+		var k := Vector2i(int(floor(p.x / 2.0)), int(floor(p.z / 2.0)))
+		if not grid.has(k):
+			grid[k] = []
+		grid[k].append(i)
+	var nn_hist := [0, 0, 0, 0]
+	var st_shown: Dictionary = {}
+	for i in pts.size():
+		var p: Vector3 = pts[i]
+		var q := PhysicsRayQueryParameters3D.create(p + Vector3.UP * 0.4, p + Vector3.DOWN * 1.5, 1)
+		var hit := space.intersect_ray(q)
+		var why := ""
+		if hit.is_empty():
+			floating += 1
+			why = "no floor"
+		else:
+			var gap: float = p.y - float(hit["position"].y)
+			if gap > 0.25:
+				floating += 1
+				why = "floating %.2f" % gap
+			elif gap < -0.2:
+				sunk += 1
+				why = "sunk %.2f" % gap
+		sq.transform = Transform3D(Basis.IDENTITY, p + Vector3.UP * 0.22)
+		if why == "" and not space.intersect_shape(sq, 1).is_empty():
+			inside += 1
+			why = "inside geometry"
+		var near := 0
+		var k := Vector2i(int(floor(p.x / 2.0)), int(floor(p.z / 2.0)))
+		for dz in [-1, 0, 1]:
+			for dx in [-1, 0, 1]:
+				for j in grid.get(Vector2i(k.x + dx, k.y + dz), []):
+					if j != i and absf((pts[j] as Vector3).y - p.y) < 1.0 and Vector2(p.x, p.z).distance_to(Vector2((pts[j] as Vector3).x, (pts[j] as Vector3).z)) < 1.5:
+						near += 1
+		nn_hist[mini(near, 3)] += 1
+		if near >= 3:
+			piles += 1
+			if why == "":
+				why = "pile of %d" % (near + 1)
+		if why != "" and not why.begins_with("pile"):
+			var cat := why.get_slice(" ", 0)
+			var shown: int = int(st_shown.get(cat, 0))
+			if shown < 8:
+				st_shown[cat] = shown + 1
+				var what := ""
+				if not hit.is_empty() and hit.get("collider") is Node:
+					what = str((hit["collider"] as Node).name)
+				bad.append("%s at %s (%s) floor=%s" % [why, str(p.snapped(Vector3.ONE * 0.1)), (loot_pool[i] as LootPickup).kind if i < loot_pool.size() else "?", what])
+	print("[loot] items=%d points=%d floating=%d sunk=%d inside=%d piles(>=4 within 1.5m)=%d  neighbours<1.5m: 0=%d 1=%d 2=%d 3+=%d" % [pts.size(), world.loot_points.size(), floating, sunk, inside, piles, nn_hist[0], nn_hist[1], nn_hist[2], nn_hist[3]])
+	for b in bad:
+		print("[loot]   ", b)
+	get_tree().quit()
 
 
 ## Multi-process soak test: one host and several clients (each behind its
