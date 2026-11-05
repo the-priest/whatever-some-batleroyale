@@ -1897,6 +1897,9 @@ func _landmark_pose(name: String) -> Array:
 			return [Vector3(p.x, t.bridge_h + 1.7, p.y), Vector3(t.bridge_b.x, t.bridge_h + 4.0, t.bridge_b.y)]
 		"castle":
 			return at.call(t.castle_c, t.castle_h + 4.0, Vector2(0.6, 1.0), 85.0, 28.0)
+		"castlein":
+			var cc := t.castle_c + Vector2(14.0, 9.0)
+			return [Vector3(cc.x, t.castle_h + 2.0, cc.y), Vector3(t.castle_c.x, t.castle_h + 5.0, t.castle_c.y)]
 		"falls":
 			var b := Vector2(t.falls_bottom.x, t.falls_bottom.z)
 			return [Vector3(b.x + t.falls_dir.x * 110.0 + 30.0, 22.0, b.y + t.falls_dir.y * 110.0), Vector3(b.x, 40.0, b.y)]
@@ -1907,7 +1910,7 @@ func _landmark_pose(name: String) -> Array:
 		"temple":
 			return at.call(t.temple_c, t.temple_h + 8.0, Vector2(-1.0, 0.3), 70.0, 16.0)
 		"oak":
-			return at.call(t.oak_c, t.oak_h + 12.0, Vector2(1.0, 0.6), 55.0, 6.0)
+			return at.call(t.oak_c, t.oak_h + 12.0, Vector2(1.0, 0.6), 60.0, 22.0)
 		"gorge":
 			var g := t.gorge_bridge
 			var fl := t.gorge_bridge_dir.orthogonal()
@@ -1923,7 +1926,7 @@ func _landmark_pose(name: String) -> Array:
 		var fc: Vector2 = e[0]
 		var fh: float = e[1]
 		var spec: Array = {"spire": [16.0, Vector2(1.0, 0.5), 70.0, 30.0], "spiretop": [27.0, Vector2(0.4, 1.0), 13.0, 30.0], "crystals": [3.0, Vector2(1.0, 0.4), 32.0, 6.0], "crystals2": [3.0, Vector2(-0.6, 1.0), 32.0, 6.0],
-			"dragon": [3.0, Vector2(0.7, 1.0), 40.0, 9.0], "grove": [5.0, Vector2(1.0, 0.3), 28.0, 4.0]}.get(name, [4.0, Vector2(1, 0), 40.0, 8.0])
+			"dragon": [3.0, Vector2(0.7, 1.0), 40.0, 9.0], "field": [1.0, Vector2(1.0, 0.7), 16.0, 3.5], "grove": [5.0, Vector2(1.0, 0.3), 28.0, 4.0]}.get(name, [4.0, Vector2(1, 0), 40.0, 8.0])
 		return at.call(fc, fh + float(spec[0]), spec[1], float(spec[2]), float(spec[3]))
 	return [Vector3(0, 300, 600), Vector3.ZERO]
 
@@ -1955,6 +1958,11 @@ func _run_shot() -> void:
 		elif a.begins_with("--look="):
 			var c := a.substr(7).split(",")
 			cam_look = Vector3(float(c[0]), float(c[1]), float(c[2]))
+		elif a.begins_with("--cam="):
+			# --cam=x,y,z,lx,ly,lz : explicit camera and look-at point.
+			var f := a.substr(6).split(",")
+			cam_pos = Vector3(float(f[0]), float(f[1]), float(f[2]))
+			cam_look = Vector3(float(f[3]), float(f[4]), float(f[5]))
 		elif a.begins_with("--lm="):
 			var pose := _landmark_pose(a.substr(5))
 			cam_pos = pose[0]
@@ -4183,9 +4191,15 @@ func _run_fantasy_test() -> void:
 	player.spawn_protect = 9999.0
 	var fz: Fantasy = world.villages.landmarks.fantasy
 	var all_ok := true
-	# Spire: follow the helix up.
+	# Spire and Elder Oak: follow each helix up.
+	var helixes: Array = []
 	if fz.poi.has("spire_stair"):
-		var sp: Array = fz.poi["spire_stair"]
+		helixes.append(["spire", fz.poi["spire_stair"], 2.5, 4.3])
+	var oak: Array = world.villages.landmarks.oak_stair
+	if not oak.is_empty():
+		helixes.append(["oak", oak, 1.15, 5.0])
+	for hx in helixes:
+		var sp: Array = hx[1]
 		var o: Vector3 = sp[0]
 		var hr: float = sp[1]
 		var a0: float = sp[2]
@@ -4200,10 +4214,10 @@ func _run_fantasy_test() -> void:
 			var ang := atan2(rel.z, rel.x)
 			# Unwrap to the stair's own turn count using height.
 			var frac := clampf((player.global_position.y - o.y) / deck, 0.0, 1.0)
-			var target_a := a0 + (TAU * 2.5) * frac + 0.22
+			var target_a := a0 + (TAU * float(hx[2])) * frac + 0.22
 			var tgt := o + Vector3(cos(target_a) * hr, 0, sin(target_a) * hr)
 			if player.global_position.y > o.y + deck - 0.3:
-				tgt = o + Vector3(cos(target_a) * 3.0, 0, sin(target_a) * 3.0)
+				tgt = o + Vector3(cos(target_a) * (float(hx[3]) - 1.0), 0, sin(target_a) * (float(hx[3]) - 1.0))
 			var to := tgt - player.global_position
 			player.yaw = atan2(-to.x, -to.z)
 			player.test_input = Vector2(0, -1)
@@ -4217,11 +4231,11 @@ func _run_fantasy_test() -> void:
 					var sn2 = cob.shape_owner_get_owner(cob.shape_find_owner(col.get_collider_shape_index())) if cob else null
 					hs.append("%s %s n=%s" % [cob.name if cob else "?", (sn2 as Node3D).global_position.round() - o.round() if sn2 is Node3D else "", col.get_normal().snapped(Vector3.ONE * 0.1)])
 				print("[dbg] t=%.0f rel=%s ang=%.2f tgt_a=%.2f hits=%s" % [t, (player.global_position - o).snapped(Vector3.ONE * 0.1), ang, target_a, str(hs)])
-			if player.global_position.y > o.y + deck - 0.2 and Vector2(rel.x, rel.z).length() < 4.3:
+			if player.global_position.y > o.y + deck - 0.2 and Vector2(rel.x, rel.z).length() < float(hx[3]):
 				top = true
 				break
 		player.test_input = Vector2.INF
-		print("[fantasy] spire stair: reached top deck=%s in %.0fs (y %.1f / deck %.1f)" % [top, t, player.global_position.y - o.y, deck])
+		print("[fantasy] %s stair: reached top deck=%s in %.0fs (y %.1f / deck %.1f)" % [hx[0], top, t, player.global_position.y - o.y, deck])
 		all_ok = all_ok and top
 	# Grove: vault cap to cap.
 	if fz.poi.has("grove_climb"):

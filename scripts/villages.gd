@@ -454,6 +454,63 @@ func _door_apron(c: Vector2, w: float, d: float, yaw_house: float, side: int) ->
 	return [c + local.rotated(-yaw_house), size.x, size.y]
 
 
+## Roof top surface per span: [height above the roof base at the ridge,
+## drop per metre away from the ridge] (measured from the kit meshes).
+const ROOF_TOP := {4: [4.22, 1.63], 6: [5.59, 1.57], 8: [6.72, 1.49]}
+
+
+func _gable_chimney(h: Dictionary, origin: Vector3, hb: Basis, swapped: bool, span: float, levels: int) -> void:
+	var w := float(h.w)
+	var d := float(h.d)
+	var side := int(h.door_side)
+	var cells := int(w * 0.5) if side % 2 == 0 else int(d * 0.5)
+	var along := -((cells - 1) * 0.5) * 2.0 + float(cells / 2) * 2.0
+	var door: Vector3 = [Vector3(along, 0, d * 0.5), Vector3(w * 0.5, 0, along), Vector3(-along, 0, -d * 0.5), Vector3(-w * 0.5, 0, -along)][side]
+	var rt: Array = ROOF_TOP.get(int(span), [5.59, 1.57])
+	var first_s := 1.0 if rng.randf() < 0.5 else -1.0
+	for s_try in [first_s, -first_s]:
+		for u_sign in [1.0, -1.0]:
+			var u := (span * 0.5 - 1.0) * float(u_sign)
+			# Local centre of the stack, half a metre out from the gable wall.
+			var c := Vector3(u, 0, float(s_try) * (d * 0.5 + 0.5)) if not swapped else Vector3(float(s_try) * (w * 0.5 + 0.5), 0, u)
+			# Keep clear of the door, and never in front of a window.
+			var dd := Vector2(c.x - door.x, c.z - door.z)
+			if dd.length() < 2.2:
+				continue
+			var blocks_window := false
+			for op in h.get("openings", []):
+				if (op as Vector2).distance_to(Vector2(c.x, c.z)) < 1.4:
+					blocks_window = true
+			if blocks_window:
+				continue
+			var wp := origin + hb * c
+			var p2 := Vector2(wp.x, wp.z)
+			var clash := false
+			for o in houses:
+				if o == h:
+					continue
+				var lo: Vector2 = (p2 - (o.center as Vector2)).rotated(float(o.yaw))
+				if absf(lo.x) < float(o.w) * 0.5 + 1.6 and absf(lo.y) < float(o.d) * 0.5 + 1.6:
+					clash = true
+					break
+				var ap: Array = o.apron
+				var al: Vector2 = (p2 - (ap[0] as Vector2)).rotated(float(o.yaw))
+				if absf(al.x) < float(ap[1]) * 0.5 + 0.8 and absf(al.y) < float(ap[2]) * 0.5 + 0.8:
+					clash = true
+					break
+			if clash or _on_road(p2, 1.0):
+				continue
+			var top := WALL_HEIGHT * float(levels) - 0.62 + float(rt[0]) - float(rt[1]) * absf(u) + 1.1
+			var stack_h := maxf(1.0, top - 3.0)
+			var yaw := hb.get_euler().y
+			_proc_box(Transform3D(hb.scaled_local(Vector3(0.96, stack_h + 0.12, 1.0)), wp + Vector3(0, stack_h * 0.5, 0)), "stone")
+			# A broader stepped base and a little hearth plinth.
+			_proc_box(Transform3D(hb.scaled_local(Vector3(1.25, 0.9, 1.15)), wp + Vector3(0, 0.45, 0)), "stone")
+			_place("Prop_Chimney" if rng.randf() < 0.5 else "Prop_Chimney2", wp + Vector3(0, stack_h - 0.02, 0), yaw, false, Vector3.ZERO)
+			_add_box_collider(wp + Vector3(0, top * 0.5, 0), Vector3(1.0, top, 1.05), yaw)
+			return
+
+
 ## Separating-axis test for two house footprints grown by `margin`.
 func _rects_overlap(c1: Vector2, w1: float, d1: float, yaw1: float, c2: Vector2, w2: float, d2: float, yaw2: float, margin: float) -> bool:
 	var axes := [Vector2(1, 0).rotated(-yaw1), Vector2(0, 1).rotated(-yaw1), Vector2(1, 0).rotated(-yaw2), Vector2(0, 1).rotated(-yaw2)]
@@ -682,6 +739,10 @@ func _build_house(h: Dictionary) -> void:
 				else:
 					key = "Wall_%s_Straight" % style
 				var world_pos: Vector3 = origin + house_basis * local
+				if is_window or is_door:
+					if not h.has("openings"):
+						h["openings"] = []
+					h["openings"].append(Vector2(local.x, local.z))
 				_place(key, world_pos, yaw_house + wall_yaw)
 				_add_wall_for(key, world_pos, yaw_house + wall_yaw)
 				if is_window and shutters:
@@ -709,11 +770,10 @@ func _build_house(h: Dictionary) -> void:
 	var roof_pos := Vector3(center.x, roof_base, center.y)
 	_place(roof_key, roof_pos, roof_yaw, false)
 	_add_gables(Vector3(center.x, pad + WALL_HEIGHT * float(levels), center.y), roof_yaw, span, d if roof_yaw == yaw_house else w, style)
-	# Chimney through the roof slope.
+	# A stone chimney stack built against the outside of a gable wall, up
+	# through the eaves to above the roof (nothing floats in the attic).
 	if rng.randf() < 0.7:
-		var cx := (w * 0.5 - 1.5) * (1.0 if rng.randf() < 0.5 else -1.0)
-		var cz := (d * 0.5 - 1.2) * (1.0 if rng.randf() < 0.5 else -1.0)
-		_place("Prop_Chimney" if rng.randf() < 0.5 else "Prop_Chimney2", origin + house_basis * Vector3(cx, roof_base - pad + 0.9, cz), yaw_house, false, Vector3.ZERO)
+		_gable_chimney(h, origin, house_basis, roof_yaw != yaw_house, span, levels)
 	if levels > 1:
 		# The good stuff is upstairs.
 		for i in rng.randi_range(2, 3):

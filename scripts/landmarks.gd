@@ -23,6 +23,8 @@ var _group: Node3D
 var _body: StaticBody3D
 var _stat := {"shapes": 0}
 var fantasy: Fantasy
+## The oak's treehouse stair: [centre, radius, start angle, end angle, deck height].
+var oak_stair: Array = []
 
 
 func build(p_terrain: Terrain, p_villages: Villages, p_seed: int) -> void:
@@ -243,12 +245,17 @@ func cyl(base: Vector3, r_bottom: float, r_top: float, h: float, mat := "stone",
 			var top := base + Vector3(0, h, 0)
 			_tri(st, top, top + d0 * r_top, top + d1 * r_top, Vector3.UP)
 	if collide:
+		# Exactly the drawn frustum (tapers and cones included).
+		var pts := PackedVector3Array()
+		for i in sides:
+			var a := TAU * float(i) / float(sides)
+			var d := Vector3(cos(a), 0.0, sin(a))
+			pts.append(base + d * r_bottom)
+			pts.append(base + d * maxf(r_top, 0.001) + Vector3(0, h, 0))
 		var cs := CollisionShape3D.new()
-		var shape := CylinderShape3D.new()
-		shape.radius = maxf(r_bottom, r_top) * 0.96
-		shape.height = h
+		var shape := ConvexPolygonShape3D.new()
+		shape.points = pts
 		cs.shape = shape
-		cs.position = base + Vector3(0, h * 0.5, 0)
 		_body.add_child(cs)
 		_stat.shapes += 1
 
@@ -637,6 +644,58 @@ func _build_castle() -> void:
 	# Inner wall walk planks bridging the stair heads to the wall top.
 	# The keep: 14 x 14, two floors and a roof terrace.
 	_keep(o + bs * Vector3(0, 0, -5.0), yaw)
+	# Cobbled courtyard.
+	var inner_h := half - wt * 0.5
+	box(L.call(0, 0.04, 0), Vector3(inner_h * 2.0, 0.12, inner_h * 2.0), yaw, "block")
+	# Torches along the inner walls.
+	for k in 8:
+		var side_i := k % 4
+		var tpos: Vector3 = [L.call(-8.0 + float(k / 4) * 16.0, 3.4, half - wt * 0.5 - 0.15), L.call(half - wt * 0.5 - 0.15, 3.4, -8.0 + float(k / 4) * 16.0), L.call(8.0 - float(k / 4) * 16.0, 3.4, -half + wt * 0.5 + 0.15), L.call(-half + wt * 0.5 + 0.15, 3.4, 8.0 - float(k / 4) * 16.0)][side_i]
+		box(tpos, Vector3(0.12, 0.5, 0.12), yaw, "iron", false)
+		box(tpos + Vector3(0, 0.38, 0), Vector3(0.22, 0.26, 0.22), yaw, "lamp", false)
+		if k % 2 == 0:
+			var tl := OmniLight3D.new()
+			tl.light_color = Color(1.0, 0.66, 0.32)
+			tl.light_energy = 1.6
+			tl.omni_range = 10.0
+			tl.shadow_enabled = false
+			tl.distance_fade_enabled = true
+			tl.distance_fade_begin = 150.0
+			tl.distance_fade_length = 50.0
+			tl.position = tpos + Vector3(0, 0.5, 0)
+			_group.add_child(tl)
+	# Training yard: straw dummies and weapon racks.
+	if not _mats.has("straw"):
+		var straw := StandardMaterial3D.new()
+		straw.albedo_color = Color(0.86, 0.72, 0.4)
+		straw.albedo_texture = load("res://assets/textures/tex_sand.png")
+		straw.uv1_triplanar = true
+		straw.uv1_world_triplanar = true
+		straw.uv1_scale = Vector3.ONE * 1.8
+		straw.roughness = 1.0
+		_mats["straw"] = straw
+	for k in 3:
+		var dp: Vector3 = L.call(9.0 + float(k) * 2.6, 0, 5.0)
+		box(dp + Vector3(0, 0.9, 0), Vector3(0.14, 1.8, 0.14), yaw, "wood", false)
+		box(dp + Vector3(0, 1.35, 0), Vector3(0.5, 0.8, 0.32), yaw + 0.2 * float(k), "straw")
+		box(dp + Vector3(0, 1.45, 0), Vector3(1.2, 0.1, 0.1), yaw + 0.2 * float(k), "wood", false)
+		box(dp + Vector3(0, 1.95, 0), Vector3(0.3, 0.32, 0.3), yaw + 0.2 * float(k), "straw", false)
+	for k in 2:
+		var rp: Vector3 = L.call(-6.0 + float(k) * 3.4, 0, 18.5)
+		box(rp + Vector3(0, 0.35, 0), Vector3(2.6, 0.12, 0.5), yaw, "wood", false)
+		box(rp + Vector3(0, 1.2, 0), Vector3(2.6, 0.12, 0.5), yaw, "wood", false)
+		for sx2: float in [-1.2, 1.2]:
+			box(rp + bs * Vector3(sx2, 0.8, 0), Vector3(0.12, 1.6, 0.12), yaw, "wood", false)
+		for j in 4:
+			var spear := rp + bs * Vector3(-0.9 + float(j) * 0.6, 1.1, 0.0)
+			box_b(bs * Basis(Vector3.RIGHT, 0.12), spear, Vector3(0.05, 2.2, 0.05), "wood", false)
+			box_b(bs * Basis(Vector3.RIGHT, 0.12), spear + Vector3(0, 1.15, 0.13), Vector3(0.08, 0.26, 0.02), "iron", false)
+		var cs2 := CollisionShape3D.new()
+		var sh2 := BoxShape3D.new()
+		sh2.size = Vector3(2.6, 1.6, 0.5)
+		cs2.shape = sh2
+		cs2.transform = Transform3D(bs, rp + Vector3(0, 0.8, 0))
+		_body.add_child(cs2)
 	# Courtyard: a well, carts and crates for cover.
 	var well: Vector3 = L.call(-11.0, 0, 9.0)
 	cyl(well, 1.6, 1.6, 1.0, "stone", 12)
@@ -644,14 +703,15 @@ func _build_castle() -> void:
 	for sx: float in [-1.0, 1.0]:
 		box(well + Vector3(0, 1.8, 0) + bs * Vector3(sx * 1.4, 0, 0), Vector3(0.2, 1.6, 0.2), yaw, "wood", false)
 	box(well + Vector3(0, 2.65, 0), Vector3(3.2, 0.2, 0.3), yaw, "wood", false)
-	_prop("Prop_Wagon", L.call(11.0, 0, 11.0), yaw + 0.4)
-	_prop("Prop_Crate", L.call(12.5, 0, -12.0), yaw)
-	_prop("Prop_Crate", L.call(13.6, 0, -11.4), yaw + 0.5)
-	_prop("Prop_Crate", L.call(-13.0, 0, -13.0), yaw)
-	_prop("Prop_Crate", L.call(5.0, 0, 15.0), yaw + 0.2)
-	for p: Vector3 in [Vector3(-9, 0, 14), Vector3(9, 0, 4), Vector3(-13, 0, -2), Vector3(13, 0, -14), Vector3(0, 0, 17)]:
+	_prop("Prop_Wagon", L.call(11.0, 0.1, 11.0), yaw + 0.4)
+	_prop("Prop_Crate", L.call(12.5, 0.1, -12.0), yaw)
+	_prop("Prop_Crate", L.call(13.6, 0.1, -11.4), yaw + 0.5)
+	_prop("Prop_Crate", L.call(-13.0, 0.1, -13.0), yaw)
+	_prop("Prop_Crate", L.call(5.0, 0.1, 15.0), yaw + 0.2)
+	# (On the cobbles, which sit 0.1 m proud of the ground.)
+	for p: Vector3 in [Vector3(-9, 0.1, 14), Vector3(9, 0.1, 4), Vector3(-13, 0.1, -2), Vector3(13, 0.1, -14), Vector3(0, 0.1, 17)]:
 		_loot(L.call(p.x, p.y, p.z), "gear")
-	for p: Vector3 in [Vector3(-15, 0, 6), Vector3(15, 0, 16)]:
+	for p: Vector3 in [Vector3(-15, 0.1, 6), Vector3(15, 0.1, 16)]:
 		_loot(L.call(p.x, p.y, p.z), "weapon")
 	# Walkway loot near the bastions.
 	for sx: float in [-1.0, 1.0]:
@@ -708,8 +768,14 @@ func _keep(o: Vector3, yaw: float) -> void:
 	cyl(tur + Vector3(0, 4.5, 0), 2.8, 0.0, 4.0, "roof", 12, false)
 	cyl(tur + Vector3(0, 8.3, 0), 0.08, 0.08, 3.0, "iron", 4, false)
 	box(tur + Vector3(0, 10.6, 0) + bs * Vector3(0.9, 0, 0), Vector3(1.8, 1.0, 0.04), yaw, "banner_red", false)
+	# Banners between the windows and the corners, not over the windows.
 	for sx: float in [-1.0, 1.0]:
-		banner(L.call(sx * 3.5, top - 0.5, hf + 0.62), bs * Vector3.BACK, 1.8, 6.0, "banner_red")
+		banner(L.call(sx * 5.5, top - 0.5, hf + 0.62), bs * Vector3.BACK, 1.5, 6.0, "banner_red")
+	# Two more corner turrets (clear of the roof stair's head at -x, +z).
+	for tc2: Vector3 in [L.call(hf - 1.0, top, hf - 1.0), L.call(-hf + 1.0, top, -hf + 1.0)]:
+		cyl(tc2, 1.6, 1.6, 3.4, "stone", 12)
+		cyl(tc2 + Vector3(0, 3.4, 0), 2.1, 0.0, 3.4, "roof", 12, false)
+		cyl(tc2 + Vector3(0, 6.6, 0), 0.06, 0.06, 1.6, "iron", 4, false)
 	# Loot: the keep is the prize.
 	for p: Vector3 in [Vector3(-3, 0.2, 2), Vector3(2, 0.2, -3), Vector3(-4, 0.2, -4)]:
 		_loot(L.call(p.x, p.y, p.z), "weapon" if p.x < 0 else "gear")
@@ -934,41 +1000,134 @@ func _build_oak() -> void:
 	_begin("ElderOak")
 	var c: Vector2 = terrain.oak_c
 	var gy: float = terrain.oak_h
-	var o := Vector3(c.x, gy - 0.4, c.y)
-	# Two crowns grown together read as one ancient, sprawling tree.
-	for spec in [["CommonTree_4", 5.6, 0.0], ["CommonTree_3", 5.0, 2.1], ["CommonTree_5", 4.4, 4.0]]:
+	var o := Vector3(c.x, gy - 0.3, c.y)
+	if not _mats.has("bark"):
+		var bark := StandardMaterial3D.new()
+		bark.albedo_texture = load("res://assets/nature/Bark_NormalTree.png")
+		bark.albedo_color = Color(0.92, 0.85, 0.8)
+		bark.roughness = 0.9
+		bark.uv1_triplanar = true
+		bark.uv1_world_triplanar = true
+		bark.uv1_scale = Vector3.ONE * 0.35
+		_mats["bark"] = bark
+	# A great flared trunk.
+	var prof := [[3.4, 0.0], [2.5, 1.2], [2.05, 3.0], [1.85, 6.0], [1.65, 9.0], [1.4, 12.0]]
+	for k in prof.size() - 1:
+		cyl(o + Vector3(0, float(prof[k][1]), 0), float(prof[k][0]), float(prof[k + 1][0]), float(prof[k + 1][1]) - float(prof[k][1]), "bark", 16, true, false)
+	# Root buttresses spreading into the ground.
+	for i in 7:
+		var a := TAU * float(i) / 7.0 + rng.randf() * 0.3
+		var dir := Vector3(cos(a), 0, sin(a))
+		var p0 := o + dir * 2.2 + Vector3.UP * 1.3
+		var p1 := o + dir * rng.randf_range(5.0, 6.5) - Vector3.UP * 0.3
+		box_b(_frame(p1 - p0), (p0 + p1) * 0.5, Vector3(0.9, 0.8, p0.distance_to(p1) + 0.4), "bark")
+	# Thick branches out to the crown, each carrying a kit tree crown.
+	var crowns := [["CommonTree_4", 2.9, Vector3(0, 9.5, 0), 0.0]]
+	for i in 5:
+		var a := TAU * float(i) / 5.0 + 0.4
+		var dir := Vector3(cos(a), 0, sin(a))
+		var b0 := o + Vector3.UP * 9.0 + dir * 1.2
+		var b1 := o + Vector3.UP * rng.randf_range(10.0, 11.5) + dir * rng.randf_range(7.0, 8.8)
+		box_b(_frame(b1 - b0), (b0 + b1) * 0.5, Vector3(0.8, 0.8, b0.distance_to(b1) + 0.3), "bark", false)
+		crowns.append([["CommonTree_3", "CommonTree_5", "CommonTree_4"][i % 3], rng.randf_range(2.1, 2.6), b1 - o - Vector3.UP * 0.6, a])
+	for spec in crowns:
 		var packed: PackedScene = load("res://assets/nature/%s.gltf" % spec[0])
 		var tree := packed.instantiate() as Node3D
 		tree.scale = Vector3.ONE * float(spec[1])
-		tree.position = o
-		tree.rotation.y = rng.randf() * TAU + float(spec[2])
+		tree.position = o + (spec[2] as Vector3)
+		tree.rotation.y = float(spec[3]) + rng.randf() * TAU
 		_group.add_child(tree)
 		for mi in tree.find_children("*", "MeshInstance3D", true, false):
 			(mi as MeshInstance3D).visibility_range_end = 2400.0
-	cyl(o, 1.9, 1.5, 14.0, "wood", 10, true, false)
-	# Root buttresses for cover around the trunk.
+	# The treehouse: a ring deck round the trunk, a railing, lanterns.
+	var deck_y := 7.0
+	var inner := 1.95
+	var outer := 5.3
+	var segs := 18
+	for i in segs:
+		var a0 := TAU * float(i) / float(segs)
+		var a1 := TAU * float(i + 1) / float(segs)
+		var am := (a0 + a1) * 0.5
+		var r := (inner + outer) * 0.5
+		var chord := 2.0 * outer * sin(PI / float(segs)) + 0.12
+		box(o + Vector3(cos(am) * r, deck_y - 0.15, sin(am) * r), Vector3(outer - inner, 0.3, chord), -am + PI * 0.5, "wood")
+		# Brackets under the deck.
+		if i % 3 == 0:
+			var p0 := o + Vector3(cos(am) * 1.9, deck_y - 2.6, sin(am) * 1.9)
+			var p1 := o + Vector3(cos(am) * (outer - 0.4), deck_y - 0.35, sin(am) * (outer - 0.4))
+			box_b(_frame(p1 - p0), (p0 + p1) * 0.5, Vector3(0.25, 0.25, p0.distance_to(p1)), "wood", false)
+	# Spiral plank stair outside the deck, arriving at its edge.
+	var hr := 6.2
+	var start_a := rng.randf() * TAU
+	var turns := 1.15
+	var end_a := start_a + TAU * turns
+	var steps := 46
+	for i in steps:
+		var t0 := float(i) / float(steps)
+		var t1 := float(i + 1) / float(steps)
+		var a0 := lerpf(start_a, end_a, t0)
+		var a1 := lerpf(start_a, end_a, t1)
+		var p0 := o + Vector3(cos(a0) * hr, lerpf(0.5, deck_y, t0), sin(a0) * hr)
+		var p1 := o + Vector3(cos(a1) * hr, lerpf(0.5, deck_y, t1), sin(a1) * hr)
+		p0.y = maxf(p0.y, terrain.height_at(p0.x, p0.z) + 0.05)
+		var dv := p1 - p0
+		var hb := _frame(dv)
+		box_b(hb, (p0 + p1) * 0.5 - hb.y * 0.12, Vector3(1.8, 0.24, dv.length() + 0.2), "wood")
+		if i % 3 == 0:
+			var outdir := Vector3(cos(a0), 0, sin(a0))
+			box(p0 + outdir * 0.85 + Vector3(0, 0.5, 0), Vector3(0.12, 1.0, 0.12), -a0, "wood", false)
+			if p0.y - (o.y + 0.3) > 1.2:
+				var gp := Vector3(p0.x, terrain.height_at(p0.x, p0.z), p0.z)
+				box(Vector3(gp.x, (gp.y + p0.y) * 0.5 - 0.2, gp.z) + outdir * 0.6, Vector3(0.22, p0.y - gp.y, 0.22), -a0, "wood", false)
+	# Deck railing with a gap where the stair arrives.
+	var rn := 24
+	for i in rn:
+		var a0 := TAU * float(i) / float(rn)
+		if absf(wrapf(a0 - end_a, -PI, PI)) < 0.42:
+			continue
+		var a1 := TAU * float(i + 1) / float(rn)
+		var q0 := Vector2(c.x + cos(a0) * (outer - 0.1), c.y + sin(a0) * (outer - 0.1))
+		var q1 := Vector2(c.x + cos(a1) * (outer - 0.1), c.y + sin(a1) * (outer - 0.1))
+		var m := (q0 + q1) * 0.5
+		box(Vector3(m.x, o.y + deck_y + 0.5, m.y), Vector3(0.14, 1.0, q0.distance_to(q1) + 0.05), atan2(q1.x - q0.x, q1.y - q0.y), "wood")
 	for i in 6:
-		var a := TAU * float(i) / 6.0 + rng.randf() * 0.4
-		box(o + Vector3(cos(a) * 2.8, 0.55, sin(a) * 2.8), Vector3(3.6, 1.2, 0.9), -a, "wood")
-	# A ring of standing stones and mushrooms: an old shrine.
-	for i in 7:
-		var a := TAU * float(i) / 7.0
-		var p := o + Vector3(cos(a) * 10.5, 0.4, sin(a) * 10.5)
-		box(p + Vector3(0, 0.8, 0), Vector3(0.9, 2.0, 0.7), -a, "trim")
+		var a := TAU * float(i) / 6.0 + 0.2
+		var lp := o + Vector3(cos(a) * 4.6, deck_y + 2.6, sin(a) * 4.6)
+		box(lp + Vector3(0, 0.6, 0), Vector3(0.04, 1.2, 0.04), 0.0, "iron", false)
+		box(lp, Vector3(0.32, 0.42, 0.32), a, "lamp", false)
+		if i % 2 == 0:
+			var l := OmniLight3D.new()
+			l.light_color = Color(1.0, 0.75, 0.42)
+			l.light_energy = 1.4
+			l.omni_range = 9.0
+			l.shadow_enabled = false
+			l.distance_fade_enabled = true
+			l.distance_fade_begin = 140.0
+			l.distance_fade_length = 50.0
+			l.position = lp
+			_group.add_child(l)
+	# An old shrine ring round the tree, with mushrooms.
+	for i in 9:
+		var a := TAU * float(i) / 9.0
+		var p := Vector3(c.x + cos(a) * 11.5, 0, c.y + sin(a) * 11.5)
+		p.y = terrain.height_at(p.x, p.z) - 0.3
+		box(p + Vector3(0, 1.1, 0), Vector3(1.0, 2.6, 0.75), -a, "trim")
 	var shroom: PackedScene = load("res://assets/nature/Mushroom_Common.gltf")
 	for i in 14:
 		var a := rng.randf() * TAU
 		var m := shroom.instantiate() as Node3D
-		var r := rng.randf_range(4.0, 8.0)
+		var r := rng.randf_range(4.0, 9.0)
 		m.position = Vector3(c.x + cos(a) * r, terrain.height_at(c.x + cos(a) * r, c.y + sin(a) * r) - 0.05, c.y + sin(a) * r)
 		m.scale = Vector3.ONE * rng.randf_range(0.8, 1.8)
 		m.rotation.y = rng.randf() * TAU
 		_group.add_child(m)
 		for mi in m.find_children("*", "MeshInstance3D", true, false):
 			(mi as MeshInstance3D).visibility_range_end = 90.0
-	_loot(o + Vector3(3.5, 0.4, 0), "weapon")
-	_loot(o + Vector3(-3.0, 0.4, 2.5), "gear")
-	_loot(o + Vector3(0.5, 0.4, -4.0), "gear")
+	_loot(o + Vector3(cos(end_a + 2.0) * 3.6, deck_y + 0.3, sin(end_a + 2.0) * 3.6), "weapon", true)
+	_loot(o + Vector3(cos(end_a + 3.6) * 3.6, deck_y + 0.3, sin(end_a + 3.6) * 3.6), "gear", true)
+	_loot(o + Vector3(7.5, 0.4, 0), "gear")
+	_loot(o + Vector3(-6.0, 0.4, 5.0), "weapon")
+	oak_stair = [o, hr, start_a, end_a, deck_y]
 	_end(2000.0)
 	labels.append(["ELDER OAK", c + Vector2(0, -22.0)])
 	clear_areas.append({"center": c, "radius": 14.0})

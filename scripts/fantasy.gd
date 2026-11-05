@@ -35,6 +35,7 @@ func build(p_lm: Landmarks, p_seed: int) -> void:
 	var grove := _site(20.0, 3.0)
 	if grove != Vector2.INF:
 		_build_grove(grove)
+	_build_farms()
 
 
 # ------------------------------------------------------------------ helpers
@@ -577,3 +578,167 @@ func _build_grove(c: Vector2) -> void:
 	lm._loot(o + Vector3(cos(start + PI) * 3.0, 0.1, sin(start + PI) * 3.0), "gear")
 	lm._loot(o + Vector3(cos(start + 2.4) * 11.0, 0.1, sin(start + 2.4) * 11.0), "weapon")
 	lm._end(1800.0)
+
+
+# ------------------------------------------------------------------- farms
+
+func _wheat_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var rr := RandomNumberGenerator.new()
+	rr.seed = 5
+	for b in 5:
+		var a := TAU * float(b) / 5.0 + rr.randf_range(-0.4, 0.4)
+		var dir := Vector3(cos(a), 0, sin(a))
+		var side := Vector3(-dir.z, 0, dir.x)
+		var root := dir * rr.randf_range(0.0, 0.08)
+		var h := rr.randf_range(0.85, 1.15)
+		var top := root + Vector3.UP * h + dir * rr.randf_range(0.05, 0.15)
+		var w := 0.02
+		# Stem.
+		for e in [[root - side * w, 0.0], [root + side * w, 0.0], [top + side * w * 0.5, 0.8], [root - side * w, 0.0], [top + side * w * 0.5, 0.8], [top - side * w * 0.5, 0.8]]:
+			st.set_uv(Vector2(0.5, float(e[1])))
+			st.add_vertex(e[0])
+		# Ear: a slim diamond at the top.
+		var ew := 0.05
+		var e0 := top
+		var e1 := top + Vector3.UP * 0.16 + dir * 0.03
+		var e2 := top + Vector3.UP * 0.3 + dir * 0.06
+		for e in [[e0, 0.85], [e1 + side * ew, 0.95], [e2, 1.0], [e0, 0.85], [e2, 1.0], [e1 - side * ew, 0.95]]:
+			st.set_uv(Vector2(0.5, float(e[1])))
+			st.add_vertex(e[0])
+	st.generate_normals()
+	return st.commit()
+
+
+func _build_farms() -> void:
+	var wheat := _wheat_mesh()
+	var mat := ShaderMaterial.new()
+	mat.shader = load("res://shaders/wheat.gdshader")
+	var bale := StandardMaterial3D.new()
+	bale.albedo_color = Color(0.93, 0.78, 0.42)
+	bale.albedo_texture = load("res://assets/textures/tex_sand.png")
+	bale.uv1_triplanar = true
+	bale.uv1_world_triplanar = true
+	bale.uv1_scale = Vector3.ONE * 1.8
+	bale.roughness = 1.0
+	lm._mats["hay"] = bale
+	var pump := StandardMaterial3D.new()
+	pump.albedo_color = Color(0.93, 0.5, 0.12)
+	pump.roughness = 0.6
+	lm._mats["pumpkin"] = pump
+	var burlap := StandardMaterial3D.new()
+	burlap.albedo_color = Color(0.6, 0.48, 0.32)
+	burlap.roughness = 1.0
+	lm._mats["burlap"] = burlap
+	var n := 0
+	for v in villages.village_pads:
+		if v.type != "farm":
+			continue
+		var c: Vector2 = v.center
+		var vr := float(v.radius)
+		var placed := false
+		for attempt in 8:
+			var ang := float(v.axis) + float(attempt) * TAU / 8.0
+			var dir := Vector2(cos(ang), sin(ang))
+			var fc := c + dir * (vr + 7.5)
+			if villages.road_distance(fc.x, fc.y) < 8.5 or villages.blocks_house(fc, 7.0):
+				continue
+			if bool(terrain.is_water(fc.x, fc.y)) or terrain.roughness(fc.x, fc.y, 6.5) > 1.8:
+				continue
+			var near := false
+			for a in lm.clear_areas:
+				if fc.distance_to(a.center) < float(a.radius) + 8.0:
+					near = true
+			for p in villages.poi_pads:
+				if fc.distance_to(p.center) < float(p.radius) + 8.0:
+					near = true
+			if near:
+				continue
+			_wheat_field(fc, ang, wheat, mat, n)
+			placed = true
+			break
+		# Hay bales and a scarecrow inside the paddock.
+		lm._begin("FarmYard%d" % n)
+		var hp := c + Vector2(cos(float(v.axis) + 2.4), sin(float(v.axis) + 2.4)) * (vr - 5.0)
+		if not villages.blocks_house(hp, 1.8):
+			_hay_stack(Vector3(hp.x, terrain.height_at(hp.x, hp.y), hp.y), float(v.axis))
+		lm._end(900.0)
+		n += 1
+		if placed:
+			pass
+
+
+func _wheat_field(fc: Vector2, ang: float, wheat: ArrayMesh, mat: ShaderMaterial, idx: int) -> void:
+	var fw := 12.0
+	var fd := 9.0
+	var b := Basis(Vector3.UP, -ang)
+	var xs: Array[Transform3D] = []
+	var cols: Array[Color] = []
+	var rows := int(fd / 0.42)
+	var per := int(fw / 0.3)
+	for r in rows:
+		for k in per:
+			var lx := -fw * 0.5 + (float(k) + rng.randf_range(0.0, 0.8)) * 0.3
+			var lz := -fd * 0.5 + float(r) * 0.42 + rng.randf_range(-0.05, 0.05)
+			var wp := Vector3(fc.x, 0, fc.y) + b * Vector3(lx, 0, lz)
+			wp.y = terrain.height_at(wp.x, wp.z) - 0.04
+			var sc := rng.randf_range(0.85, 1.15)
+			xs.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(sc, sc * rng.randf_range(0.9, 1.1), sc)), wp))
+			var tnt := rng.randf_range(0.9, 1.08)
+			cols.append(Color(tnt, tnt, tnt * rng.randf_range(0.9, 1.0)))
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.mesh = wheat
+	mm.instance_count = xs.size()
+	for i in xs.size():
+		mm.set_instance_transform(i, xs[i])
+		mm.set_instance_color(i, cols[i])
+	var mmi := MultiMeshInstance3D.new()
+	mmi.name = "Wheat%d" % idx
+	mmi.multimesh = mm
+	mmi.material_override = mat
+	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mmi.visibility_range_end = 260.0
+	lm.add_child(mmi)
+	# A low fence round the field, open at one end.
+	lm._begin("Field%d" % idx)
+	var fy := terrain.height_at(fc.x, fc.y)
+	for side in 4:
+		if side == 0:
+			continue
+		var a0 := [Vector3(-fw * 0.5 - 0.4, 0, -fd * 0.5 - 0.4), Vector3(fw * 0.5 + 0.4, 0, -fd * 0.5 - 0.4), Vector3(fw * 0.5 + 0.4, 0, fd * 0.5 + 0.4), Vector3(-fw * 0.5 - 0.4, 0, fd * 0.5 + 0.4)]
+		var p0: Vector3 = Vector3(fc.x, 0, fc.y) + b * (a0[side] as Vector3)
+		var p1: Vector3 = Vector3(fc.x, 0, fc.y) + b * (a0[(side + 1) % 4] as Vector3)
+		var segs := int(p0.distance_to(p1) / 2.0)
+		for k in segs + 1:
+			var q := p0.lerp(p1, float(k) / float(segs))
+			q.y = terrain.height_at(q.x, q.z)
+			lm.box(q + Vector3(0, 0.5, 0), Vector3(0.14, 1.0, 0.14), 0.0, "wood", false)
+			if k < segs:
+				var q2 := p0.lerp(p1, float(k + 1) / float(segs))
+				q2.y = terrain.height_at(q2.x, q2.z)
+				for hh in [0.45, 0.85]:
+					lm.box_b(lm._frame(q2 - q), (q + q2) * 0.5 + Vector3(0, float(hh), 0), Vector3(0.06, 0.1, q.distance_to(q2)), "wood", false)
+	# Scarecrow in the middle of the wheat.
+	var sp := Vector3(fc.x, fy, fc.y)
+	lm.box(sp + Vector3(0, 1.2, 0), Vector3(0.14, 2.4, 0.14), -ang, "wood", false)
+	lm.box(sp + Vector3(0, 1.75, 0), Vector3(1.6, 0.1, 0.1), -ang, "wood", false)
+	lm.box(sp + Vector3(0, 1.45, 0), Vector3(0.55, 0.75, 0.3), -ang, "burlap", false)
+	lathe(sp + Vector3(0, 2.0, 0), [[0.14, 0.0], [0.27, 0.12], [0.3, 0.27], [0.24, 0.42], [0.0, 0.5]], 10, "pumpkin", false)
+	lm.cyl(sp + Vector3(0, 2.45, 0), 0.42, 0.42, 0.04, "dark", 12, false)
+	lm.cyl(sp + Vector3(0, 2.48, 0), 0.22, 0.05, 0.42, "dark", 10, false)
+	lm._end(500.0)
+	lm.clear_areas.append({"center": fc, "radius": 7.5})
+	if not poi.has("field"):
+		poi["field"] = [fc, fy]
+
+
+func _hay_stack(p: Vector3, yaw: float) -> void:
+	var b := Basis(Vector3.UP, -yaw)
+	for layer in 3:
+		var count := 3 - layer
+		for k in count:
+			var lx := (float(k) - float(count - 1) * 0.5) * 1.25
+			lm.box_b(b, p + b * Vector3(lx, 0.33 + float(layer) * 0.64, 0), Vector3(1.2, 0.62, 0.7), "hay")

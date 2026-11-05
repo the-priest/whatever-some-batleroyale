@@ -1082,6 +1082,25 @@ func _build_vehicle_spawns() -> void:
 			vehicle_spawns.append([Vector3(p.x, terrain.height_at(p.x, p.y), p.y), yaw])
 
 
+## Where meadow grass may not grow: in houses, on squares, in landmark
+## yards and POIs (settlement greens themselves get grass).
+func grass_blocked(x: float, z: float) -> bool:
+	var k := Vector2i(int(floor(x / GRID)), int(floor(z / GRID)))
+	if _pad_grid.has(k):
+		var p := Vector2(x, z)
+		for it in _pad_grid[k]:
+			var c: Vector2 = it.center
+			if it.kind == "village":
+				if p.distance_to(c) < float(it.get("square", 10.0)):
+					return true
+			elif p.distance_to(c) < float(it.radius) + 2.0:
+				return true
+	for t in villages.towers:
+		if (t.center as Vector2).distance_to(Vector2(x, z)) < 5.0:
+			return true
+	return not villages.house_at(Vector2(x, z), 0.6).is_empty()
+
+
 ## Coarse buckets of settlements, POIs and landmark yards, and of road
 ## segments, so scatter checks only look at what is nearby.
 func _build_grids() -> void:
@@ -1097,7 +1116,7 @@ func _build_grids() -> void:
 					grid[k] = []
 				grid[k].append(item)
 	for v in villages.village_pads:
-		add.call(_pad_grid, v.center, float(v.radius) + 45.0, {"center": v.center, "radius": float(v.radius), "kind": "village"})
+		add.call(_pad_grid, v.center, float(v.radius) + 45.0, {"center": v.center, "radius": float(v.radius), "kind": "village", "square": 13.5 if v.type == "city" else 9.5})
 	for p in villages.poi_pads:
 		add.call(_pad_grid, p.center, float(p.radius) + 12.0, {"center": p.center, "radius": float(p.radius), "kind": "poi"})
 	for a in villages.landmarks.clear_areas:

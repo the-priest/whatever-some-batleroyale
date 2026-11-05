@@ -142,7 +142,7 @@ func _build_chunk(k: Vector2i) -> Node3D:
 			var forest := t.forest_density(x, z)
 			if forest > 0.6 and rr.randf() < 0.6:
 				continue
-			if world._road_distance(x, z) < 0.9 or world._near_village(x, z, 3.0):
+			if world._road_distance(x, z) < 0.9 or world.grass_blocked(x, z):
 				continue
 			var s := rr.randf_range(0.75, 1.35)
 			var b := Basis(Vector3.UP, rr.randf() * TAU).scaled(Vector3(s, s * rr.randf_range(0.8, 1.35), s))

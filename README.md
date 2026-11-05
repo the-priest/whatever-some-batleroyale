@@ -133,6 +133,10 @@ Two islands about 2.4 km across:
   floating crystal over the best loot), two Crystal Hollows, Dragon's Rest (a giant skeleton to
   fight through) and the Faerie Grove, where giant mushroom caps form a staircase you vault up to
   a lookout.
+- The Elder Oak is a giant tree with a treehouse deck, lanterns and a spiral stair round the trunk.
+- Farms have wheat fields with scarecrows, hay-bale cover and paddock fences; houses have stone
+  chimney stacks; meadows are covered in grass that sways in the wind (range set by the graphics
+  setting).
 - Hits match what you see: windows, doors, arches, tree trunks and rocks collide with their own
   meshes, so if you can see someone through an opening you can shoot them through it.
 - Bots use doors and stairs too: they loot upper floors, and cautious ones sometimes hold an
