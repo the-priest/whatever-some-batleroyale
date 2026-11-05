@@ -195,6 +195,7 @@ func _ready() -> void:
 	hud.join_lan_pressed.connect(func(): lobby.show_join())
 	net.multiplayer.connected_to_server.connect(func(): lobby.show_lobby())
 	net.left_session.connect(_on_left_session)
+	net.reconnect_state.connect(_on_reconnect_state)
 	_net_dummy = Node.new()
 	_net_dummy.set_script(load("res://scripts/net_name.gd"))
 	add_child(_net_dummy)
@@ -262,6 +263,8 @@ func _ready() -> void:
 		_run_drive_test()
 	elif OS.get_cmdline_user_args().has("--carexit"):
 		_run_carexit_test()
+	elif OS.get_cmdline_user_args().has("--netstress"):
+		_run_net_stress(OS.get_environment("NET_ROLE") == "host")
 	elif OS.get_cmdline_user_args().has("--nethost"):
 		_run_net_test(true)
 	elif OS.get_cmdline_user_args().has("--netjoin"):
@@ -3200,6 +3203,17 @@ func _net_leave() -> void:
 		_quit_to_menu()
 
 
+var _reco_shown := ""
+
+
+func _on_reconnect_state(text: String) -> void:
+	if text == _reco_shown:
+		return
+	_reco_shown = text
+	if text != "":
+		hud.show_notice(text, 1.3)
+
+
 func _on_left_session(reason: String) -> void:
 	if phase != "menu":
 		_quit_to_menu()
@@ -3244,7 +3258,8 @@ func _rebuild_world(seed_v: int) -> void:
 
 
 func net_on() -> bool:
-	return net != null and net.active and net.match_running
+	# Still a networked match while a dropped client dials back in.
+	return net != null and ((net.active and net.match_running) or net.reconnecting)
 
 
 func net_is_client() -> bool:
@@ -3343,15 +3358,24 @@ func _net_send_setup() -> void:
 		"seed": seed_value, "squad": net.squad, "plane": [plane_start, plane_end],
 		"loot": loot, "bots": bot_names, "humans": list, "total": total_players,
 		"loadout": loadout_enabled, "vehicles": _match_vehicles, "weather": _match_weather,
+		"match_id": randi() % 1000000000 + 1,
 	}
+	_last_setup = setup
+	human_inv.clear()
 	net.send_setup(setup)
 
 
 ## Client: build the host's match locally.
 func net_start_match(setup: Dictionary) -> void:
-	if int(setup.get("seed", seed_value)) != seed_value or not lobby_ready:
+	if int(setup.get("seed", seed_value)) != seed_value:
 		# Should not happen (the roster carries the seed), but never desync.
 		await _rebuild_world(int(setup["seed"]))
+	# The island for the host's seed may still be building (a rejoin right
+	# after launching the game): wait for it rather than build it twice.
+	var waited := 0.0
+	while not lobby_ready and waited < 60.0:
+		await get_tree().process_frame
+		waited += get_process_delta_time()
 	lobby.close()
 	sfx.play_ui("ui_click", -6.0)
 	hud.hide_menu()
@@ -3375,14 +3399,19 @@ func net_start_match(setup: Dictionary) -> void:
 	loot_pool.clear()
 	loot_grid.clear()
 	loot_by_id.clear()
-	var lp: Array = setup["loot"]
-	var names_t: Array = lp[0]
-	var fl: PackedFloat32Array = (lp[2] as PackedByteArray).decompress(int(lp[1]), FileAccess.COMPRESSION_ZSTD).to_float32_array()
-	for o in range(0, fl.size() - 6, 7):
-		var nk: String = names_t[int(fl[o + 1])]
-		var pos := Vector3(fl[o + 2], fl[o + 3], fl[o + 4])
-		var l := _spawn_loot(nk.get_slice("|", 0), nk.get_slice("|", 1), pos, int(fl[o + 5]), int(fl[o + 6]), int(fl[o]), false)
-		l.position = pos
+	if setup.get("loot2") != null:
+		for e in _unpack_loot_v2(setup["loot2"]):
+			var l2 := _spawn_loot(str(e[1]), str(e[2]), e[3], int(e[4]), int(e[5]), int(e[0]), false)
+			l2.dropped = bool(e[6])
+	else:
+		var lp: Array = setup["loot"]
+		var names_t: Array = lp[0]
+		var fl: PackedFloat32Array = (lp[2] as PackedByteArray).decompress(int(lp[1]), FileAccess.COMPRESSION_ZSTD).to_float32_array()
+		for o in range(0, fl.size() - 6, 7):
+			var nk: String = names_t[int(fl[o + 1])]
+			var pos := Vector3(fl[o + 2], fl[o + 3], fl[o + 4])
+			var l := _spawn_loot(nk.get_slice("|", 0), nk.get_slice("|", 1), pos, int(fl[o + 5]), int(fl[o + 6]), int(fl[o]), false)
+			l.position = pos
 	bots.clear()
 	var names: Array = setup["bots"]
 	for i in names.size():
@@ -3418,6 +3447,8 @@ func net_start_match(setup: Dictionary) -> void:
 	winner = false
 	_net_setup_ok = true
 	_after_match_setup()
+	if setup.has("resume"):
+		_apply_resume(setup["resume"])
 
 
 func net_abort() -> void:
@@ -3578,6 +3609,9 @@ func net_remote_grenade(key: String, from: Vector3, vel: Vector3) -> void:
 ## A puppet took a hit here: forward it to the machine that owns the body.
 func net_route_hit(target: Bot, amount: float, pos: Vector3, headshot: bool, source: Node) -> void:
 	if not net_on():
+		return
+	if target.is_human and target.has_meta("ghost"):
+		# Their machine is offline: nobody can apply the hit.
 		return
 	if target.is_human:
 		net.send_player_hit(target.peer_id, amount, pos, headshot, node_key(source))
@@ -3742,6 +3776,212 @@ func net_match_over(winner_key: String, winner_name: String, squad_win: bool) ->
 
 
 ## Host: a client dropped out mid-match.
+# ------------------------------------------------------- reconnecting ----
+var _last_setup: Dictionary = {}
+## Host: what each client last said it carries (for a rejoin after a crash).
+var human_inv: Dictionary = {}
+
+
+## Client: worth trying to get back in (alive and in the match).
+func net_can_reconnect() -> bool:
+	return phase in ["plane", "playing"] and player != null and player.alive
+
+
+## Host: a client dropped mid-match. Keep their soldier standing where it was
+## (untouchable, out of any jeep) so they can come back to it.
+func net_ghost_human(id: int) -> bool:
+	var h = humans.get(id)
+	if h == null or not is_instance_valid(h) or not (h as Bot).alive:
+		return false
+	var b := h as Bot
+	b.set_meta("ghost", true)
+	if b.seated_in != null:
+		_seat_remote(b, -1, -1)
+	for v in vehicles:
+		if is_instance_valid(v) and (v as Vehicle).owner_peer == id:
+			(v as Vehicle).owner_peer = 1
+			(v as Vehicle).set_puppet(false)
+			net.send_vehicle_owner((v as Vehicle).net_id)
+	return true
+
+
+## Host: the ghost's player is back on a new peer id.
+func net_resume_human(old: int, new: int) -> void:
+	net_remap_human(old, new)
+	var h = humans.get(new)
+	if h != null and is_instance_valid(h):
+		(h as Bot).remove_meta("ghost")
+	if human_inv.has(old):
+		human_inv[new] = human_inv[old]
+		human_inv.erase(old)
+
+
+## Everyone: a player came back with a new peer id.
+func net_remap_human(old: int, new: int) -> void:
+	if old == new:
+		return
+	var h = humans.get(old)
+	if h == null or not is_instance_valid(h):
+		return
+	humans.erase(old)
+	if new == net.my_id():
+		# That is us: our own soldier is the local player, not a puppet.
+		h.queue_free()
+		return
+	humans[new] = h
+	(h as Bot).peer_id = new
+	for v in vehicles:
+		if is_instance_valid(v) and (v as Vehicle).owner_peer == old:
+			(v as Vehicle).owner_peer = new
+
+
+## Client -> host every few seconds: the kit on our back.
+func net_inventory() -> Dictionary:
+	if player == null or not player.alive or phase != "playing":
+		return {}
+	return player.net_inventory()
+
+
+func net_store_inventory(id: int, d: Dictionary) -> void:
+	human_inv[id] = d
+
+
+## Current loot with full-size ids (drops from clients carry big ids that a
+## float would round).
+func _pack_loot_v2() -> Array:
+	var names_t: Array = []
+	var name_i: Dictionary = {}
+	var fl := PackedFloat32Array()
+	var ids := PackedInt64Array()
+	for l in loot_pool:
+		if not is_instance_valid(l) or l.taken:
+			continue
+		var nk := "%s|%s" % [l.kind, l.item_id]
+		if not name_i.has(nk):
+			name_i[nk] = names_t.size()
+			names_t.append(nk)
+		ids.append(int(l.net_id))
+		fl.append_array([float(name_i[nk]), l.position.x, l.position.y, l.position.z, float(l.mag_override), float(l.reserve_override), 1.0 if l.dropped else 0.0])
+	var raw := fl.to_byte_array()
+	return [names_t, raw.size(), raw.compress(FileAccess.COMPRESSION_ZSTD), ids]
+
+
+func _unpack_loot_v2(lp: Array) -> Array:
+	var names_t: Array = lp[0]
+	var fl: PackedFloat32Array = (lp[2] as PackedByteArray).decompress(int(lp[1]), FileAccess.COMPRESSION_ZSTD).to_float32_array()
+	var ids: PackedInt64Array = lp[3]
+	var out: Array = []
+	for i in ids.size():
+		var o := i * 7
+		var nk: String = names_t[int(fl[o])]
+		out.append([ids[i], nk.get_slice("|", 0), nk.get_slice("|", 1), Vector3(fl[o + 1], fl[o + 2], fl[o + 3]), int(fl[o + 4]), int(fl[o + 5]), fl[o + 6] > 0.5])
+	return out
+
+
+## Host: everything a reconnecting client may have missed.
+func net_resync_data() -> Dictionary:
+	var wrecked: Array = []
+	for v in vehicles:
+		if is_instance_valid(v) and (v as Vehicle).wrecked:
+			wrecked.append((v as Vehicle).net_id)
+	var hs: Array = [[1, net.my_name, player.alive if player != null else false]]
+	for id in humans:
+		var h = humans[id]
+		if is_instance_valid(h):
+			hs.append([int(id), (h as Bot).bot_name, (h as Bot).alive])
+	return {"loot": _pack_loot_v2(), "wrecked": wrecked, "humans": hs, "alive": alive,
+		"total": total_players, "match_time": match_time}
+
+
+## Client: catch up after a reconnect.
+func net_apply_resync(d: Dictionary) -> void:
+	var have: Dictionary = {}
+	for e in _unpack_loot_v2(d["loot"]):
+		have[int(e[0])] = true
+		if not loot_by_id.has(int(e[0])):
+			var l := _spawn_loot(str(e[1]), str(e[2]), e[3], int(e[4]), int(e[5]), int(e[0]), false)
+			l.dropped = bool(e[6])
+	for id in loot_by_id.keys():
+		if not have.has(int(id)):
+			net_loot_taken(int(id))
+	for v in vehicles:
+		if is_instance_valid(v) and int((v as Vehicle).net_id) in d.get("wrecked", []):
+			(v as Vehicle).wreck_quiet()
+	var seen: Dictionary = {}
+	for e in d.get("humans", []):
+		var id := int(e[0])
+		if id == net.my_id():
+			continue
+		seen[id] = true
+		var h = humans.get(id)
+		if h == null or not is_instance_valid(h):
+			h = _make_human(id, str(e[1]))
+		if not bool(e[2]) and (h as Bot).alive:
+			(h as Bot).puppet_die()
+	for id in humans.keys():
+		if not seen.has(int(id)):
+			var h = humans[id]
+			if is_instance_valid(h):
+				h.queue_free()
+			humans.erase(id)
+	alive = int(d.get("alive", alive))
+	total_players = int(d.get("total", total_players))
+	match_time = float(d.get("match_time", match_time))
+	hud.set_alive(alive, total_players)
+	last_hud_alive = alive
+	hud.show_notice("RECONNECTED", 2.0)
+	net.flush_pending()
+
+
+## Host: rebuild the match for a player whose game restarted, with their
+## soldier where it stood and the kit it carried.
+func net_resume_setup(id: int) -> Dictionary:
+	var setup := _last_setup.duplicate()
+	setup["loot"] = null
+	setup["loot2"] = _pack_loot_v2()
+	var list: Array = [[1, net.my_name]]
+	for hid in humans:
+		list.append([int(hid), (humans[hid] as Bot).bot_name])
+	setup["humans"] = list
+	var h = humans.get(id)
+	var r := net_resync_data()
+	if h != null and is_instance_valid(h):
+		var b := h as Bot
+		r["pos"] = b.global_position
+		r["yaw"] = b.rotation.y
+		r["hp"] = b.hp
+		r["kills"] = b.net_kills
+		r["damage"] = b.net_damage
+	r["inv"] = human_inv.get(id, {})
+	setup["resume"] = r
+	return setup
+
+
+## Client: we rejoined a running match after restarting the game.
+func _apply_resume(r: Dictionary) -> void:
+	_player_jump(true)
+	if plane != null and is_instance_valid(plane):
+		plane.queue_free()
+		plane = null
+	player.global_position = Vector3(r.get("pos", player.global_position)) + Vector3(0, 0.3, 0)
+	player.yaw = float(r.get("yaw", 0.0)) + PI
+	player.mode = Player.Mode.GROUND
+	player.landed = true
+	player.velocity = Vector3.ZERO
+	var inv: Dictionary = r.get("inv", {})
+	if not inv.is_empty():
+		player.apply_net_inventory(inv)
+	player.hp = clampf(float(r.get("hp", player.hp)), 1.0, 100.0)
+	player._emit_health()
+	player_kills = int(r.get("kills", 0))
+	damage_dealt = float(r.get("damage", 0.0))
+	hud.set_kills(player_kills)
+	phase = "playing"
+	on_player_landed()
+	net_apply_resync(r)
+	hud.show_big("BACK IN THE MATCH", HUD.WHITE, 2.4)
+
+
 func net_player_left(id: int) -> void:
 	var h = humans.get(id)
 	if h != null and is_instance_valid(h) and (h as Bot).alive:
@@ -3749,6 +3989,203 @@ func net_player_left(id: int) -> void:
 	if h != null and is_instance_valid(h):
 		h.queue_free()
 	humans.erase(id)
+
+
+## Multi-process soak test: one host and several clients (each behind its
+## own network emulator) play a scripted match: walking, shooting at bots and
+## each other, healing, grenades, driving, looting, chat and markers. Every
+## process logs one line a second (wall clock stamped) so a script can check
+## that everyone agrees on the match. Env: NET_ROLE host|client, NET_JOIN,
+## NET_CLIENTS (host waits for this many), NET_SECS, NET_NAME, NET_DRIVE,
+## NET_DROP_AT + NET_DROP_MODE quit|crash (a client vanishes mid-match).
+func _env_f(k: String, d: float) -> float:
+	var v := OS.get_environment(k)
+	return float(v) if v != "" else d
+
+
+func _run_net_stress(as_host: bool) -> void:
+	var tag := OS.get_environment("NET_NAME") if OS.get_environment("NET_NAME") != "" else ("HOST" if as_host else "CLIENT")
+	net.my_name = tag
+	var secs := _env_f("NET_SECS", 180.0)
+	var drop_at := _env_f("NET_DROP_AT", -1.0)
+	var st := {"left": "", "errors": 0}
+	net.left_session.connect(func(t): st["left"] = t; print("[stress] %s left session: %s" % [tag, t]))
+	net.status.connect(func(t): print("[stress] %s status: %s" % [tag, t]))
+	net.reconnect_state.connect(func(t): if t == "" or t.ends_with("RECONNECTING"): print("[stress] %s reconnect: '%s' active=%s" % [tag, t, net.active]))
+	seed(hash(tag))
+	if as_host:
+		_net_host()
+		var want := int(_env_f("NET_CLIENTS", 1.0))
+		var w := 0.0
+		while net.roster.size() < want + 1 and w < 120.0:
+			await get_tree().create_timer(0.5).timeout
+			w += 0.5
+		w = 0.0
+		while not net.all_ready() and w < 120.0:
+			await get_tree().create_timer(0.5).timeout
+			w += 0.5
+		print("[stress] HOST roster=%s ready=%s after %.0fs" % [str(net.roster.values()), net.all_ready(), w])
+		net.start_countdown(3)
+	else:
+		net.join(OS.get_environment("NET_JOIN"))
+		var r := 0.0
+		while net.roster.size() < 2 and r < 60.0:
+			await get_tree().create_timer(0.5).timeout
+			r += 0.5
+		# The host's island may still be building here.
+		while not lobby_ready and r < 120.0:
+			await get_tree().create_timer(0.5).timeout
+			r += 0.5
+		await get_tree().create_timer(1.0).timeout
+		net.set_ready(true)
+		print("[stress] %s joined roster=%s after %.0fs" % [tag, str(net.roster.values()), r])
+	var t0 := 0.0
+	while phase == "menu" and t0 < 150.0:
+		await get_tree().create_timer(0.25).timeout
+		t0 += 0.25
+	print("[stress] %s match phase=%s setup_ok=%s bots=%d humans=%d" % [tag, phase, _net_setup_ok or as_host, bots.size(), humans.size()])
+	await get_tree().create_timer(2.0 + randf() * 3.0).timeout
+	var rejoined := player.mode == Player.Mode.GROUND and phase == "playing"
+	if rejoined:
+		print("[stress] %s REJOINED pos=%s hp=%d loadout=%s mags=%s meds=%d bandages=%d grenades=%d vest=%d kills=%d alive=%d humans=%d loot=%d" % [tag, str(player.global_position.round()), int(player.hp), str(player.loadout), str(player.mags), player.meds, player.bandages, player.grenades, player.vest_level, player_kills, alive, humans.size(), loot_pool.size()])
+	_player_jump(true)
+	# Everyone meets in the same town so they see and shoot each other.
+	var meet := Vector2.ZERO
+	for pad in world.villages.village_pads:
+		if pad.type == "town":
+			meet = pad.center
+			break
+	if not rejoined:
+		var spot := ground_at(Vector3(meet.x + randf_range(-40, 40), 200.0, meet.y + randf_range(-40, 40)))
+		player.global_position = spot + Vector3(0, 1.0, 0)
+		player.mode = Player.Mode.GROUND
+		player.landed = true
+		player.velocity = Vector3.ZERO
+		player.give_weapon("rifle")
+		# Some kit to carry over a rejoin.
+		player.meds = 2
+		player.bandages = 4
+		player.vest_level = 2
+	player.spawn_protect = 1.0e9
+	var t := 0.0
+	var next_log := 0.0
+	var dir_t := 0.0
+	var drove := false
+	var drive_until := -1.0
+	var tick := 0.25
+	while t < secs:
+		await get_tree().create_timer(tick).timeout
+		t += tick
+		if st["left"] != "" and not as_host:
+			print("[stress] %s disconnected at t=%.0f: %s" % [tag, t, st["left"]])
+			break
+		if drop_at > 0.0 and t >= drop_at:
+			print("[stress] %s dropping out (%s) at t=%.0f" % [tag, OS.get_environment("NET_DROP_MODE"), t])
+			if OS.get_environment("NET_DROP_MODE") == "crash":
+				OS.kill(OS.get_process_id())
+			net.leave("")
+			get_tree().quit()
+			return
+		var p := player
+		if p.alive and p.mode == Player.Mode.GROUND:
+			dir_t -= tick
+			if dir_t <= 0.0:
+				dir_t = randf_range(1.5, 4.0)
+				p.test_input = Vector2(randf_range(-1, 1), randf_range(-1, 0.4)).limit_length(1.0)
+				p.yaw = randf() * TAU
+			# Keep near the meeting point.
+			if Vector2(p.global_position.x, p.global_position.z).distance_to(meet) > 90.0:
+				var to := Vector3(meet.x, 0, meet.y) - p.global_position
+				p.yaw = atan2(-to.x, -to.z)
+				p.test_input = Vector2(0, -1)
+			var k := int(t / tick)
+			if k % 24 == 5:
+				# Burst at the nearest soldier in sight.
+				var tgt: Node3D = null
+				var bd := 150.0
+				for b in bots + humans.values():
+					if is_instance_valid(b) and b.alive and (b as Bot).state == Bot.State.GROUND:
+						var d: float = (b as Node3D).global_position.distance_to(p.global_position)
+						if d < bd:
+							bd = d
+							tgt = b
+				if tgt != null:
+					var to := tgt.global_position + Vector3(0, 1.3, 0) - p.camera.global_position
+					p.yaw = atan2(-to.x, -to.z)
+					p.pitch = atan2(to.y, Vector2(to.x, to.z).length())
+					p.mags[p.current_id()] = 30
+					for n in 3:
+						p.fire_timer = 0.0
+						p._try_fire()
+						await get_tree().physics_frame
+						await get_tree().physics_frame
+			if k % 80 == 17:
+				p.hp = minf(p.hp, 55.0)
+				p.bandages += 1
+				p.use_item("bandage")
+			if k % 108 == 41:
+				p.grenades = 1
+				p.throw_grenade()
+			if k % 60 == 30:
+				net.send_chat("%s says hi at %d" % [tag, int(t)])
+			if k % 132 == 66:
+				net.send_marker(p.global_position + Vector3(randf_range(-60, 60), 0, randf_range(-60, 60)))
+			if k % 40 == 20:
+				var l := _nearest_loot(p.global_position, 60.0)
+				if l != null and not l.taken:
+					p.global_position = l.global_position + Vector3(0.6, 0.6, 0)
+					await get_tree().physics_frame
+					try_pickup(p)
+		if OS.get_environment("NET_DRIVE") == "1" and not drove and t > 40.0 and p.alive and p.mode == Player.Mode.GROUND:
+			var car := _nearest_vehicle_any(p.global_position)
+			if car != null:
+				p.global_position = car.global_position + car.global_basis.x * 2.4 + Vector3(0, 0.5, 0)
+				await get_tree().physics_frame
+				await get_tree().physics_frame
+				try_pickup(p)
+				if p.mode == Player.Mode.VEHICLE:
+					drove = true
+					_drive_scripted = true
+					drive_until = t + 12.0
+					print("[stress] %s in jeep %d seat=%d" % [tag, car.net_id, p.seat])
+		if p.mode == Player.Mode.VEHICLE and p.vehicle != null:
+			if p.seat == 0:
+				p.vehicle.throttle = 0.8
+				p.vehicle.steer_in = sin(t) * 0.4
+			if t > drive_until:
+				p.vehicle.throttle = 0.0
+				_exit_vehicle()
+				_drive_scripted = false
+				print("[stress] %s left jeep mode=%d" % [tag, p.mode])
+		if t >= next_log:
+			next_log += 1.0
+			var hs := []
+			for id in humans:
+				var h = humans[id]
+				if is_instance_valid(h):
+					hs.append("%d:%.1f,%.1f,%.1f:%d" % [int(id), h.global_position.x, h.global_position.y, h.global_position.z, int(h.alive)])
+			var bots_alive := 0
+			for b in bots:
+				if is_instance_valid(b) and b.alive:
+					bots_alive += 1
+			print("[stress] %s wall=%.2f t=%.0f phase=%s alive=%d bots=%d zone=%.1f ping=%d fps=%d id=%d pos=%.1f,%.1f,%.1f mode=%d hp=%d loot=%d humans=%s" % [tag, Time.get_unix_time_from_system(), t, phase, alive, bots_alive, zone.radius if zone != null else -1.0, net.ping_of(net.my_id()), Engine.get_frames_per_second(), net.my_id(), p.global_position.x, p.global_position.y, p.global_position.z, p.mode, int(p.hp), loot_pool.size(), " ".join(hs)])
+	print("[stress] %s END t=%.0f phase=%s left=%s" % [tag, t, phase, st["left"]])
+	if as_host:
+		await get_tree().create_timer(2.0).timeout
+	net.leave("")
+	get_tree().quit()
+
+
+func _nearest_vehicle_any(pos: Vector3) -> Vehicle:
+	var best: Vehicle = null
+	var bd := 1e9
+	for v in vehicles:
+		if is_instance_valid(v) and not (v as Vehicle).wrecked and (v as Vehicle).free_seat() >= 0:
+			var d: float = pos.distance_to((v as Vehicle).global_position)
+			if d < bd:
+				bd = d
+				best = v
+	return best
 
 
 ## Two-instance smoke test on this machine: --nethost / --netjoin.

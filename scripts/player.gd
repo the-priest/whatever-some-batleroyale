@@ -1794,7 +1794,44 @@ func crouching() -> bool:
 	return mode == Mode.GROUND and _ap("crouch")
 
 
+## Everything we carry, for the host to keep while we play (a crashed game
+## rejoins with it).
+func net_inventory() -> Dictionary:
+	return {"loadout": Array(loadout), "slot": slot, "mags": mags.duplicate(), "ammo": ammo.duplicate(),
+		"att": attachments.duplicate(true), "single": fire_single.duplicate(), "zero": zeroing.duplicate(),
+		"meds": meds, "bandages": bandages, "energy": energy, "grenades": grenades, "boost": boost,
+		"vest": vest_level, "helmet": helmet_level, "helmet_hp": helmet_hp, "armor": armor}
+
+
+func apply_net_inventory(d: Dictionary) -> void:
+	loadout.clear()
+	for id in d.get("loadout", []):
+		loadout.append(str(id))
+	slot = clampi(int(d.get("slot", 0)), 0, maxi(0, loadout.size() - 1))
+	mags = (d.get("mags", {}) as Dictionary).duplicate()
+	ammo = (d.get("ammo", {}) as Dictionary).duplicate()
+	var att: Array = d.get("att", [{}, {}])
+	attachments = [att[0] if att.size() > 0 else {}, att[1] if att.size() > 1 else {}]
+	fire_single = (d.get("single", {}) as Dictionary).duplicate()
+	zeroing = (d.get("zero", {}) as Dictionary).duplicate()
+	meds = int(d.get("meds", 0))
+	bandages = int(d.get("bandages", 0))
+	energy = int(d.get("energy", 0))
+	grenades = int(d.get("grenades", 0))
+	boost = float(d.get("boost", 0.0))
+	vest_level = int(d.get("vest", 0))
+	helmet_level = int(d.get("helmet", 0))
+	helmet_hp = float(d.get("helmet_hp", 0.0))
+	armor = float(d.get("armor", 0.0))
+	_rebuild_viewmodel()
+	_emit_weapon()
+	_emit_health()
+	inventory_changed.emit()
+
+
 func reset_for_match() -> void:
+	_throw_t = -1.0
+	_mantle = []
 	alive = true
 	hp = 100.0
 	armor = 0.0

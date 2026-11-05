@@ -618,6 +618,20 @@ func explode(source: Node = null) -> void:
 		apply_torque_impulse(Vector3(randf_range(-1, 1), 0, randf_range(-1, 1)) * mass * 2.0)
 
 
+## Already burnt out when we caught up with the match (no blast).
+func wreck_quiet() -> void:
+	if wrecked:
+		return
+	wrecked = true
+	alive = false
+	hp = 0.0
+	throttle = 0.0
+	for m in _body_mats:
+		m.albedo_color = m.albedo_color.darkened(0.75)
+	for l in _lights:
+		l.visible = false
+
+
 func _burn(delta: float) -> void:
 	if _burn_t <= 0.0:
 		return

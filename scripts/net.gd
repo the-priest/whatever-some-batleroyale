@@ -15,10 +15,16 @@ signal chat(from_id: int, name: String, text: String, system: bool)
 signal countdown(seconds: int)
 signal pings_updated
 signal marker(from_id: int, pos: Vector3)
+## Connection lost mid-match: "" when back (or given up), else the banner text.
+signal reconnect_state(text: String)
 
 const PORT := 24555
 const DISCOVERY_PORT := 24556
-const VERSION := "br-4"
+const VERSION := "br-5"
+## A player who drops out of a running match keeps their place this long.
+const GHOST_MS := 120000
+## A client that loses the host mid-match keeps trying this long.
+const RECONNECT_S := 75.0
 const SNAP_RATE := 12.0
 const STATE_RATE := 20.0
 const MAX_PLAYERS := 8
@@ -57,6 +63,16 @@ var _loot_out: Array = []
 var _loot_seq := 0
 var _veh_t := 0.0
 var _veh_fast := 0.0
+var last_address := ""
+var reconnecting := false
+var _reco_left := 0.0
+var _reco_try := 0.0
+## Host: players who dropped mid-match, by the name they asked for:
+## {"id": old peer id, "until": msec}.
+var _ghosts: Dictionary = {}
+## Host: the name each peer asked for (before it was made unique).
+var _asked_name: Dictionary = {}
+var _inv_t := 0.0
 
 
 func _ready() -> void:
@@ -73,8 +89,15 @@ func _ready() -> void:
 		my_name = user.to_upper().substr(0, 14)
 
 
+var _my_id := 1
+
+
 func my_id() -> int:
-	return multiplayer.get_unique_id() if active else 1
+	if active:
+		_my_id = multiplayer.get_unique_id()
+		return _my_id
+	# While dialling back in we are still who we were.
+	return _my_id if reconnecting else 1
 
 
 func my_key() -> String:
@@ -118,6 +141,7 @@ func join(address: String) -> void:
 	peer = ENetMultiplayerPeer.new()
 	# "host" or "host:port".
 	var addr := address.strip_edges()
+	last_address = addr
 	var port := PORT
 	if addr.count(":") == 1:
 		port = int(addr.get_slice(":", 1))
@@ -130,22 +154,35 @@ func join(address: String) -> void:
 	multiplayer.multiplayer_peer = peer
 	active = true
 	hosting = false
+	_host_said_bye = false
 	status.emit("CONNECTING TO %s ..." % address)
 
 
 func leave(reason := "") -> void:
-	if active and hosting and match_running:
-		_abort.rpc()
+	if active and peer != null and peer.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED:
+		if hosting:
+			if match_running:
+				_abort.rpc()
+			_bye.rpc()
+		else:
+			_client_bye.rpc_id(1)
+		_drain()
 	if peer != null:
 		peer.close()
+	_closing = false
 	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
 	peer = null
 	var was := active
 	active = false
 	hosting = false
 	match_running = false
+	if reconnecting:
+		reconnecting = false
+		reconnect_state.emit("")
 	roster.clear()
 	info.clear()
+	_ghosts.clear()
+	_asked_name.clear()
 	_countdown_left = -1.0
 	_beacon = null
 	if was and reason != "":
@@ -206,8 +243,19 @@ func _process(delta: float) -> void:
 				changed = true
 		if changed:
 			games_found.emit(_found.values())
+	if reconnecting:
+		_tick_reconnect(delta)
 	if active and match_running:
 		_tick_match(delta)
+	if hosting and not _ghosts.is_empty():
+		var now := Time.get_ticks_msec()
+		for n in _ghosts.keys():
+			if now > int(_ghosts[n]["until"]):
+				var gid := int(_ghosts[n]["id"])
+				_ghosts.erase(n)
+				_system_chat("%s DID NOT COME BACK" % n)
+				if game != null:
+					game.net_player_left(gid)
 	if active:
 		_ping_t -= delta
 		if _ping_t <= 0.0:
@@ -223,45 +271,179 @@ func _process(delta: float) -> void:
 
 # ------------------------------------------------------------------- lobby --
 
+## ENet gives up on a peer after ~5 s without acks by default: a short WiFi
+## dropout or a long hitch would end the match. Ride out up to ~20 s (and
+## never more than 45 s) before calling the connection dead.
+const TIMEOUT_LIMIT := 64
+const TIMEOUT_MIN_MS := 20000
+const TIMEOUT_MAX_MS := 45000
+
+
+func _patient(pid: int) -> void:
+	if peer == null:
+		return
+	var pp := peer.get_peer(pid)
+	if pp != null:
+		pp.set_timeout(TIMEOUT_LIMIT, TIMEOUT_MIN_MS, TIMEOUT_MAX_MS)
+
+
 func _on_peer_connected(id: int) -> void:
 	if hosting:
+		_patient(id)
 		status.emit("%s JOINED" % ("PLAYER %d" % id))
 
 
 func _on_peer_disconnected(id: int) -> void:
-	if not hosting:
+	if not hosting or _closing:
 		return
 	var name: String = roster.get(id, "PLAYER")
+	var asked: String = _asked_name.get(id, name)
+	_asked_name.erase(id)
 	roster.erase(id)
+	var old_info: Dictionary = info.get(id, {})
 	info.erase(id)
 	_send_roster()
 	status.emit("%s LEFT" % name)
-	_chat.rpc(0, "", "%s LEFT THE LOBBY" % name, true)
-	chat.emit(0, "", "%s LEFT THE LOBBY" % name, true)
 	if _countdown_left > 0.0:
 		cancel_countdown()
+	# Mid-match: hold their place for a while so they can come back (a
+	# dropped connection reconnects on its own; a crashed game can rejoin).
+	var meant := _leaving.has(id)
+	_leaving.erase(id)
+	if match_running and not meant and game != null and game.net_ghost_human(id):
+		_ghosts[asked] = {"id": id, "until": Time.get_ticks_msec() + GHOST_MS, "name": name, "info": old_info}
+		_system_chat("%s LOST CONNECTION  ·  WAITING FOR THEM TO COME BACK" % name)
+		return
+	_system_chat("%s LEFT THE %s" % [name, "MATCH" if match_running else "LOBBY"])
 	if match_running and game != null:
 		game.net_player_left(id)
 
 
+func _system_chat(text: String) -> void:
+	_chat.rpc(0, "", text, true)
+	chat.emit(0, "", text, true)
+
+
 func _on_connected() -> void:
+	_patient(1)
+	if reconnecting:
+		active = true
+		status.emit("RECONNECTED  ·  CATCHING UP")
+		_hello.rpc_id(1, my_name, VERSION, {"resume": true, "match": _match_id})
+		return
 	status.emit("CONNECTED  ·  WAITING FOR THE HOST")
-	_hello.rpc_id(1, my_name, VERSION)
+	_hello.rpc_id(1, my_name, VERSION, {})
 
 
 func _on_failed() -> void:
+	if reconnecting:
+		# Keep trying until the reconnect window runs out.
+		if peer != null:
+			peer.close()
+		peer = null
+		multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
+		return
 	leave("")
 	status.emit("CONNECTION FAILED")
 	left_session.emit("CONNECTION FAILED")
 
 
-func _on_server_gone() -> void:
-	leave("")
-	left_session.emit("THE HOST LEFT THE GAME")
+var _host_said_bye := false
+## Set while we shut our own connection down (no lobby updates then).
+var _closing := false
+## Host: clients that said they are leaving on purpose (no reconnect wait).
+var _leaving: Dictionary = {}
+
+
+## Let the goodbye actually arrive: ask every connection to close once its
+## queued messages are through, and service the socket for a moment.
+func _drain() -> void:
+	if peer.host == null:
+		return
+	_closing = true
+	var peers: Array = []
+	for pp in peer.host.get_peers():
+		if pp != null and (pp as ENetPacketPeer).is_active():
+			(pp as ENetPacketPeer).peer_disconnect_later()
+			peers.append(pp)
+	var t0 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 700:
+		peer.poll()
+		var open := false
+		for pp in peers:
+			if (pp as ENetPacketPeer).get_state() != ENetPacketPeer.STATE_DISCONNECTED:
+				open = true
+		if not open:
+			break
+		OS.delay_msec(5)
 
 
 @rpc("any_peer", "reliable")
-func _hello(name: String, version: String) -> void:
+func _client_bye() -> void:
+	if hosting:
+		_leaving[multiplayer.get_remote_sender_id()] = true
+
+
+@rpc("authority", "call_remote", "reliable")
+func _bye() -> void:
+	_host_said_bye = true
+
+
+func _on_server_gone() -> void:
+	var why := "THE HOST LEFT THE GAME" if _host_said_bye else "LOST THE CONNECTION TO THE HOST"
+	if not _host_said_bye and match_running and not reconnecting and game != null and game.net_can_reconnect():
+		_begin_reconnect()
+		return
+	leave("")
+	left_session.emit(why)
+
+
+## Mid-match the host went quiet: keep playing locally and dial back in.
+func _begin_reconnect() -> void:
+	reconnecting = true
+	_reco_left = RECONNECT_S
+	_reco_try = 1.0
+	if peer != null:
+		peer.close()
+	peer = null
+	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
+	# Nothing may be sent while the line is down.
+	active = false
+	match_running = false
+	reconnect_state.emit("CONNECTION LOST  ·  RECONNECTING")
+
+
+func _tick_reconnect(delta: float) -> void:
+	_reco_left -= delta
+	if _reco_left <= 0.0:
+		reconnecting = false
+		reconnect_state.emit("")
+		leave("")
+		left_session.emit("LOST THE CONNECTION TO THE HOST")
+		return
+	reconnect_state.emit("CONNECTION LOST  ·  RECONNECTING  %d" % int(ceil(_reco_left)))
+	if peer != null:
+		return
+	_reco_try -= delta
+	if _reco_try > 0.0:
+		return
+	_reco_try = 3.0
+	peer = ENetMultiplayerPeer.new()
+	var port := PORT
+	var addr := last_address
+	if addr.count(":") == 1:
+		port = int(addr.get_slice(":", 1))
+		addr = addr.get_slice(":", 0)
+	if peer.create_client(addr, port) != OK:
+		peer = null
+		return
+	multiplayer.multiplayer_peer = peer
+	# Not "active" until the handshake completes: nothing may be sent before.
+	hosting = false
+
+
+@rpc("any_peer", "reliable")
+func _hello(name: String, version: String, opts: Dictionary = {}) -> void:
 	if not hosting:
 		return
 	var id := multiplayer.get_remote_sender_id()
@@ -271,12 +453,25 @@ func _hello(name: String, version: String) -> void:
 	var n := name.strip_edges().to_upper().substr(0, 14)
 	if n == "":
 		n = "PLAYER"
+	_patient(id)
+	# Coming back to a match in progress: take over the place we held.
+	if match_running and game != null:
+		var gk := ""
+		for k in _ghosts:
+			if k == n or str(_ghosts[k]["name"]) == n:
+				gk = k
+		if gk != "":
+			_resume(id, gk, bool(opts.get("resume", false)) and int(opts.get("match", 0)) == _match_id)
+			return
+		_asked_name[id] = n
 	# Keep names unique so the kill feed makes sense.
 	var base := n
 	var k := 2
 	while n in roster.values():
 		n = "%s %d" % [base, k]
 		k += 1
+	if not _asked_name.has(id):
+		_asked_name[id] = n
 	roster[id] = n
 	var used: Array = []
 	for other in info:
@@ -288,6 +483,47 @@ func _hello(name: String, version: String) -> void:
 	_send_roster()
 	_chat.rpc(0, "", "%s JOINED THE LOBBY" % n, true)
 	chat.emit(0, "", "%s JOINED THE LOBBY" % n, true)
+	if match_running:
+		_chat.rpc_id(id, 0, "", "A MATCH IS IN PROGRESS  ·  YOU WILL DROP IN WITH THE NEXT ONE", true)
+
+
+## Host: a dropped player is back. Same name and colour, new peer id; a
+## client that kept its game running just catches up, one that restarted
+## gets the whole match rebuilt around its saved character.
+func _resume(id: int, ghost_key: String, kept_state: bool) -> void:
+	var g: Dictionary = _ghosts[ghost_key]
+	_ghosts.erase(ghost_key)
+	var old := int(g["id"])
+	var n := str(g["name"])
+	roster[id] = n
+	_asked_name[id] = ghost_key
+	var gi: Dictionary = g.get("info", {})
+	info[id] = {"ready": true, "color": int(gi.get("color", 0)), "ping": 0}
+	game.net_resume_human(old, id)
+	_send_roster()
+	_remap.rpc(old, id)
+	if kept_state:
+		_resync.rpc_id(id, game.net_resync_data())
+	else:
+		_setup.rpc_id(id, game.net_resume_setup(id))
+	_system_chat("%s RECONNECTED" % n)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _remap(old: int, new: int) -> void:
+	if game != null:
+		game.net_remap_human(old, new)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _resync(data: Dictionary) -> void:
+	match_running = true
+	if reconnecting:
+		reconnecting = false
+		reconnect_state.emit("")
+	status.emit("")
+	if game != null:
+		game.net_apply_resync(data)
 
 
 @rpc("authority", "reliable")
@@ -490,6 +726,8 @@ func _marker(pos: Vector3) -> void:
 ## Host: everything a client needs to build the same match.
 func send_setup(setup: Dictionary) -> void:
 	match_running = true
+	_ghosts.clear()
+	_match_id = int(setup.get("match_id", 0))
 	_countdown_left = -1.0
 	# Everyone readies up again for the next one.
 	for id in info:
@@ -500,9 +738,16 @@ func send_setup(setup: Dictionary) -> void:
 	_setup.rpc(setup)
 
 
+var _match_id := 0
+
+
 @rpc("authority", "call_remote", "reliable")
 func _setup(setup: Dictionary) -> void:
 	match_running = true
+	_match_id = int(setup.get("match_id", 0))
+	if reconnecting:
+		reconnecting = false
+		reconnect_state.emit("")
 	for id in info:
 		if int(id) != 1:
 			info[id]["ready"] = false
@@ -522,6 +767,15 @@ func _abort() -> void:
 func _tick_match(delta: float) -> void:
 	if game == null:
 		return
+	# Clients keep the host up to date with what they carry, so a player
+	# whose game crashes can rejoin with their kit.
+	if not hosting:
+		_inv_t -= delta
+		if _inv_t <= 0.0:
+			_inv_t = 3.0
+			var inv: Dictionary = game.net_inventory()
+			if not inv.is_empty():
+				_inv.rpc_id(1, inv)
 	if hosting:
 		_snap_t -= delta
 		if _snap_t <= 0.0:
@@ -590,6 +844,12 @@ func _tick_match(delta: float) -> void:
 			i += 12
 
 
+@rpc("any_peer", "call_remote", "unreliable_ordered", 2)
+func _inv(d: Dictionary) -> void:
+	if hosting and game != null:
+		game.net_store_inventory(multiplayer.get_remote_sender_id(), d)
+
+
 @rpc("authority", "call_remote", "unreliable_ordered", 1)
 func _snap(bots: PackedFloat32Array, first: int, zone: PackedFloat32Array, misc: PackedFloat32Array) -> void:
 	if game != null:
@@ -607,6 +867,8 @@ var _shot_t := 0.0
 
 
 func queue_shot(key: String, from: Vector3, dir: Vector3, weapon: String, vis: Vector3, shot_id: int) -> void:
+	if not active:
+		return
 	_shots.append([key, from, dir, weapon, vis, shot_id])
 
 
@@ -622,6 +884,8 @@ func _shot_batch(list: Array) -> void:
 
 
 func send_grenade(key: String, from: Vector3, vel: Vector3) -> void:
+	if not active:
+		return
 	_grenade.rpc(key, from, vel)
 
 
@@ -633,6 +897,8 @@ func _grenade(key: String, from: Vector3, vel: Vector3) -> void:
 
 ## A client hit a bot: the host applies it to the real one.
 func send_bot_hit(bot_index: int, dmg: float, pos: Vector3, headshot: bool) -> void:
+	if not active:
+		return
 	_bot_hit.rpc_id(1, bot_index, dmg, pos, headshot)
 
 
@@ -644,6 +910,8 @@ func _bot_hit(bot_index: int, dmg: float, pos: Vector3, headshot: bool) -> void:
 
 ## Someone hit a human: tell that human's machine.
 func send_player_hit(peer_id: int, dmg: float, pos: Vector3, headshot: bool, source_key: String) -> void:
+	if not active:
+		return
 	if peer_id == my_id():
 		return
 	_player_hit.rpc_id(peer_id, dmg, pos, headshot, source_key)
@@ -655,7 +923,25 @@ func _player_hit(dmg: float, pos: Vector3, headshot: bool, source_key: String) -
 		game.net_player_hit(dmg, pos, headshot, source_key)
 
 
+var _pending: Array = []
+
+
+## Sent once the line is back up after a reconnect.
+func flush_pending() -> void:
+	var p := _pending
+	_pending = []
+	for e in p:
+		if e[0] == "death":
+			report_death(e[1], e[2], e[3])
+		elif e[0] == "taken":
+			send_loot_taken(int(e[1]))
+
+
 func report_death(killer_key: String, killer_name: String, weapon: String) -> void:
+	if not active:
+		if reconnecting:
+			_pending.append(["death", killer_key, killer_name, weapon])
+		return
 	if hosting:
 		game.net_human_died(1, killer_key, killer_name, weapon)
 	else:
@@ -669,6 +955,8 @@ func _died(killer_key: String, killer_name: String, weapon: String) -> void:
 
 
 func send_elim(e: Dictionary) -> void:
+	if not active:
+		return
 	_elim.rpc(e)
 
 
@@ -684,6 +972,8 @@ func new_loot_id() -> int:
 
 
 func queue_loot(entry: Array) -> void:
+	if not active:
+		return
 	_loot_out.append(entry)
 
 
@@ -694,6 +984,10 @@ func _loot_spawned(list: Array) -> void:
 
 
 func send_loot_taken(id: int) -> void:
+	if not active:
+		if reconnecting:
+			_pending.append(["taken", id])
+		return
 	_loot_taken.rpc(id)
 
 
@@ -710,6 +1004,8 @@ func _vstate(list: Array) -> void:
 
 
 func send_vehicle_owner(id: int) -> void:
+	if not active:
+		return
 	_vowner.rpc(id)
 
 
@@ -720,6 +1016,8 @@ func _vowner(id: int) -> void:
 
 
 func send_vehicle_hit(id: int, amount: float) -> void:
+	if not active:
+		return
 	_vhit.rpc(id, amount)
 
 
@@ -730,6 +1028,8 @@ func _vhit(id: int, amount: float) -> void:
 
 
 func send_vehicle_destroyed(id: int) -> void:
+	if not active:
+		return
 	_vdestroyed.rpc(id)
 
 
@@ -740,6 +1040,8 @@ func _vdestroyed(id: int) -> void:
 
 
 func send_airdrop(p: Vector2, ground: float) -> void:
+	if not active:
+		return
 	_airdrop.rpc(p, ground)
 
 
@@ -750,6 +1052,8 @@ func _airdrop(p: Vector2, ground: float) -> void:
 
 
 func send_match_over(winner_key: String, winner_name: String, squad_win: bool) -> void:
+	if not active:
+		return
 	_match_over.rpc(winner_key, winner_name, squad_win)
 
 
