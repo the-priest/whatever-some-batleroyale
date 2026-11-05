@@ -554,7 +554,7 @@ func set_weather(kind: String) -> void:
 	# [sun pitch, sun yaw, sun colour, sun energy, sky top, sky horizon,
 	#  ground horizon, ground bottom, fog colour, fog density, ambient, exposure]
 	var presets := {
-		"clear": [-46.0, -34.0, Color(1.0, 0.955, 0.87), 1.35, Color(0.16, 0.34, 0.66), Color(0.62, 0.76, 0.90),
+		"clear": [-46.0, -34.0, Color(1.0, 0.955, 0.87), 1.35, Color(0.26, 0.44, 0.72), Color(0.66, 0.79, 0.91),
 			Color(0.60, 0.73, 0.87), Color(0.36, 0.52, 0.64), Color(0.62, 0.74, 0.88), 0.00032, 0.62, 1.05],
 		"golden": [-17.0, -62.0, Color(1.0, 0.76, 0.52), 1.45, Color(0.22, 0.32, 0.58), Color(0.98, 0.72, 0.52),
 			Color(0.86, 0.66, 0.54), Color(0.32, 0.36, 0.44), Color(0.94, 0.72, 0.56), 0.00042, 0.68, 1.1],
@@ -1011,12 +1011,8 @@ func _build_vehicle_spawns() -> void:
 			s += vrng.randf_range(110.0, 220.0)
 			if terrain.slope_at(p.x, p.y) > 0.22 or terrain.is_water(p.x, p.y):
 				continue
-			var clear := true
-			for h in villages.houses:
-				if (h.center as Vector2).distance_to(p) < float(h.radius) + 3.5:
-					clear = false
-					break
-			if not clear:
+			# A jeep is ~4.4 m long: keep it off walls and out of doorways.
+			if villages.blocks_house(p, 2.6):
 				continue
 			var yaw := atan2(-dir.x, -dir.y) + (PI if vrng.randf() < 0.5 else 0.0)
 			vehicle_spawns.append([Vector3(p.x, terrain.height_at(p.x, p.y), p.y), yaw])
@@ -1085,8 +1081,9 @@ func _near_village(x: float, z: float, radius: float) -> bool:
 	for it in _pad_grid[k]:
 		var c: Vector2 = it.center
 		if it.kind == "village":
-			# `radius` is tuned for a standard 31 m village; scale for towns/farms.
-			if p.distance_to(c) < radius + float(it.radius) - 31.0:
+			# `radius` is tuned for a standard 31 m village; scale for towns/farms,
+			# but never closer than the settlement's own yard.
+			if p.distance_to(c) < maxf(radius + float(it.radius) - 31.0, float(it.radius) + minf(radius, 4.0)):
 				return true
 		elif p.distance_to(c) < float(it.radius) + minf(radius, 6.0):
 			return true

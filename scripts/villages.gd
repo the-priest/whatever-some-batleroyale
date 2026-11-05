@@ -45,6 +45,7 @@ func build(p_terrain: Terrain, p_seed: int) -> void:
 	rng.seed = p_seed + 4242
 
 	_plan_villages()
+	_clear_roads_of_houses()
 	for h in houses:
 		_build_house(h)
 	_build_village_extras()
@@ -155,6 +156,9 @@ func _plan_city(site: Vector2, pad: float, radius: float, axis: float) -> void:
 	var dir := Vector2(cos(axis), sin(axis))
 	var perp := Vector2(-dir.y, dir.x)
 	var plaza := 16.0
+	# The bell tower's plot on a corner of the square, kept clear of houses.
+	var tower_c := site + dir * 15.0 + perp * 15.0
+	_blockers.append([tower_c, 6.5])
 	# Streets running along `dir` at three offsets, cross streets along `perp`.
 	for off in [-34.0, 0.0, 34.0]:
 		var half := sqrt(maxf(0.0, radius * radius - off * off)) - 6.0
@@ -165,7 +169,7 @@ func _plan_city(site: Vector2, pad: float, radius: float, axis: float) -> void:
 		var half := sqrt(maxf(0.0, radius * radius - off * off)) - 6.0
 		var c1: Vector2 = site + dir * float(off)
 		roads.append({"a": c1 - perp * (half + 6.0), "b": c1 + perp * (half + 6.0), "w": 3.4})
-	city_squares.append({"center": site, "pad": pad, "axis": axis, "size": plaza})
+	city_squares.append({"center": site, "pad": pad, "axis": axis, "size": plaza, "tower": tower_c})
 
 
 ## Houses along one street, both sides, doors to the street.
@@ -186,6 +190,13 @@ func _street_houses(site: Vector2, line_c: Vector2, dir: Vector2, perp: Vector2,
 				d = tmp
 			var c: Vector2 = at + perp * float(side) * (6.4 + d * 0.5)
 			if c.distance_to(site) + maxf(w, d) * 0.5 > radius - 2.0:
+				continue
+			# Leave the cross streets (dir * -48, 0, 48; 3.4 m half-width) open.
+			var on_cross := false
+			for cross in [-48.0, 0.0, 48.0]:
+				if absf((c - site).dot(dir) - float(cross)) < 3.4 + 1.0 + w * 0.5:
+					on_cross = true
+			if on_cross:
 				continue
 			_add_house(c, w, d, yaw, pad, at, 2 if rng.randf() < 0.8 else 1)
 		k += 10.0 + rng.randf_range(0.0, 2.0)
@@ -257,18 +268,142 @@ func _plan_ring(site: Vector2, pad: float, count: int, min_d: float, max_r: floa
 			placed += 1
 
 
+## Is this spot inside (or within `margin` of) any house footprint?
+func _inside_house(p: Vector2, margin: float) -> bool:
+	return blocks_house(p, margin)
+
+
+## Drop houses that a road runs through (roads between settlements are laid
+## after the houses, centre to centre).
+func _clear_roads_of_houses() -> void:
+	var keep: Array[Dictionary] = []
+	var dropped := 0
+	for h in houses:
+		var hit := false
+		for r in roads:
+			if _segment_hits_rect(r.a, r.b, float(r.w) + 0.6, h.center, float(h.w), float(h.d), float(h.yaw)):
+				hit = true
+				break
+		if hit:
+			dropped += 1
+		else:
+			keep.append(h)
+	houses = keep
+	print("[villages] %d houses cleared off roads" % dropped)
+
+
+func _segment_hits_rect(a: Vector2, b: Vector2, half_w: float, c: Vector2, w: float, d: float, yaw: float) -> bool:
+	# Into the house's frame, then test the segment against the grown box.
+	var la := (a - c).rotated(yaw)
+	var lb := (b - c).rotated(yaw)
+	var hx := w * 0.5 + half_w
+	var hz := d * 0.5 + half_w
+	var t0 := 0.0
+	var t1 := 1.0
+	var dv := lb - la
+	for axis in 2:
+		var p0 := la[axis]
+		var dd := dv[axis]
+		var lim := hx if axis == 0 else hz
+		if absf(dd) < 1e-6:
+			if absf(p0) > lim:
+				return false
+			continue
+		var ta := (-lim - p0) / dd
+		var tb := (lim - p0) / dd
+		t0 = maxf(t0, minf(ta, tb))
+		t1 = minf(t1, maxf(ta, tb))
+		if t0 > t1:
+			return false
+	return true
+
+
+func _on_road(p: Vector2, margin: float) -> bool:
+	for r in roads:
+		var a: Vector2 = r.a
+		var b: Vector2 = r.b
+		var ab := b - a
+		var t := clampf((p - a).dot(ab) / maxf(ab.length_squared(), 0.001), 0.0, 1.0)
+		if p.distance_to(a + ab * t) < float(r.w) + margin:
+			return true
+	return false
+
+
+## True if something of radius `margin` at `p` would be in a house or in
+## front of its door.
+func blocks_house(p: Vector2, margin: float) -> bool:
+	for h in houses:
+		var local: Vector2 = (p - (h.center as Vector2)).rotated(float(h.yaw))
+		if absf(local.x) < float(h.w) * 0.5 + margin and absf(local.y) < float(h.d) * 0.5 + margin:
+			return true
+		var ap: Array = h.apron
+		var al: Vector2 = (p - (ap[0] as Vector2)).rotated(float(h.yaw))
+		if absf(al.x) < float(ap[1]) * 0.5 + margin and absf(al.y) < float(ap[2]) * 0.5 + margin:
+			return true
+	return false
+
+
+## Plots kept clear of houses: [Vector2 centre, radius].
+var _blockers: Array = []
+
+
 func _add_house(c: Vector2, w: float, d: float, yaw_house: float, pad: float, face_to: Vector2, levels := 1) -> bool:
 	var radius := maxf(w, d) * 0.5
+	var diag := Vector2(w, d).length() * 0.5
+	for bl in _blockers:
+		if c.distance_to(bl[0]) < diag + float(bl[1]):
+			return false
+	var door_side := _door_for(face_to - c, yaw_house)
+	var apron := _door_apron(c, w, d, yaw_house, door_side)
 	for h in houses:
-		var hc: Vector2 = h.center
-		if c.distance_to(hc) < radius + float(h.radius) + 2.2:
+		# Real footprints (rotated rectangles), with an alley wide enough to walk.
+		if _rects_overlap(c, w, d, yaw_house, h.center, float(h.w), float(h.d), float(h.yaw), 1.8):
+			return false
+		# Nobody builds a wall right in front of somebody else's door.
+		var ha: Array = h.apron
+		if _rects_overlap(c, w, d, yaw_house, ha[0], ha[1], ha[2], float(h.yaw), 0.2):
+			return false
+		if _rects_overlap(apron[0], apron[1], apron[2], yaw_house, h.center, float(h.w), float(h.d), float(h.yaw), 0.2):
 			return false
 	houses.append({
 		"center": c, "w": w, "d": d, "yaw": yaw_house, "pad": pad,
-		"radius": radius, "door_side": _door_for(face_to - c, yaw_house),
+		"radius": radius, "door_side": door_side, "apron": apron,
 		"style": "Plaster" if rng.randf() < 0.72 else "UnevenBrick",
 		"levels": levels,
 	})
+	return true
+
+
+## The patch of ground in front of a door: [world centre, size x, size z] in house axes.
+func _door_apron(c: Vector2, w: float, d: float, yaw_house: float, side: int) -> Array:
+	var cells := int(w * 0.5) if side % 2 == 0 else int(d * 0.5)
+	var along := -((cells - 1) * 0.5) * 2.0 + float(cells / 2) * 2.0
+	var depth := 3.4
+	var local := Vector2.ZERO
+	var size := Vector2(2.6, depth)
+	match side:
+		0:
+			local = Vector2(along, d * 0.5 + depth * 0.5)
+		1:
+			local = Vector2(w * 0.5 + depth * 0.5, along)
+			size = Vector2(depth, 2.6)
+		2:
+			local = Vector2(-along, -d * 0.5 - depth * 0.5)
+		_:
+			local = Vector2(-w * 0.5 - depth * 0.5, -along)
+			size = Vector2(depth, 2.6)
+	return [c + local.rotated(-yaw_house), size.x, size.y]
+
+
+## Separating-axis test for two house footprints grown by `margin`.
+func _rects_overlap(c1: Vector2, w1: float, d1: float, yaw1: float, c2: Vector2, w2: float, d2: float, yaw2: float, margin: float) -> bool:
+	var axes := [Vector2(1, 0).rotated(-yaw1), Vector2(0, 1).rotated(-yaw1), Vector2(1, 0).rotated(-yaw2), Vector2(0, 1).rotated(-yaw2)]
+	var delta := c2 - c1
+	for n in axes:
+		var e1 := w1 * 0.5 * absf((axes[0] as Vector2).dot(n)) + d1 * 0.5 * absf((axes[1] as Vector2).dot(n))
+		var e2 := w2 * 0.5 * absf((axes[2] as Vector2).dot(n)) + d2 * 0.5 * absf((axes[3] as Vector2).dot(n))
+		if absf(delta.dot(n)) >= e1 + e2 + margin:
+			return false
 	return true
 
 
@@ -312,6 +447,29 @@ func _island_of(p: Vector2) -> int:
 	return 1 if p.distance_to(Terrain.EAST_C) < p.distance_to(Terrain.MAIN_C) and p.x > 560.0 else 0
 
 
+func _road_anchor(c: Vector2, toward: Vector2) -> Vector2:
+	for v in village_pads:
+		if (v.center as Vector2).distance_to(c) > 0.5:
+			continue
+		var r := float(v.radius)
+		var dir := Vector2(cos(float(v.axis)), sin(float(v.axis)))
+		var perp := Vector2(-dir.y, dir.x)
+		var ends: Array = []
+		match String(v.type):
+			"town":
+				ends = [c + dir * (r + 6.0), c - dir * (r + 6.0)]
+			"city":
+				ends = [c + dir * r, c - dir * r, c + perp * r, c - perp * r]
+			_:
+				return c + (toward - c).normalized() * (r + 2.0)
+		var best: Vector2 = ends[0]
+		for e in ends:
+			if (e as Vector2).distance_to(toward) < best.distance_to(toward):
+				best = e
+		return best
+	return c
+
+
 func _nearest_pad(p: Vector2, island: int) -> Vector2:
 	var best := Vector2.INF
 	var bd := 1e9
@@ -337,7 +495,10 @@ func _crosses_river(a: Vector2, b: Vector2) -> bool:
 
 
 ## A gently bent road, routed over a river crossing when it has to be.
-func _road_between(a: Vector2, b: Vector2) -> void:
+func _road_between(a0: Vector2, b0: Vector2) -> void:
+	# Join settlements at the end of their own streets, not through the houses.
+	var a := _road_anchor(a0, b0)
+	var b := _road_anchor(b0, a0)
 	if not _crosses_river(a, b):
 		_bent_road(a, b)
 		return
@@ -392,7 +553,7 @@ func road_distance(x: float, z: float) -> float:
 
 func _door_for(to_center: Vector2, yaw_house: float) -> int:
 	# Rotate the direction into house space, then pick the side it points at.
-	var local := to_center.rotated(-yaw_house)
+	var local := to_center.rotated(yaw_house)
 	if absf(local.x) > absf(local.y):
 		return 1 if local.x > 0.0 else 3
 	return 0 if local.y > 0.0 else 2
@@ -474,16 +635,24 @@ func _build_house(h: Dictionary) -> void:
 					var hinge: Vector3 = world_pos + Basis(Vector3.UP, yaw_house + wall_yaw) * Vector3(-0.56, 0.0, 0.0)
 					_place("Door_1_Flat", hinge, yaw_house + wall_yaw + deg_to_rad(rng.randf_range(80.0, 110.0)), false, Vector3.ZERO)
 
+	h["built_levels"] = levels
 	if levels > 1:
 		_upper_floor(origin, house_basis, w, d)
 
 	# Roof matched to the footprint, eaves overlapping the wall head.
+	# The kit's roofs run their ridge along z; a house that is wider than deep
+	# gets the roof turned a quarter so the eaves still sit on the long walls.
 	var roof_key := "Roof_RoundTiles_%dx%d" % [int(w), int(d)]
+	var roof_yaw := yaw_house
+	var span := w
 	if not _has_model(roof_key):
 		roof_key = "Roof_RoundTiles_%dx%d" % [int(d), int(w)]
+		roof_yaw += PI * 0.5
+		span = d
 	var roof_base := pad + WALL_HEIGHT * float(levels) - 0.62
 	var roof_pos := Vector3(center.x, roof_base, center.y)
-	_place(roof_key, roof_pos, yaw_house, false)
+	_place(roof_key, roof_pos, roof_yaw, false)
+	_add_gables(Vector3(center.x, pad + WALL_HEIGHT * float(levels), center.y), roof_yaw, span, d if roof_yaw == yaw_house else w, style)
 	# Chimney through the roof slope.
 	if rng.randf() < 0.7:
 		var cx := (w * 0.5 - 1.5) * (1.0 if rng.randf() < 0.5 else -1.0)
@@ -497,11 +666,25 @@ func _build_house(h: Dictionary) -> void:
 
 	# A chimney-ish crate stack + a couple of interior props.
 	if rng.randf() < 0.75:
-		var crate_local := Vector3(rng.randf_range(-w * 0.5 + 1.4, w * 0.5 - 1.4), 0.0,
-			rng.randf_range(-d * 0.5 + 1.4, d * 0.5 - 1.4))
-		var crate_pos: Vector3 = origin + house_basis * crate_local
-		_place("Prop_Crate", crate_pos, yaw_house + rng.randf_range(-0.4, 0.4))
-		_add_box_collider(crate_pos + Vector3(0, 0.53, 0), Vector3(1.06, 1.06, 1.06), yaw_house)
+		# Crates sit in a corner: never in the doorway, the walkway or on the
+		# stairs.
+		var door_dir := [Vector2(0, 1), Vector2(1, 0), Vector2(0, -1), Vector2(-1, 0)][int(h.door_side)] as Vector2
+		var best := Vector2.INF
+		var best_d := -1.0
+		for cx in [-1.0, 1.0]:
+			for cz in [-1.0, 1.0]:
+				if levels > 1 and cx > 0.0:
+					continue
+				var corner := Vector2(cx * (w * 0.5 - 0.85), cz * (d * 0.5 - 0.85))
+				var dd := corner.distance_to(door_dir * Vector2(w * 0.5, d * 0.5))
+				if dd > best_d:
+					best_d = dd
+					best = corner
+		if best != Vector2.INF and minf(w, d) >= 4.0:
+			var crate_local := Vector3(best.x, 0.0, best.y)
+			var crate_pos: Vector3 = origin + house_basis * crate_local
+			_place("Prop_Crate", crate_pos, yaw_house + rng.randf_range(-0.3, 0.3))
+			_add_box_collider(crate_pos + Vector3(0, 0.53, 0), Vector3(1.06, 1.06, 1.06), yaw_house)
 
 	# Loot spots inside; at least one gun guaranteed per house by the loot manager.
 	var gun_spots := rng.randi_range(2, 3)
@@ -550,52 +733,64 @@ func _build_square(sq: Dictionary) -> void:
 		_add_box_collider(p + Vector3(0, 0.45, 0), Vector3(2.6, 0.9, 1.2), -a + PI * 0.5)
 		loot_points.append({"pos": p + sb * Vector3(0, 0.95, 0), "kind": "gear" if i % 3 else "weapon", "village": true})
 	# Bell tower on one corner of the square (a lookout with the best loot).
-	var tc := c + Vector2(cos(axis), sin(axis)) * 15.0 + Vector2(-sin(axis), cos(axis)) * 15.0
+	var tc: Vector2 = sq.tower
 	var t := {"center": tc, "pad": pad}
 	towers.append(t)
 	_build_tower(t)
 
 
 ## Timber upper floor with a stairwell, the stair against the +x wall.
+## The opening is cut exactly over the flight (plus head room), there is a
+## solid landing beyond its top and a clear step-on space at its foot.
 func _upper_floor(origin: Vector3, b: Basis, w: float, d: float) -> void:
 	var y := WALL_HEIGHT
+	var yaw := b.get_euler().y
 	var stair_x := w * 0.5 - 1.1
+	var run := 4.58
+	var foot := stair_foot_z(d)
+	var top := foot - run
+	# Opening along z over the stair column: from just past the top of the
+	# flight to where the treads are low enough for full head room.
+	var hole0 := top - 0.05
+	var hole1 := foot - 0.9
+	var inner := d * 0.5 - 0.15
 	var fx := -w * 0.5 + 1.0
 	while fx < w * 0.5 - 0.1:
 		var stair_col := absf(fx - stair_x) < 1.0
-		# Runs of solid tiles in this column become one collider.
-		var run_start := INF
 		var fz := -d * 0.5 + 1.0
-		while fz < d * 0.5 + 1.0:
-			var inside := fz < d * 0.5 - 0.1
-			var hole := stair_col and fz + 1.0 > -1.2 and fz - 1.0 < 2.3
-			var solid := inside and not hole
-			if solid:
-				_place("Floor_WoodDark", origin + b * Vector3(fx, y + 0.012, fz), b.get_euler().y)
-				if run_start == INF:
-					run_start = fz - 1.0
-			elif run_start != INF:
-				var z1 := fz - 1.0
-				_add_box_collider(origin + b * Vector3(fx, y - 0.1, (run_start + z1) * 0.5), Vector3(2.0, 0.2, z1 - run_start), b.get_euler().y)
-				run_start = INF
+		while fz < d * 0.5 - 0.1:
+			var overlap := minf(fz + 1.0, hole1) - maxf(fz - 1.0, hole0)
+			if not stair_col or overlap < 0.6:
+				_place("Floor_WoodDark", origin + b * Vector3(fx, y + 0.012, fz), yaw)
 			fz += 2.0
+		if stair_col:
+			if hole0 > -inner + 0.05:
+				_add_box_collider(origin + b * Vector3(fx, y - 0.1, (-inner + hole0) * 0.5), Vector3(2.0, 0.2, hole0 + inner), yaw)
+			if hole1 < inner - 0.05:
+				_add_box_collider(origin + b * Vector3(fx, y - 0.1, (hole1 + inner) * 0.5), Vector3(2.0, 0.2, inner - hole1), yaw)
+		else:
+			_add_box_collider(origin + b * Vector3(fx, y - 0.1, 0.0), Vector3(2.0, 0.2, inner * 2.0), yaw)
 		fx += 2.0
-	var yaw := b.get_euler().y
-	_place("Stair_Interior_Simple", origin + b * Vector3(stair_x, 0.0, 2.3), yaw, false, Vector3.ZERO)
-	var run := 4.58
+	_place("Stair_Interior_Simple", origin + b * Vector3(stair_x, 0.0, foot), yaw, false, Vector3.ZERO)
 	var ang := atan2(WALL_HEIGHT, run)
 	_colliders.append({
-		"xform": Transform3D(b * Basis(Vector3.RIGHT, ang), origin + b * Vector3(stair_x, WALL_HEIGHT * 0.5 - 0.12, 0.01)),
+		"xform": Transform3D(b * Basis(Vector3.RIGHT, ang), origin + b * Vector3(stair_x, WALL_HEIGHT * 0.5 - 0.12, foot - run * 0.5)),
 		"size": Vector3(1.6, 0.2, sqrt(run * run + WALL_HEIGHT * WALL_HEIGHT) + 0.2),
 	})
-	_stair_structure(origin, b, Vector3(stair_x, 0.0, 2.3), run, WALL_HEIGHT, 1.6)
-	# Ceiling beams under the boards.
+	_stair_structure(origin, b, Vector3(stair_x, 0.0, foot), run, WALL_HEIGHT, 1.6)
+	# A railing along the open side of the stairwell upstairs.
+	var rail_z := (hole0 + hole1) * 0.5
+	# (It stops short of the top step so you can walk off the stair there.)
+	var gap := 1.35
+	if hole1 - hole0 - gap > 0.3:
+		_proc_box(Transform3D(b.scaled_local(Vector3(0.08, 0.9, hole1 - hole0 - gap)), origin + b * Vector3(stair_x - 0.95, y + 0.45, rail_z + gap * 0.5)), "wood_dark")
+		_add_box_collider(origin + b * Vector3(stair_x - 0.95, y + 0.5, rail_z + gap * 0.5), Vector3(0.1, 1.0, hole1 - hole0 - gap), yaw)
+	# Ceiling beams under the boards, stopping at the stairwell.
 	var bz := -d * 0.5 + 2.0
 	while bz < d * 0.5 - 0.5:
 		var bw := w - 0.4
 		var bx := 0.0
-		if bz > -1.4 and bz < 2.5:
-			# Stop short of the stairwell.
+		if bz > hole0 - 0.2 and bz < hole1 + 0.2:
 			bw -= 2.2
 			bx = -1.1
 		_proc_box(Transform3D(b.scaled_local(Vector3(bw, 0.2, 0.18)), origin + b * Vector3(bx, y - 0.15, bz)), "wood_dark")
@@ -616,14 +811,22 @@ func _build_village_extras() -> void:
 			var ang := rng.randf() * TAU
 			var dist := rng.randf_range(4.0, maxf(6.0, vr * 0.3))
 			var p := Vector3(site.x + cos(ang) * dist, pad, site.y + sin(ang) * dist)
-			if rng.randf() < 0.55:
-				_place("Prop_Crate", p, rng.randf_range(0.0, TAU))
-				_add_box_collider(p + Vector3(0, 0.53, 0), Vector3(1.06, 1.06, 1.06), 0.0)
-				loot_points.append({"pos": p + Vector3(0.0, 0.06, 0.9), "kind": "weapon", "village": true})
+			var crate := rng.randf() < 0.55
+			if _inside_house(Vector2(p.x, p.z), 1.4 if crate else 2.4):
+				continue
+			# Streets stay drivable.
+			if _on_road(Vector2(p.x, p.z), 1.2 if crate else 2.2):
+				continue
+			var py := rng.randf_range(0.0, TAU)
+			var pb := Basis(Vector3.UP, py)
+			if crate:
+				_place("Prop_Crate", p, py)
+				_add_box_collider(p + Vector3(0, 0.53, 0), Vector3(1.06, 1.06, 1.06), py)
+				loot_points.append({"pos": p + pb * Vector3(0.0, 0.06, 0.9), "kind": "weapon", "village": true})
 			else:
-				_place("Prop_Wagon", p, rng.randf_range(0.0, TAU))
-				_add_box_collider(p + Vector3(0, 0.7, 0), Vector3(1.7, 1.4, 3.4), 0.0)
-				loot_points.append({"pos": p + Vector3(1.4, 0.06, 0.0), "kind": "gear", "village": true})
+				_place("Prop_Wagon", p, py)
+				_add_box_collider(p + Vector3(0, 0.7, 0), Vector3(1.7, 1.4, 3.4), py)
+				loot_points.append({"pos": p + pb * Vector3(1.4, 0.06, 0.0), "kind": "gear", "village": true})
 
 		# Perimeter fence posts, broken up so they read as an old village edge.
 		# Farms get a near-complete paddock fence, towns a broken edge.
@@ -651,6 +854,8 @@ func _build_village_extras() -> void:
 			var ang := rng.randf() * TAU
 			var dist := rng.randf_range(vr * 0.4, vr * 0.7)
 			var p := Vector3(site.x + cos(ang) * dist, pad, site.y + sin(ang) * dist)
+			if _inside_house(Vector2(p.x, p.z), 2.0):
+				continue
 			_place("Wall_UnevenBrick_Straight", p, ang)
 			_add_wall_collider(p, ang, false)
 
@@ -742,6 +947,12 @@ func _find_mesh(node: Node) -> MeshInstance3D:
 	return null
 
 
+## Where a staircase starts along z, leaving room at its foot to step on.
+func stair_foot_z(d: float) -> float:
+	# Leave about a metre to stand at the foot before stepping on.
+	return d * 0.5 - 1.15
+
+
 ## Solid timber under a kit staircase: stringers both sides and a boarded
 ## underside, so the treads stop looking like they float.
 func _stair_structure(origin: Vector3, b: Basis, foot: Vector3, run: float, rise: float, width: float) -> void:
@@ -760,6 +971,74 @@ func _stair_structure(origin: Vector3, b: Basis, foot: Vector3, run: float, rise
 
 
 var _proc: Dictionary = {}
+
+## Gable infill under the kit roofs (which are open at the ends), per roof
+## span: [height at the wall line, apex height], both above the wall head,
+## kept just under the measured underside of the tiles.
+const GABLE := {4: [0.07, 2.79], 6: [0.33, 4.2], 8: [0.36, 5.48]}
+var _gables: Dictionary = {}
+
+
+func _add_gables(top_center: Vector3, roof_yaw: float, span: float, length: float, style: String) -> void:
+	var k := int(span)
+	if not GABLE.has(k):
+		return
+	var rb := Basis(Vector3.UP, roof_yaw)
+	var key := "%d|%s" % [k, style]
+	if not _gables.has(key):
+		_gables[key] = []
+	for sz in [-1.0, 1.0]:
+		_gables[key].append(Transform3D(rb, top_center + rb * Vector3(0, 0, float(sz) * length * 0.5)))
+
+
+func _gable_mesh(span: int) -> ArrayMesh:
+	var e: float = GABLE[span][0]
+	var a: float = GABLE[span][1]
+	var hw := float(span) * 0.5
+	var t := 0.16
+	var outline := [Vector2(-hw, -0.05), Vector2(hw, -0.05), Vector2(hw, e), Vector2(0, a), Vector2(-hw, e)]
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for face in [-1.0, 1.0]:
+		var z := float(face) * t
+		for tri in [[0, 1, 2], [0, 2, 4], [4, 2, 3]]:
+			# Godot treats clockwise triangles as front faces.
+			var idx: Array = tri if face < 0.0 else [tri[0], tri[2], tri[1]]
+			for i in idx:
+				var v: Vector2 = outline[int(i)]
+				st.set_normal(Vector3(0, 0, float(face)))
+				st.set_uv(Vector2(v.x, -v.y) * 0.5)
+				st.add_vertex(Vector3(v.x, v.y, z))
+	# Sides of the slab.
+	for i in outline.size():
+		var p0: Vector2 = outline[i]
+		var p1: Vector2 = outline[(i + 1) % outline.size()]
+		var n := Vector3(p1.y - p0.y, -(p1.x - p0.x), 0).normalized() * -1.0
+		for v in [Vector3(p0.x, p0.y, -t), Vector3(p1.x, p1.y, -t), Vector3(p1.x, p1.y, t), Vector3(p0.x, p0.y, -t), Vector3(p1.x, p1.y, t), Vector3(p0.x, p0.y, t)]:
+			st.set_normal(n)
+			st.set_uv(Vector2((v as Vector3).z + (v as Vector3).x, -(v as Vector3).y) * 0.5)
+			st.add_vertex(v)
+	# The wall material is normal-mapped, which needs tangents.
+	st.generate_tangents()
+	return st.commit()
+
+
+func _commit_gables() -> void:
+	for key in _gables:
+		var parts: PackedStringArray = (key as String).split("|")
+		var list: Array = _gables[key]
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.mesh = _gable_mesh(int(parts[0]))
+		mm.instance_count = list.size()
+		for i in list.size():
+			mm.set_instance_transform(i, list[i])
+		var mmi := MultiMeshInstance3D.new()
+		mmi.name = "G_" + (key as String).replace("|", "_")
+		mmi.multimesh = mm
+		mmi.material_override = _proc_material("gable_" + parts[1])
+		mmi.visibility_range_end = 1300.0
+		add_child(mmi)
 
 
 func _proc_box(xf: Transform3D, mat: String) -> void:
@@ -780,6 +1059,24 @@ func _proc_material(key: String) -> Material:
 		m.albedo_color = Color(0.22, 0.42, 0.5)
 		m.roughness = 0.05
 		m.metallic = 0.3
+		return m
+	if key.begins_with("gable_"):
+		# Same surface as the kit's walls (copied from its material), mapped
+		# in world space because the infill has no authored UVs.
+		var wall := _model("Wall_%s_Straight" % key.substr(6))
+		if not wall.is_empty():
+			var wm: Mesh = wall.mesh
+			for si in wm.get_surface_count():
+				var km := wm.surface_get_material(si) as BaseMaterial3D
+				if km != null and km.resource_name == ("MI_Plaster" if key == "gable_Plaster" else "MI_UnevenBrick"):
+					var g := km.duplicate() as BaseMaterial3D
+					g.uv1_triplanar = true
+					g.uv1_world_triplanar = true
+					g.uv1_scale = Vector3.ONE * 0.5
+					g.cull_mode = BaseMaterial3D.CULL_DISABLED
+					return g
+		m.albedo_texture = load("res://assets/village/T_Plaster_BaseColor.png")
+		m.cull_mode = BaseMaterial3D.CULL_DISABLED
 		return m
 	if key == "stone":
 		m.albedo_texture = load("res://assets/village/T_UnevenBrick_BaseColor.png")
@@ -821,6 +1118,7 @@ func _commit_proc() -> void:
 
 func _commit_batches() -> void:
 	_commit_proc()
+	_commit_gables()
 	for bkey in _batches:
 		var key: String = bkey.split("|")[0]
 		var data := _model(key)
@@ -862,6 +1160,8 @@ func _commit_colliders() -> void:
 ## Two-storey stone towers on high ground: interior stair, windows on every
 ## side of the upper floor, the best loot up top. Places worth fighting over.
 func _plan_towers() -> void:
+	# Bell towers in the cities were already built with their squares.
+	var first_new := towers.size()
 	var cands: Array = []
 	var rng2 := RandomNumberGenerator.new()
 	rng2.seed = rng.seed + 31
@@ -875,7 +1175,7 @@ func _plan_towers() -> void:
 		cands.append([h + rng2.randf() * 4.0, c])
 	cands.sort_custom(func(a, b): return a[0] > b[0])
 	for e in cands:
-		if towers.size() >= 12:
+		if towers.size() - first_new >= 12:
 			break
 		var c: Vector2 = e[1]
 		if _too_close(c, 90.0, 220.0):
@@ -883,13 +1183,14 @@ func _plan_towers() -> void:
 		var pad := terrain.flatten_circle(c.x, c.y, 5.5, 9.0)
 		towers.append({"center": c, "pad": pad})
 		poi_pads.append({"center": c, "radius": 9.0, "type": "tower"})
-	for t in towers:
+	for t in towers.slice(first_new):
 		_build_tower(t)
 
 
 func _too_close(c: Vector2, from_villages: float, from_pois: float) -> bool:
 	for v in village_pads:
-		if c.distance_to(v.center) < from_villages:
+		# Big towns reach further out than the default clearance.
+		if c.distance_to(v.center) < maxf(from_villages, float(v.radius) + 24.0):
 			return true
 	for p in poi_pads:
 		if c.distance_to(p.center) < from_pois:
@@ -945,27 +1246,15 @@ func _build_tower(t: Dictionary) -> void:
 					_add_window_collider(pos, yaw + wall_yaw)
 				else:
 					_add_wall_collider(pos, yaw + wall_yaw, hole == "door")
-	# Floors: brick downstairs, timber upstairs with a hole for the stair.
+	# Floors: brick downstairs, timber upstairs with a stairwell (same
+	# layout as the two-storey houses).
 	for fx in [-2.0, 0.0, 2.0]:
 		for fz in [-2.0, 0.0, 2.0]:
 			_place("Floor_Brick", origin + b * Vector3(fx, 0.012, fz), yaw)
-			if not (fx == 2.0 and fz > -1.0):
-				_place("Floor_WoodDark", origin + b * Vector3(fx, WALL_HEIGHT + 0.012, fz), yaw)
-	_add_box_collider(origin + b * Vector3(-1.0, WALL_HEIGHT - 0.1, 0.0), Vector3(4.0, 0.2, 6.0), yaw)
-	_add_box_collider(origin + b * Vector3(2.0, WALL_HEIGHT - 0.1, -2.0), Vector3(2.0, 0.2, 2.0), yaw)
-	# Stair along the +x wall, climbing toward -z.
-	_place("Stair_Interior_Simple", origin + b * Vector3(1.9, 0.0, 2.3), yaw, false, Vector3.ZERO)
-	var run := 4.58
-	var rise := WALL_HEIGHT
-	_stair_structure(origin, b, Vector3(1.9, 0.0, 2.3), run, rise, 1.6)
-	var ang := atan2(rise, run)
-	var ramp_center := origin + b * Vector3(1.9, rise * 0.5 - 0.12, 0.01)
-	_colliders.append({
-		"xform": Transform3D(b * Basis(Vector3.RIGHT, ang), ramp_center),
-		"size": Vector3(1.6, 0.2, sqrt(run * run + rise * rise) + 0.2),
-	})
+	_upper_floor(origin, b, 6.0, 6.0)
 	# Roof with eaves over the upper walls.
 	_place("Roof_RoundTiles_6x6", origin + Vector3(0, WALL_HEIGHT * 2.0 - 0.62, 0), yaw)
+	_add_gables(origin + Vector3(0, WALL_HEIGHT * 2.0, 0), yaw, 6.0, 6.0, "UnevenBrick")
 	# Loot: the good stuff is upstairs.
 	for i in 3:
 		var lp := origin + b * Vector3(rng.randf_range(-2.2, 0.6), WALL_HEIGHT + 0.08, rng.randf_range(-2.2, 2.2))
@@ -1052,8 +1341,9 @@ func _build_ruin(c: Vector2, pad: float) -> void:
 	for i in rng.randi_range(2, 4):
 		var p := origin + b * Vector3(rng.randf_range(-w, w), 0, rng.randf_range(-d - 3.0, d + 3.0))
 		if rng.randf() < 0.6:
-			_place("Prop_Crate", p, rng.randf() * TAU)
-			_add_box_collider(p + Vector3(0, 0.53, 0), Vector3(1.06, 1.06, 1.06), 0.0)
+			var cy := rng.randf() * TAU
+			_place("Prop_Crate", p, cy)
+			_add_box_collider(p + Vector3(0, 0.53, 0), Vector3(1.06, 1.06, 1.06), cy)
 		else:
 			_place("Prop_Brick%d" % rng.randi_range(1, 4), p, rng.randf() * TAU)
 	for i in rng.randi_range(2, 4):

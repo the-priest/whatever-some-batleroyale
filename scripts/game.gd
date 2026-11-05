@@ -113,6 +113,9 @@ var _shot_tab: bool = OS.get_cmdline_user_args().has("--tab")
 func _ready() -> void:
 	randomize()
 	seed_value = 100000 + int(Time.get_unix_time_from_system()) % 899999
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--seed="):
+			seed_value = int(a.substr(7))
 	sfx = Sfx.new()
 	sfx.name = "Sfx"
 	sfx.process_mode = Node.PROCESS_MODE_ALWAYS
@@ -197,6 +200,10 @@ func _ready() -> void:
 		_run_perf()
 	elif OS.get_cmdline_user_args().has("--shot"):
 		_run_shot()
+	elif OS.get_cmdline_user_args().has("--houses"):
+		_run_house_walk_test()
+	elif OS.get_cmdline_user_args().has("--stairs"):
+		_run_stairs_test()
 	elif OS.get_cmdline_user_args().has("--mantle"):
 		_run_mantle_test()
 	elif OS.get_cmdline_user_args().has("--drive"):
@@ -1953,6 +1960,16 @@ func _run_shot() -> void:
 				# Look down the main street.
 				ang = atan2(-dir.x, -dir.y)
 				break
+	for a in OS.get_cmdline_user_args():
+		# --pad=village / farm / city: stand at the edge of the first one, facing in.
+		if a.begins_with("--pad="):
+			for v in world.villages.village_pads:
+				if String(v.type) == a.substr(6):
+					var c: Vector2 = v.center + Vector2(1, 0.4).normalized() * (float(v.radius) * 0.6)
+					spot = Vector3(c.x, 0.0, c.y)
+					var to: Vector2 = (v.center as Vector2) - c
+					ang = atan2(-to.x, -to.y)
+					break
 	if OS.get_cmdline_user_args().has("--tower") and world.villages.towers.size() > 0:
 		var tc: Vector2 = world.villages.towers[0].center
 		spot = Vector3(tc.x + 14.0, 0.0, tc.y + 10.0)
@@ -1965,6 +1982,50 @@ func _run_shot() -> void:
 		# Look toward the stair (+x side, climbing to -z).
 		var look := tb * Vector3(1.0, 0, -0.35)
 		ang = atan2(-look.x, -look.z)
+	# --house=N / --housein=N / --houseup=N: the Nth two-storey house, from
+	# the street, from just inside the door, or from its upper floor.
+	var spot_y := INF
+	for a in OS.get_cmdline_user_args():
+		for key in ["--house=", "--housein=", "--houseup="]:
+			if not a.begins_with(key):
+				continue
+			var want := int(a.substr(key.length()))
+			var k := 0
+			for hh in world.villages.houses:
+				if int(hh.get("built_levels", 1)) < 2 and want >= 0:
+					continue
+				# Negative index: the first house that is wider than deep.
+				if want < 0 and float(hh.w) <= float(hh.d):
+					continue
+				if k < want:
+					k += 1
+					continue
+				var hb := Basis(Vector3.UP, float(hh.yaw))
+				var hw := float(hh.w)
+				var hd := float(hh.d)
+				var ho := Vector3(hh.center.x, float(hh.pad), hh.center.y)
+				var dn: Vector3 = [Vector3(0, 0, 1), Vector3(1, 0, 0), Vector3(0, 0, -1), Vector3(-1, 0, 0)][int(hh.door_side)]
+				var dp := Vector3(dn.x * hw * 0.5, 0, dn.z * hd * 0.5)
+				var at := Vector3.ZERO
+				var look := Vector3.ZERO
+				if key == "--house=":
+					at = dp + dn * 9.0
+					look = -dn
+				elif key == "--housein=":
+					at = dp - dn * 1.0
+					look = Vector3(hw * 0.5 - 1.1, 0, Villages.WALL_HEIGHT) - at
+				else:
+					at = Vector3(-hw * 0.5 + 1.0, Villages.WALL_HEIGHT, hd * 0.5 - 1.0)
+					look = Vector3(hw * 0.5 - 1.0, 0, -hd * 0.5 + 1.0) - at
+					spot_y = ho.y + Villages.WALL_HEIGHT + 0.1
+				var wp := ho + hb * at
+				var wl := hb * look
+				spot = Vector3(wp.x, 0.0, wp.z)
+				ang = atan2(-wl.x, -wl.z)
+				if key == "--housein=":
+					spot_y = ho.y + 0.1
+				print("[shot] house ", ho, " ", hw, "x", hd, " door ", hh.door_side)
+				break
 	if p == null:
 		print("[shot] no player")
 		get_tree().quit()
@@ -1972,6 +2033,8 @@ func _run_shot() -> void:
 	p.mode = Player.Mode.GROUND
 	p.alive = true
 	var h: float = float(terrain.height_at(spot.x, spot.z))
+	if spot_y != INF:
+		h = spot_y - 2.4
 	if h < Terrain.WATER_LEVEL + 0.5:
 		spot = _random_ground_point(200.0)
 		h = spot.y
@@ -3784,6 +3847,18 @@ func _run_drive_test() -> void:
 			nxt += 1.0
 			print("[drive]   t=%.0f speed=%.1f m/s grounded=%d comp=%s slip=%.2f up=%.2f vel=%s" % [t, v.speed, v._grounded, str(v._compress), v._slip, v.global_basis.y.y, str(v.linear_velocity.round())])
 	print("[drive] after 6s full throttle: speed=%.1f km/h top=%.1f km/h moved=%.0f m up=%.2f hp=%.0f" % [v.speed * 3.6, top * 3.6, start.distance_to(v.global_position), v.global_basis.y.y, v.hp])
+	if v.speed < 3.0:
+		# Report what stopped it.
+		var qs := PhysicsShapeQueryParameters3D.new()
+		var bx := BoxShape3D.new()
+		bx.size = Vector3(2.6, 1.6, 5.4)
+		qs.shape = bx
+		qs.transform = Transform3D(v.global_basis, v.global_position + Vector3(0, 1.0, 0))
+		qs.exclude = [v.get_rid()]
+		for r in get_world_3d().direct_space_state.intersect_shape(qs, 8):
+			var body := r["collider"] as CollisionObject3D
+			var sn: Node = body.shape_owner_get_owner(body.shape_find_owner(int(r["shape"]))) if body != null else null
+			print("[drive]   blocked by ", body.name if body else "?", " ", (sn as Node3D).global_position if sn is Node3D else "", " ", ((sn as CollisionShape3D).shape as BoxShape3D).size if sn is CollisionShape3D and (sn as CollisionShape3D).shape is BoxShape3D else "")
 	var yaw0 := v.global_basis.get_euler().y
 	t = 0.0
 	while t < 2.0:
@@ -3891,4 +3966,192 @@ func _run_mantle_test() -> void:
 		player.velocity = Vector3.ZERO
 		for i in 20:
 			await get_tree().physics_frame
+	get_tree().quit()
+
+
+
+## Walk up the stairs of every two-storey house and every tower.
+func _run_stairs_test() -> void:
+	_start_match()
+	await get_tree().physics_frame
+	_land_player_now()
+	for i in 20:
+		await get_tree().physics_frame
+	# Nobody shoots the tester.
+	for bt in bots:
+		if is_instance_valid(bt):
+			bt.set_physics_process(false)
+	if zone != null:
+		zone.set_process(false)
+	var vil := world.villages
+	var jobs: Array = []
+	for h in vil.houses:
+		if int(h.get("built_levels", 1)) > 1:
+			jobs.append(["house", Vector3(h.center.x, h.pad, h.center.y), float(h.yaw), float(h.w) * 0.5 - 1.1, float(h.w), float(h.d)])
+	for t in vil.towers:
+		jobs.append(["tower", Vector3(t.center.x, t.pad, t.center.y), float(t.get("yaw", 0.0)), 1.9, 6.0, 6.0])
+	var ok := 0
+	var fails: Array = []
+	for j in jobs:
+		var o: Vector3 = j[1]
+		var b := Basis(Vector3.UP, float(j[2]))
+		var foot := float(j[3])
+		player.alive = true
+		player.hp = 100.0
+		player.spawn_protect = 999.0
+		player.mode = Player.Mode.GROUND
+		player.velocity = Vector3.ZERO
+		player.global_position = o + b * Vector3(foot, 0.1, vil.stair_foot_z(float(j[5])) + 0.45)
+		player.yaw = float(j[2])
+		player.test_input = Vector2.ZERO
+		for i in 6:
+			await get_tree().physics_frame
+		player.test_input = Vector2(0, -1)
+		var best := -10.0
+		var dbg := false
+		var last_hits: Array = []
+		for i in 240:
+			await get_tree().physics_frame
+			best = maxf(best, player.global_position.y - o.y)
+			if i == 200:
+				last_hits.clear()
+				for k in player.get_slide_collision_count():
+					var c2 := player.get_slide_collision(k)
+					var shp2 = c2.get_collider_shape()
+					var nm := str((c2.get_collider() as Node).name) if c2.get_collider() is Node else "?"
+					if shp2 is CollisionShape3D:
+						var cs4 := shp2 as CollisionShape3D
+						last_hits.append("%s shape_local=%s size=%s" % [nm, str((b.inverse() * (cs4.global_position - o)).snapped(Vector3.ONE * 0.01)), str((cs4.shape as BoxShape3D).size if cs4.shape is BoxShape3D else cs4.shape.get_class())])
+					else:
+						last_hits.append(nm)
+			if dbg and i % 40 == 0:
+				var hits := []
+				for k in player.get_slide_collision_count():
+					var c := player.get_slide_collision(k)
+					var shp = c.get_collider_shape()
+					var info := ""
+					if shp is CollisionShape3D:
+						var cs3 := shp as CollisionShape3D
+						info = " shape_local=%s size=%s" % [str((b.inverse() * (cs3.global_position - o)).snapped(Vector3.ONE * 0.01)), str((cs3.shape as BoxShape3D).size if cs3.shape is BoxShape3D else "?")]
+					hits.append("%s n=%s%s" % [str((c.get_collider() as Node).name) if c.get_collider() is Node else "?", str(c.get_normal().round()), info])
+				print("[stairs] dbg local=", (b.inverse() * (player.global_position - o)).snapped(Vector3.ONE * 0.01), " hits=", hits)
+		player.test_input = Vector2.INF
+		if best > Villages.WALL_HEIGHT - 0.35:
+			ok += 1
+		else:
+			fails.append("%s %dx%d at %s reached %.2f m  player_local=%s  hits=%s" % [j[0], int(j[4]), int(j[5]), str(o.round()), best, str((b.inverse() * (player.global_position - o)).snapped(Vector3.ONE * 0.01)), str(last_hits)])
+	print("[stairs] %d / %d buildings: upstairs reached" % [ok, jobs.size()])
+	for f in fails.slice(0, 20):
+		print("[stairs] FAIL ", f)
+	get_tree().quit()
+
+
+
+## Walk into every house through its door (and upstairs if it has one),
+## steering through waypoints like a player would.
+func _run_house_walk_test() -> void:
+	_start_match()
+	await get_tree().physics_frame
+	_land_player_now()
+	for bt in bots:
+		if is_instance_valid(bt):
+			bt.set_physics_process(false)
+	if zone != null:
+		zone.set_process(false)
+	var vil := world.villages
+	var ok := 0
+	var fails: Array = []
+	var n := 0
+	for h in vil.houses:
+		var w := float(h.w)
+		var d := float(h.d)
+		var o := Vector3(h.center.x, h.pad, h.center.y)
+		var b := Basis(Vector3.UP, float(h.yaw))
+		var side := int(h.door_side)
+		var cells := int(w * 0.5) if side % 2 == 0 else int(d * 0.5)
+		var along := -((cells - 1) * 0.5) * 2.0 + float(cells / 2) * 2.0
+		var door := Vector3.ZERO
+		var nrm := Vector3.ZERO
+		match side:
+			0:
+				door = Vector3(along, 0, d * 0.5)
+				nrm = Vector3(0, 0, 1)
+			1:
+				door = Vector3(w * 0.5, 0, along)
+				nrm = Vector3(1, 0, 0)
+			2:
+				door = Vector3(-along, 0, -d * 0.5)
+				nrm = Vector3(0, 0, -1)
+			3:
+				door = Vector3(-w * 0.5, 0, -along)
+				nrm = Vector3(-1, 0, 0)
+		var two := int(h.get("built_levels", 1)) > 1
+		var pts: Array = [door + nrm * 1.2, door - nrm * 1.3]
+		if two:
+			var foot := vil.stair_foot_z(d)
+			var sx := w * 0.5 - 1.1
+			pts.append(Vector3(sx - 1.0, 0, foot + 0.45))
+			pts.append(Vector3(sx, 0, foot + 0.45))
+			pts.append(Vector3(sx, 0, foot - 4.58 + 0.4))
+			# Step off the top of the flight onto the upstairs floor.
+			pts.append(Vector3(sx - 1.6, 0, foot - 4.58 + 0.3))
+		else:
+			pts.append(Vector3(0, 0, 0))
+		player.alive = true
+		player.hp = 100.0
+		player.spawn_protect = 999.0
+		player.mode = Player.Mode.GROUND
+		player.velocity = Vector3.ZERO
+		player.global_position = o + b * (door + nrm * 2.4) + Vector3(0, 0.3, 0)
+		for i in 5:
+			await get_tree().physics_frame
+		var wi := 0
+		var frames := 0
+		while wi < pts.size() and frames < 900:
+			var target: Vector3 = o + b * pts[wi]
+			var to := target - player.global_position
+			to.y = 0.0
+			if to.length() < 0.35:
+				wi += 1
+				continue
+			player.yaw = atan2(-to.x, -to.z)
+			player.test_input = Vector2(0, -1)
+			await get_tree().physics_frame
+			frames += 1
+		var hits_h: Array = []
+		for k in player.get_slide_collision_count():
+			var c2 := player.get_slide_collision(k)
+			var shp2 = c2.get_collider_shape()
+			if shp2 is CollisionShape3D:
+				var cs4 := shp2 as CollisionShape3D
+				hits_h.append("%s@%s %s" % [str((c2.get_collider() as Node).name), str((b.inverse() * (cs4.global_position - o)).snapped(Vector3.ONE * 0.01)), str((cs4.shape as BoxShape3D).size.snapped(Vector3.ONE * 0.01) if cs4.shape is BoxShape3D else "")])
+		player.test_input = Vector2.INF
+		# What is actually touching the capsule (slide shape ids can mislead).
+		var qs := PhysicsShapeQueryParameters3D.new()
+		var cap := CapsuleShape3D.new()
+		cap.radius = 0.42
+		cap.height = 1.9
+		qs.shape = cap
+		qs.transform = Transform3D(Basis(), player.global_position + Vector3(0, 0.95, 0))
+		qs.exclude = [player.get_rid()]
+		for r in player.get_world_3d().direct_space_state.intersect_shape(qs, 8):
+			var body := r["collider"] as CollisionObject3D
+			if body == null:
+				continue
+			var own := body.shape_find_owner(int(r["shape"]))
+			var sn := body.shape_owner_get_owner(own) as CollisionShape3D
+			if sn != null:
+				hits_h.append("Q:%s@%s %s" % [str(body.name), str((b.inverse() * (sn.global_position - o)).snapped(Vector3.ONE * 0.01)), str((sn.shape as BoxShape3D).size.snapped(Vector3.ONE * 0.01) if sn.shape is BoxShape3D else "")])
+		var inside := (b.inverse() * (player.global_position - o))
+		var good := wi >= pts.size() and absf(inside.x) < w * 0.5 and absf(inside.z) < d * 0.5
+		if two:
+			good = good and player.global_position.y - o.y > Villages.WALL_HEIGHT - 0.35
+		n += 1
+		if good:
+			ok += 1
+		else:
+			fails.append("%s%dx%d door side %d at %s: waypoint %d/%d, local %s hits %s" % ["2F " if two else "", int(w), int(d), side, str(o.round()), wi, pts.size(), str(inside.snapped(Vector3.ONE * 0.1)), str(hits_h)])
+	print("[houses] %d / %d houses entered through the door%s" % [ok, n, " (and climbed)" if true else ""])
+	for f in fails.slice(0, 25):
+		print("[houses] FAIL ", f)
 	get_tree().quit()

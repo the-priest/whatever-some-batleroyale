@@ -212,7 +212,13 @@ func _ajp(action: String) -> bool:
 	return not _locked() and Input.is_action_just_pressed(action)
 
 
+## Tests drive the player with this instead of the keyboard.
+var test_input := Vector2.INF
+
+
 func _vec(a: String, b: String, c: String, d: String) -> Vector2:
+	if test_input != Vector2.INF:
+		return test_input
 	return Vector2.ZERO if _locked() else Input.get_vector(a, b, c, d)
 
 
@@ -367,7 +373,10 @@ func _ground(delta: float) -> void:
 	velocity = velocity.limit_length(60.0)
 	if not is_on_floor():
 		_fall_speed = minf(_fall_speed, velocity.y)
+	var wish_h := Vector3(target.x, 0.0, target.z)
+	var grounded_before := is_on_floor()
 	move_and_slide()
+	_step_up(wish_h, grounded_before, delta)
 	if is_on_floor() and not _was_on_floor:
 		var impact := clampf(-_fall_speed / 12.0, 0.0, 1.0)
 		if impact > 0.15:
@@ -477,6 +486,42 @@ func _seated(_delta: float) -> void:
 	var xf := vehicle.seat_transform(seat)
 	global_position = xf.origin - xf.basis.y * 0.55
 	velocity = vehicle.linear_velocity
+
+
+## Walk up small ledges (stair edges, kerbs, rubble, floor boards) instead
+## of stopping dead against them. Anything taller is a vault.
+func _step_up(wish: Vector3, grounded: bool, _delta: float) -> void:
+	if not grounded or wish.length() < 0.5:
+		return
+	# Only when we are actually being held back (wall or a slab lip we ride against).
+	var got := Vector2(velocity.x, velocity.z).length()
+	if got > wish.length() * 0.6 and not is_on_wall():
+		return
+	var dir := wish.normalized()
+	var probe := dir * 0.25
+	if not test_move(global_transform, probe):
+		return
+	for h in [0.16, 0.3, 0.45]:
+		var up := Vector3.UP * float(h)
+		if test_move(global_transform, up):
+			return
+		var raised := global_transform.translated(up)
+		if test_move(raised, probe):
+			continue
+		# Only step onto something solid, not into thin air.
+		var space := get_world_3d().direct_space_state
+		# Land with the capsule centre well over the ledge, not balanced on its lip.
+		var land := global_position + up + dir * 0.48
+		if test_move(raised, dir * 0.48):
+			continue
+		var q := PhysicsRayQueryParameters3D.create(land + Vector3.UP * 0.05, land - Vector3.UP * (float(h) + 0.1), 1 | 4)
+		q.exclude = [get_rid()]
+		var hit := space.intersect_ray(q)
+		if hit.is_empty():
+			continue
+		global_position = Vector3(land.x, float(hit["position"].y) + 0.02, land.z)
+		velocity.y = 0.0
+		return
 
 
 ## PUBG-style vault: a low obstacle in front, a top to stand on and room
