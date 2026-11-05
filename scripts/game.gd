@@ -98,6 +98,7 @@ var _net_setup_ok := false
 var input_locked := false
 var vehicles: Array = []
 var _match_vehicles: Array = []
+var _match_weather := "clear"
 var _veh_cam_yaw := 0.0
 var _veh_last_yaw := 0.0
 var _veh_idle_t := 0.0
@@ -505,6 +506,11 @@ func _start_match() -> void:
 	survive_time = 0.0
 	zone_acc = 0.0
 	winner = false
+	_match_weather = WorldBuilder.WEATHERS[randi() % WorldBuilder.WEATHERS.size()]
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--weather="):
+			_match_weather = a.substr(10)
+	world.set_weather(_match_weather)
 	_match_vehicles = _choose_vehicles()
 	_spawn_vehicles(_match_vehicles)
 	if net != null and net.active:
@@ -1869,6 +1875,9 @@ func _run_shot() -> void:
 			cam_pos = pose[0]
 			cam_look = pose[1]
 	if cam_pos != Vector3.INF:
+		for a2 in OS.get_cmdline_user_args():
+			if a2.begins_with("--weather="):
+				world.set_weather(a2.substr(10))
 		phase = "shot"
 		hud.hide_menu()
 		hud.visible = false
@@ -2039,6 +2048,28 @@ func _run_shot() -> void:
 			# Some enemy fire crossing the view as well.
 			var side := Basis(Vector3.UP, p.yaw) * Vector3(-30, 1.5, -60)
 			ballistics.fire(null, p.global_position + side, (p.global_position + Basis(Vector3.UP, p.yaw) * Vector3(25, 1, -50) - (p.global_position + side)).normalized(), "rifle", p.global_position + side, 1)
+	if args.has("--jeep") or args.has("--drivecam"):
+		# Park a jeep in front of the camera (or put us at the wheel).
+		var jeep: Vehicle = vehicles[0]
+		var fwd := Basis(Vector3.UP, p.yaw) * Vector3(0, 0, -1)
+		var right := Basis(Vector3.UP, p.yaw) * Vector3(1, 0, 0)
+		var jp := ground_at(p.global_position + fwd * 7.0 + right * 1.5)
+		jeep.global_position = jp + Vector3(0, 0.35, 0)
+		jeep.rotation = Vector3(0, p.yaw + 2.2, 0)
+		jeep.linear_velocity = Vector3.ZERO
+		for i in 40:
+			await get_tree().physics_frame
+		if args.has("--drivecam"):
+			p.global_position = jeep.global_position + jeep.global_basis.x * 2.4
+			_enter_vehicle(jeep)
+			_drive_scripted = true
+			p.yaw = jeep.global_basis.get_euler().y
+			_veh_last_yaw = p.yaw
+			for i in 90:
+				jeep.throttle = 1.0
+				jeep.steer_in = 0.25
+				await get_tree().physics_frame
+			_update_driving(0.5)
 	if args.has("--bot"):
 		var poses := [["aim", "Idle", Vector3(-1.4, 0, -5.5), 2, 2], ["idle", "Jog_Fwd", Vector3(1.6, 0, -7.0), 1, 0], ["idle", "Sprint", Vector3(4.2, 0, -9.0), 3, 3]]
 		var k := 0
@@ -2739,7 +2770,7 @@ func _net_send_setup() -> void:
 	var setup := {
 		"seed": seed_value, "squad": net.squad, "plane": [plane_start, plane_end],
 		"loot": loot, "bots": bot_names, "humans": list, "total": total_players,
-		"loadout": loadout_enabled, "vehicles": _match_vehicles,
+		"loadout": loadout_enabled, "vehicles": _match_vehicles, "weather": _match_weather,
 	}
 	net.send_setup(setup)
 
@@ -2797,6 +2828,7 @@ func net_start_match(setup: Dictionary) -> void:
 	zone.phase_changed.connect(_on_zone_phase)
 	zone_was_warning = false
 	_spawn_vehicles(setup.get("vehicles", []))
+	world.set_weather(str(setup.get("weather", "clear")))
 	total_players = int(setup.get("total", names.size() + 1))
 	alive = total_players
 	loadout_enabled = bool(setup.get("loadout", loadout_enabled))

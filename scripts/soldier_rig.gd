@@ -12,6 +12,23 @@ const PALETTES := [
 	[Color(0.27, 0.33, 0.22), Color(0.37, 0.30, 0.21)],  # woodland
 	[Color(0.17, 0.19, 0.23), Color(0.08, 0.08, 0.09)],  # night
 ]
+## Camouflage colours per palette: base, blotch A, blotch B, dark accent.
+const CAMO := [
+	[Color(0.33, 0.36, 0.24), Color(0.22, 0.26, 0.15), Color(0.40, 0.33, 0.22), Color(0.11, 0.12, 0.09)],
+	[Color(0.62, 0.55, 0.40), Color(0.50, 0.42, 0.29), Color(0.70, 0.64, 0.50), Color(0.36, 0.28, 0.19)],
+	[Color(0.46, 0.48, 0.50), Color(0.32, 0.34, 0.36), Color(0.60, 0.61, 0.62), Color(0.16, 0.17, 0.18)],
+	[Color(0.27, 0.33, 0.22), Color(0.38, 0.30, 0.20), Color(0.17, 0.22, 0.14), Color(0.08, 0.08, 0.07)],
+	[Color(0.17, 0.19, 0.24), Color(0.11, 0.12, 0.16), Color(0.24, 0.26, 0.31), Color(0.05, 0.05, 0.06)],
+]
+static var _camo: Shader
+
+
+static func _camo_shader() -> Shader:
+	if _camo == null:
+		_camo = load("res://shaders/camo.gdshader")
+	return _camo
+
+
 const VEST_COLORS := [Color(0.55, 0.50, 0.38), Color(0.30, 0.34, 0.24), Color(0.10, 0.11, 0.12)]
 const LEG_ANIMS := ["Idle", "Walk", "Jog_Fwd", "Sprint", "Jump", "Crouch_Idle", "Crouch_Fwd"]
 const ARM_ANIMS := ["Pistol_Idle", "Pistol_Aim_Neutral", "Pistol_Reload"]
@@ -42,13 +59,26 @@ func _ready() -> void:
 	model.rotation.y = PI
 	skeleton = model.find_children("*", "Skeleton3D", true, false)[0]
 	anim = model.find_children("*", "AnimationPlayer", true, false)[0]
-	var pal: Array = PALETTES[randi() % PALETTES.size()]
+	var pi := randi() % PALETTES.size()
+	var pal: Array = PALETTES[pi]
+	var camo := ShaderMaterial.new()
+	camo.shader = _camo_shader()
+	var cc: Array = CAMO[pi]
+	camo.set_shader_parameter("c_base", cc[0])
+	camo.set_shader_parameter("c_a", cc[1])
+	camo.set_shader_parameter("c_b", cc[2])
+	camo.set_shader_parameter("c_c", cc[3])
+	camo.set_shader_parameter("seed", randf() * 10.0)
+	camo.set_shader_parameter("scale", randf_range(7.0, 11.0))
 	for mi in model.find_children("*", "MeshInstance3D", true, false):
 		var m := mi as MeshInstance3D
 		m.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 		for si in m.mesh.get_surface_count():
+			if si == 0:
+				m.set_surface_override_material(si, camo)
+				continue
 			var mat := StandardMaterial3D.new()
-			mat.albedo_color = (pal[0] if si == 0 else pal[1]).lerp(Color(randf(), randf(), randf()), 0.04)
+			mat.albedo_color = pal[1].lerp(Color(randf(), randf(), randf()), 0.04)
 			mat.roughness = 0.85
 			m.set_surface_override_material(si, mat)
 	_build_gear(pal)

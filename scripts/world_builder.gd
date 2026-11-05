@@ -36,6 +36,8 @@ var sun: DirectionalLight3D
 var fill_light: DirectionalLight3D
 var environment: Environment
 var world_env: WorldEnvironment
+var sky_material: ProceduralSkyMaterial
+var weather := "clear"
 
 var stats := {
 	"trees": 0, "ground": 0, "rocks": 0, "houses": 0, "loot": 0, "colliders": 0,
@@ -132,6 +134,7 @@ func _build_lighting() -> void:
 	sky_mat.sun_angle_max = 22.0
 	sky_mat.sun_curve = 0.12
 	sky.sky_material = sky_mat
+	sky_material = sky_mat
 	env.sky = sky
 
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
@@ -535,6 +538,44 @@ func _build_inland_water() -> void:
 	mist.visibility_aabb = AABB(Vector3(-40, -10, -40), Vector3(80, 60, 80))
 	add_child(mist)
 	falls_sound_pos = bottom + Vector3(0, 6.0, 0)
+
+
+## Time of day and weather for a match. Every preset keeps the island
+## readable; they change mood, shadow length and how far you can see.
+const WEATHERS := ["clear", "golden", "misty", "overcast"]
+
+
+func set_weather(kind: String) -> void:
+	weather = kind
+	if sun == null or environment == null or sky_material == null:
+		return
+	var env := environment
+	var sm := sky_material
+	# [sun pitch, sun yaw, sun colour, sun energy, sky top, sky horizon,
+	#  ground horizon, ground bottom, fog colour, fog density, ambient, exposure]
+	var presets := {
+		"clear": [-46.0, -34.0, Color(1.0, 0.955, 0.87), 1.35, Color(0.16, 0.34, 0.66), Color(0.62, 0.76, 0.90),
+			Color(0.60, 0.73, 0.87), Color(0.36, 0.52, 0.64), Color(0.62, 0.74, 0.88), 0.00032, 0.62, 1.05],
+		"golden": [-17.0, -62.0, Color(1.0, 0.76, 0.52), 1.45, Color(0.22, 0.32, 0.58), Color(0.98, 0.72, 0.52),
+			Color(0.86, 0.66, 0.54), Color(0.32, 0.36, 0.44), Color(0.94, 0.72, 0.56), 0.00042, 0.68, 1.1],
+		"misty": [-28.0, 20.0, Color(0.96, 0.95, 0.9), 0.95, Color(0.42, 0.52, 0.62), Color(0.78, 0.82, 0.85),
+			Color(0.76, 0.8, 0.83), Color(0.5, 0.56, 0.6), Color(0.78, 0.82, 0.86), 0.0016, 0.72, 1.1],
+		"overcast": [-58.0, -10.0, Color(0.86, 0.88, 0.92), 0.7, Color(0.4, 0.45, 0.52), Color(0.66, 0.7, 0.75),
+			Color(0.62, 0.66, 0.7), Color(0.4, 0.45, 0.5), Color(0.64, 0.68, 0.73), 0.0007, 0.85, 1.15],
+	}
+	var p: Array = presets.get(kind, presets["clear"])
+	sun.rotation_degrees = Vector3(float(p[0]), float(p[1]), 0.0)
+	sun.light_color = p[2]
+	sun.light_energy = float(p[3])
+	sm.sky_top_color = p[4]
+	sm.sky_horizon_color = p[5]
+	sm.ground_horizon_color = p[6]
+	sm.ground_bottom_color = p[7]
+	env.fog_light_color = p[8]
+	env.fog_density = float(p[9])
+	env.volumetric_fog_albedo = (p[8] as Color).lightened(0.25)
+	env.ambient_light_energy = float(p[10])
+	env.tonemap_exposure = float(p[11])
 
 
 ## The falls roar from far off; the river babbles along its banks.

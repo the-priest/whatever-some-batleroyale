@@ -49,9 +49,10 @@ static func apply(q: int, env: Environment, sun: DirectionalLight3D, fill: Direc
 		if fp and q >= 2:
 			var ca := CameraAttributesPractical.new()
 			ca.auto_exposure_enabled = true
-			ca.auto_exposure_min_sensitivity = 60.0
-			ca.auto_exposure_max_sensitivity = 1600.0 if gi else 500.0
-			ca.auto_exposure_scale = 0.45 if gi else 0.4
+			# Outdoors stays as authored; only dark interiors brighten.
+			ca.auto_exposure_min_sensitivity = 100.0
+			ca.auto_exposure_max_sensitivity = 900.0 if gi else 260.0
+			ca.auto_exposure_scale = 0.3 if gi else 0.22
 			ca.auto_exposure_speed = 2.5
 			we.camera_attributes = ca
 		else:
@@ -88,18 +89,17 @@ static func apply(q: int, env: Environment, sun: DirectionalLight3D, fill: Direc
 	env.ssr_depth_tolerance = 0.3
 	# Volumetric fog: light shafts through trees, haze in valleys.
 	env.volumetric_fog_enabled = fp and q >= 2
-	env.volumetric_fog_density = 0.0016
+	env.volumetric_fog_density = 0.0007
 	env.volumetric_fog_albedo = Color(0.86, 0.9, 0.96)
 	env.volumetric_fog_emission = Color(0.0, 0.0, 0.0)
 	env.volumetric_fog_anisotropy = 0.55
-	env.volumetric_fog_length = 260.0 if q == 3 else 160.0
+	env.volumetric_fog_length = 200.0 if q == 3 else 120.0
 	env.volumetric_fog_detail_spread = 2.0
 	env.volumetric_fog_gi_inject = 0.6
 	env.volumetric_fog_sky_affect = 0.0
 	env.volumetric_fog_temporal_reprojection_enabled = true
 	# With bounced light doing the work, the flat fill and sky ambient back off
 	# so interiors get properly dark corners and sunlit floors.
-	env.ambient_light_energy = 0.62
 	if fill != null:
 		fill.light_energy = 0.12 if gi else 0.32
 	env.glow_enabled = q >= 1
