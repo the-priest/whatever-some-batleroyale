@@ -1507,6 +1507,7 @@ func _process_body(delta: float) -> void:
 
 ## Swimming: underwater tint and the air left in your lungs.
 var underwater := false
+var _uw_vig: GradientTexture2D = null
 var air_val := 100.0
 var air_show := false
 
@@ -1523,22 +1524,19 @@ func _draw_vignette() -> void:
 	var sz := vignette.size
 	if underwater:
 		# Murky blue-green with darker edges and slow light ripples.
-		vignette.draw_rect(Rect2(Vector2.ZERO, sz), Color(0.03, 0.2, 0.26, 0.42))
-		var st := 10
-		var dep := minf(sz.x, sz.y) * 0.3
-		for i in st:
-			var f := float(i) / float(st)
-			var c := Color(0.0, 0.05, 0.08, 0.5 * pow(1.0 - f, 1.8))
-			var d := dep * f
-			var w := dep / float(st) + 1.0
-			vignette.draw_rect(Rect2(0, d, sz.x, w), c)
-			vignette.draw_rect(Rect2(0, sz.y - d - w, sz.x, w), c)
-			vignette.draw_rect(Rect2(d, 0, w, sz.y), c)
-			vignette.draw_rect(Rect2(sz.x - d - w, 0, w, sz.y), c)
-		var t := Time.get_ticks_msec() * 0.001
-		for k in 7:
-			var x := fmod(float(k) * 0.17 * sz.x + t * 22.0 * (1.0 + float(k % 3) * 0.3), sz.x)
-			vignette.draw_line(Vector2(x, 0), Vector2(x - sz.y * 0.25, sz.y * 0.55), Color(0.6, 0.9, 1.0, 0.035 + 0.02 * sin(t * 2.0 + float(k))), 26.0)
+		vignette.draw_rect(Rect2(Vector2.ZERO, sz), Color(0.03, 0.2, 0.26, 0.36))
+		if _uw_vig == null:
+			var g := Gradient.new()
+			g.offsets = PackedFloat32Array([0.0, 0.55, 1.0])
+			g.colors = PackedColorArray([Color(0, 0.04, 0.06, 0.0), Color(0, 0.04, 0.06, 0.12), Color(0, 0.03, 0.05, 0.7)])
+			_uw_vig = GradientTexture2D.new()
+			_uw_vig.gradient = g
+			_uw_vig.fill = GradientTexture2D.FILL_RADIAL
+			_uw_vig.fill_from = Vector2(0.5, 0.5)
+			_uw_vig.fill_to = Vector2(1.05, 0.5)
+			_uw_vig.width = 256
+			_uw_vig.height = 256
+		vignette.draw_texture_rect(_uw_vig, Rect2(Vector2.ZERO, sz), false)
 	if air_show:
 		var bw := 220.0
 		var bx := sz.x * 0.5 - bw * 0.5

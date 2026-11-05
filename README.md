@@ -12,7 +12,7 @@ Open the project in Godot 4.7 and press Play, or export with the presets in `exp
 | --- | --- |
 | WASD | Move |
 | Shift | Sprint (hold breath while scoped) |
-| C / Ctrl | Crouch |
+| C / Ctrl | Crouch · dive while swimming |
 | Space | Jump · vault/climb over low walls, fences and crates · jump from plane · open parachute |
 | Left mouse | Fire |
 | Right mouse | Aim down sights |
@@ -28,6 +28,9 @@ Open the project in Godot 4.7 and press Play, or export with the presets in `exp
 | M | Full map |
 | M then mouse wheel | Zoom the map |
 | Esc | Pause menu (sensitivity, volume) |
+
+In deep water you swim (gun lowered): Shift swims faster, C dives (watch the air bar), Space climbs
+out onto a bank or jetty. Shallow water slows you down the deeper it gets.
 
 ## Gunplay
 
@@ -48,7 +51,10 @@ off to loot everything from scratch.
 
 ## LAN multiplayer
 
-Everyone must be on the same network (same Wi-Fi or router). Up to 8 players.
+Everyone must be on the same network (same Wi-Fi or router), or on a virtual LAN such as
+ZeroTier, Tailscale or Radmin VPN when playing over the internet. Up to 8 players. Everyone needs
+the same version of the game (an older build is refused with a message). Direct Connect accepts
+`address` or `address:port` (default port 24555, UDP).
 
 1. One player presses **HOST LAN** in the main menu. The lobby shows their address, with a
    button to copy it.

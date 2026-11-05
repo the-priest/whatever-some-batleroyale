@@ -427,7 +427,9 @@ func _swim(delta: float, surf: float, gy: float) -> void:
 		if not under and game != null:
 			if game.sfx != null:
 				game.sfx.play_2d("swim_stroke_%d" % (randi() % 3 + 1), -9.0, 0.08)
-			game.water_ripple(Vector3(global_position.x, surf + 0.02, global_position.z), 1.0 if fast else 0.8)
+			# The wake spreads behind you, not under your nose.
+			var back := Vector3(-velocity.x, 0.0, -velocity.z).normalized() * 1.4
+			game.water_ripple(Vector3(global_position.x + back.x, surf + 0.02, global_position.z + back.z), 0.8 if fast else 0.6)
 	bob += delta * planar * 0.9
 	# Air.
 	if under:

@@ -901,8 +901,12 @@ func water_splash(pos: Vector3, big: bool) -> void:
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	m.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	m.albedo_color = Color(0.9, 0.97, 1.0, 0.8)
-	m.albedo_texture = Weapons.flash_texture()
+	m.albedo_color = Color(0.86, 0.94, 1.0, 0.7)
+	m.albedo_texture = _droplet_tex()
+	# Spray right at your face fades out instead of whiting out the screen.
+	m.distance_fade_mode = BaseMaterial3D.DISTANCE_FADE_PIXEL_ALPHA
+	m.distance_fade_min_distance = 0.6
+	m.distance_fade_max_distance = 2.2
 	qm.material = m
 	p.mesh = qm
 	p.position = pos + Vector3(0, 0.05, 0)
@@ -911,11 +915,31 @@ func water_splash(pos: Vector3, big: bool) -> void:
 	water_ripple(pos + Vector3(0, 0.02, 0), 1.8 if big else 1.1)
 
 
+var _drop_tex: Texture2D = null
+
+
+## Soft round droplet sprite (white, faded edge; no glow).
+func _droplet_tex() -> Texture2D:
+	if _drop_tex == null:
+		var g := Gradient.new()
+		g.set_color(0, Color(1, 1, 1, 1))
+		g.set_color(1, Color(1, 1, 1, 0))
+		var gt := GradientTexture2D.new()
+		gt.gradient = g
+		gt.fill = GradientTexture2D.FILL_RADIAL
+		gt.fill_from = Vector2(0.5, 0.5)
+		gt.fill_to = Vector2(1.0, 0.5)
+		gt.width = 32
+		gt.height = 32
+		_drop_tex = gt
+	return _drop_tex
+
+
 ## An expanding ring on the surface (swim strokes, wading, splashes).
 func water_ripple(pos: Vector3, size: float) -> void:
 	var mi := MeshInstance3D.new()
 	var tm := TorusMesh.new()
-	tm.inner_radius = 0.9
+	tm.inner_radius = 0.95
 	tm.outer_radius = 1.0
 	tm.rings = 24
 	tm.ring_segments = 4
@@ -923,7 +947,11 @@ func water_ripple(pos: Vector3, size: float) -> void:
 	var m := StandardMaterial3D.new()
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	m.albedo_color = Color(0.85, 0.95, 1.0, 0.45)
+	m.albedo_color = Color(0.85, 0.95, 1.0, 0.22)
+	# Rings right around your own head fade out instead of slicing the view.
+	m.distance_fade_mode = BaseMaterial3D.DISTANCE_FADE_PIXEL_ALPHA
+	m.distance_fade_min_distance = 1.0
+	m.distance_fade_max_distance = 4.0
 	mi.material_override = m
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	mi.position = pos
@@ -949,8 +977,8 @@ func set_underwater(on: bool) -> void:
 	if on:
 		_uw_saved = [env.fog_enabled, env.fog_density, env.fog_light_color, env.fog_sky_affect]
 		env.fog_enabled = true
-		env.fog_density = 0.09
-		env.fog_light_color = Color(0.05, 0.28, 0.33)
+		env.fog_density = 0.06
+		env.fog_light_color = Color(0.06, 0.3, 0.36)
 		env.fog_sky_affect = 1.0
 	elif not _uw_saved.is_empty():
 		env.fog_enabled = _uw_saved[0]
@@ -1712,28 +1740,48 @@ var _smoke_tex: Texture2D
 var _smokes := 0
 
 
-## Wisp of gun smoke drifting up from a muzzle.
+## Wisp of gun smoke from your muzzle. It must never hide what you are
+## shooting at: none while aiming down sights, faint, quick, drifting up and
+## off to the side, and invisible close to the camera.
+var _smoke_mat: StandardMaterial3D = null
+var _smoke_mesh: QuadMesh = null
+
+
 func spawn_smoke(pos: Vector3, amount := 1.0) -> void:
-	if _smokes > 24:
+	if player != null and (player.aiming or player.aim_blend > 0.2):
 		return
-	if _smoke_tex == null:
+	if _smokes >= 6:
+		return
+	if _smoke_mat == null:
 		_smoke_tex = world._cloud_texture()
-	var s := Sprite3D.new()
-	s.texture = _smoke_tex
-	s.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	s.shaded = false
-	s.transparent = true
-	s.pixel_size = 0.004
-	s.modulate = Color(0.78, 0.78, 0.76, 0.22 * amount)
+		_smoke_mat = StandardMaterial3D.new()
+		_smoke_mat.albedo_texture = _smoke_tex
+		_smoke_mat.albedo_color = Color(0.8, 0.8, 0.78, 0.16)
+		_smoke_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_smoke_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_smoke_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+		_smoke_mat.distance_fade_mode = BaseMaterial3D.DISTANCE_FADE_PIXEL_ALPHA
+		_smoke_mat.distance_fade_min_distance = 0.45
+		_smoke_mat.distance_fade_max_distance = 1.6
+		_smoke_mesh = QuadMesh.new()
+		_smoke_mesh.size = Vector2(0.35, 0.35)
+	var s := MeshInstance3D.new()
+	s.mesh = _smoke_mesh
+	s.material_override = _smoke_mat
 	s.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	s.transparency = 1.0 - clampf(amount, 0.3, 1.0) * 0.9
 	add_child(s)
 	s.global_position = pos
 	_smokes += 1
+	# Up and away to the right of the sight line.
+	var side := Vector3.RIGHT
+	if player != null and player.camera != null:
+		side = player.camera.global_basis.x
 	var tw := s.create_tween()
 	tw.set_parallel(true)
-	tw.tween_property(s, "global_position", pos + Vector3(randf_range(-0.15, 0.15), 0.5, randf_range(-0.15, 0.15)), 1.1)
-	tw.tween_property(s, "scale", Vector3.ONE * 3.0, 1.1)
-	tw.tween_property(s, "modulate:a", 0.0, 1.1)
+	tw.tween_property(s, "global_position", pos + side * randf_range(0.25, 0.45) + Vector3(0, randf_range(0.35, 0.55), 0), 0.8)
+	tw.tween_property(s, "scale", Vector3.ONE * 2.2, 0.8)
+	tw.tween_property(s, "transparency", 1.0, 0.8)
 	tw.chain().tween_callback(func(): _smokes -= 1; s.queue_free())
 
 
