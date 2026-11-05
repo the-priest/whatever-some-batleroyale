@@ -22,6 +22,7 @@ var _st: Dictionary = {}
 var _group: Node3D
 var _body: StaticBody3D
 var _stat := {"shapes": 0}
+var fantasy: Fantasy
 
 
 func build(p_terrain: Terrain, p_villages: Villages, p_seed: int) -> void:
@@ -41,6 +42,8 @@ func build(p_terrain: Terrain, p_villages: Villages, p_seed: int) -> void:
 	_build_lighthouse()
 	_build_temple()
 	_build_oak()
+	fantasy = Fantasy.new()
+	fantasy.build(self, p_seed)
 	labels.append(["HIGHFALLS", Terrain.PLATEAU_C + Vector2(0.0, -40.0)])
 	add_child(_body)
 	print("[landmarks] %d labels, %d collision shapes" % [labels.size(), _stat.shapes])

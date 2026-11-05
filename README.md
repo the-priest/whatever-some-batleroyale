@@ -129,6 +129,12 @@ Two islands about 2.4 km across:
   ground, and ruins and boulders give cover in the open.
 - Every house can be entered through its door, and every two-storey house has a stair to its
   upper floor, where the better loot is. Village and town squares have a well and market stalls.
+- Fantasy set pieces: the Arcane Spire (a mage tower with an outside spiral stair and a
+  floating crystal over the best loot), two Crystal Hollows, Dragon's Rest (a giant skeleton to
+  fight through) and the Faerie Grove, where giant mushroom caps form a staircase you vault up to
+  a lookout.
+- Hits match what you see: windows, doors, arches, tree trunks and rocks collide with their own
+  meshes, so if you can see someone through an opening you can shoot them through it.
 - Bots use doors and stairs too: they loot upper floors, and cautious ones sometimes hold an
   upstairs window and watch the street.
 
@@ -155,5 +161,6 @@ this machine.
 
 Building checks (add `--seed=N` to pick a map): `--houses` walks the player in through every
 door and up every stair, `--stairs` climbs every house and tower, `--botstairs` sends a bot up
-to loot every upper floor and back out, `--camp` checks bots holding windows, and `--drive`
-tests the jeep.
+to loot every upper floor and back out, `--camp` checks bots holding windows, `--shootthru`
+fires rays through every window and door opening on the map, `--fantasy` climbs the spire and
+the mushroom caps, and `--drive` tests the jeep.

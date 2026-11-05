@@ -202,6 +202,28 @@ func _ready() -> void:
 		_run_shot()
 	elif OS.get_cmdline_user_args().has("--houses"):
 		_run_house_walk_test()
+	elif OS.get_cmdline_user_args().has("--fantasy"):
+		_run_fantasy_test()
+	elif OS.get_cmdline_user_args().has("--raybench"):
+		await get_tree().physics_frame
+		await get_tree().physics_frame
+		var sp := get_world_3d().direct_space_state
+		var rr := RandomNumberGenerator.new()
+		rr.seed = 7
+		var hits := 0
+		var t0 := Time.get_ticks_usec()
+		for i in 40000:
+			var x := rr.randf_range(-900.0, 900.0)
+			var z := rr.randf_range(-900.0, 900.0)
+			var y: float = terrain.height_at(x, z) + 1.5
+			var a := Vector3(x, y, z)
+			var d := Vector3(rr.randf_range(-1, 1), rr.randf_range(-0.05, 0.05), rr.randf_range(-1, 1)).normalized()
+			if not sp.intersect_ray(PhysicsRayQueryParameters3D.create(a, a + d * 60.0, 1)).is_empty():
+				hits += 1
+		print("[raybench] 40000 rays in %.1f ms, %d hits" % [(Time.get_ticks_usec() - t0) / 1000.0, hits])
+		get_tree().quit()
+	elif OS.get_cmdline_user_args().has("--shootthru"):
+		_run_shoot_through_test()
 	elif OS.get_cmdline_user_args().has("--camp"):
 		_run_camp_test()
 	elif OS.get_cmdline_user_args().has("--botstairs"):
@@ -1815,6 +1837,49 @@ func _loop_player(name: String, db: float) -> AudioStreamPlayer3D:
 
 # ------------------------------------------------------------------- shots --
 ## Camera pose [position, look-at] that frames a landmark nicely.
+## Screenshot tour of the island for polish review: random ground spots,
+## every settlement and every set piece. --sweep=<dir>[,start,count]
+func _sweep(spec: String) -> void:
+	var parts := spec.split(",")
+	var dir := parts[0]
+	DirAccess.make_dir_recursive_absolute(dir)
+	var shots: Array = []
+	var rr := RandomNumberGenerator.new()
+	rr.seed = 4242
+	for i in 24:
+		var c := terrain.random_land_point(rr, 1.0, 0.6)
+		if c == Vector2.INF:
+			continue
+		var a := rr.randf() * TAU
+		var gy: float = maxf(terrain.height_at(c.x, c.y), Terrain.WATER_LEVEL)
+		var p := Vector3(c.x, gy + 1.8, c.y)
+		shots.append(["ground_%02d" % i, p, p + Vector3(cos(a), -0.08, sin(a)) * 10.0])
+	for v in world.villages.village_pads:
+		var c: Vector2 = v.center
+		var r := float(v.radius)
+		var off := Vector2(r * 0.55, r * 0.35)
+		var gy: float = terrain.height_at(c.x + off.x, c.y + off.y)
+		shots.append(["%s_%s" % [v.type, String(v.name).replace(" ", "_").replace("'", "")], Vector3(c.x + off.x, gy + 2.0, c.y + off.y), Vector3(c.x, float(v.pad) + 2.0, c.y)])
+	for nm in ["castle", "henge", "lighthouse", "temple", "oak", "bridge", "falls", "spire", "crystals", "crystals2", "dragon", "grove"]:
+		var pose := _landmark_pose(nm)
+		shots.append(["lm_" + nm, pose[0], pose[1]])
+	var start := int(parts[1]) if parts.size() > 1 else 0
+	var count := int(parts[2]) if parts.size() > 2 else shots.size()
+	phase = "shot"
+	hud.hide_menu()
+	hud.visible = false
+	menu_cam.make_current()
+	for k in range(start, mini(shots.size(), start + count)):
+		var e: Array = shots[k]
+		menu_cam.global_position = e[1]
+		menu_cam.look_at(e[2])
+		for i in 8:
+			await get_tree().process_frame
+		await RenderingServer.frame_post_draw
+		get_viewport().get_texture().get_image().save_png("%s/%02d_%s.png" % [dir, k, e[0]])
+		print("[sweep] %02d %s at %s" % [k, e[0], str((e[1] as Vector3).round())])
+
+
 func _landmark_pose(name: String) -> Array:
 	var t := terrain
 	var at := func(c: Vector2, h: float, back: Vector2, dist: float, up: float) -> Array:
@@ -1851,6 +1916,15 @@ func _landmark_pose(name: String) -> Array:
 			return [Vector3(Terrain.PLATEAU_C.x + 260.0, 140.0, Terrain.PLATEAU_C.y + 330.0), Vector3(Terrain.PLATEAU_C.x, 60.0, Terrain.PLATEAU_C.y)]
 		"overview":
 			return [Vector3(200.0, 900.0, 1300.0), Vector3(60.0, 0.0, -50.0)]
+	var fz: Fantasy = world.villages.landmarks.fantasy
+	var pkey := "spire" if name == "spiretop" else name
+	if fz != null and fz.poi.has(pkey):
+		var e: Array = fz.poi[pkey]
+		var fc: Vector2 = e[0]
+		var fh: float = e[1]
+		var spec: Array = {"spire": [16.0, Vector2(1.0, 0.5), 70.0, 30.0], "spiretop": [27.0, Vector2(0.4, 1.0), 13.0, 30.0], "crystals": [3.0, Vector2(1.0, 0.4), 32.0, 6.0], "crystals2": [3.0, Vector2(-0.6, 1.0), 32.0, 6.0],
+			"dragon": [3.0, Vector2(0.7, 1.0), 40.0, 9.0], "grove": [5.0, Vector2(1.0, 0.3), 28.0, 4.0]}.get(name, [4.0, Vector2(1, 0), 40.0, 8.0])
+		return at.call(fc, fh + float(spec[0]), spec[1], float(spec[2]), float(spec[3]))
 	return [Vector3(0, 300, 600), Vector3.ZERO]
 
 
@@ -1885,6 +1959,11 @@ func _run_shot() -> void:
 			var pose := _landmark_pose(a.substr(5))
 			cam_pos = pose[0]
 			cam_look = pose[1]
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--sweep="):
+			await _sweep(a.substr(8))
+			get_tree().quit()
+			return
 	if cam_pos != Vector3.INF:
 		for a2 in OS.get_cmdline_user_args():
 			if a2.begins_with("--weather="):
@@ -3973,6 +4052,8 @@ func _apply_graphics() -> void:
 		var base: float = mmi.get_meta("vr")
 		if base > 0.0:
 			mmi.visibility_range_end = base * k
+	if world.grass != null and DisplayServer.get_name() != "headless":
+		world.grass.set_radius([0.0, 26.0, 38.0, 52.0][graphics_quality])
 	print("[gfx] renderer=%s quality=%s" % [RenderingServer.get_current_rendering_method(), Graphics.NAMES[graphics_quality]])
 
 
@@ -4088,6 +4169,182 @@ func _run_stairs_test() -> void:
 
 ## Walk into every house through its door (and upstairs if it has one),
 ## steering through waypoints like a player would.
+## Climb the new set pieces: the Arcane Spire's outside stair to the top
+## deck, and the Faerie Grove's mushroom caps (vaulting cap to cap).
+func _run_fantasy_test() -> void:
+	_start_match()
+	await get_tree().physics_frame
+	_land_player_now()
+	for bt in bots:
+		if is_instance_valid(bt):
+			bt.set_physics_process(false)
+	if zone != null:
+		zone.set_process(false)
+	player.spawn_protect = 9999.0
+	var fz: Fantasy = world.villages.landmarks.fantasy
+	var all_ok := true
+	# Spire: follow the helix up.
+	if fz.poi.has("spire_stair"):
+		var sp: Array = fz.poi["spire_stair"]
+		var o: Vector3 = sp[0]
+		var hr: float = sp[1]
+		var a0: float = sp[2]
+		var deck: float = sp[4]
+		player.global_position = o + Vector3(cos(a0 - 0.25) * hr, 1.2, sin(a0 - 0.25) * hr)
+		player.velocity = Vector3.ZERO
+		player.mode = Player.Mode.GROUND
+		var t := 0.0
+		var top := false
+		while t < 90.0:
+			var rel := player.global_position - o
+			var ang := atan2(rel.z, rel.x)
+			# Unwrap to the stair's own turn count using height.
+			var frac := clampf((player.global_position.y - o.y) / deck, 0.0, 1.0)
+			var target_a := a0 + (TAU * 2.5) * frac + 0.22
+			var tgt := o + Vector3(cos(target_a) * hr, 0, sin(target_a) * hr)
+			if player.global_position.y > o.y + deck - 0.3:
+				tgt = o + Vector3(cos(target_a) * 3.0, 0, sin(target_a) * 3.0)
+			var to := tgt - player.global_position
+			player.yaw = atan2(-to.x, -to.z)
+			player.test_input = Vector2(0, -1)
+			await get_tree().physics_frame
+			t += get_physics_process_delta_time()
+			if OS.has_environment("DBG_SPIRE") and int(t * 60.0) % 120 == 0:
+				var hs: Array = []
+				for k in player.get_slide_collision_count():
+					var col := player.get_slide_collision(k)
+					var cob := col.get_collider() as CollisionObject3D
+					var sn2 = cob.shape_owner_get_owner(cob.shape_find_owner(col.get_collider_shape_index())) if cob else null
+					hs.append("%s %s n=%s" % [cob.name if cob else "?", (sn2 as Node3D).global_position.round() - o.round() if sn2 is Node3D else "", col.get_normal().snapped(Vector3.ONE * 0.1)])
+				print("[dbg] t=%.0f rel=%s ang=%.2f tgt_a=%.2f hits=%s" % [t, (player.global_position - o).snapped(Vector3.ONE * 0.1), ang, target_a, str(hs)])
+			if player.global_position.y > o.y + deck - 0.2 and Vector2(rel.x, rel.z).length() < 4.3:
+				top = true
+				break
+		player.test_input = Vector2.INF
+		print("[fantasy] spire stair: reached top deck=%s in %.0fs (y %.1f / deck %.1f)" % [top, t, player.global_position.y - o.y, deck])
+		all_ok = all_ok and top
+	# Grove: vault cap to cap.
+	if fz.poi.has("grove_climb"):
+		var climb: Array = fz.poi["grove_climb"]
+		var first: Vector3 = climb[0][0]
+		var fr: float = climb[0][1]
+		var gyv: float = terrain.height_at(first.x, first.z)
+		var outward := Vector3(first.x, 0, first.z) - Vector3(climb[climb.size() - 1][0].x, 0, climb[climb.size() - 1][0].z)
+		player.global_position = Vector3(first.x, gyv + 0.3, first.z) + outward.normalized() * (fr + 1.6)
+		player.velocity = Vector3.ZERO
+		var reached := 0
+		for k in climb.size():
+			var c: Vector3 = climb[k][0]
+			var t2 := 0.0
+			var got := false
+			while t2 < 12.0:
+				var to := c - player.global_position
+				to.y = 0.0
+				player.yaw = atan2(-to.x, -to.z)
+				player.test_input = Vector2(0, -1) if to.length() > 0.6 else Vector2.ZERO
+				if player.is_on_floor() and to.length() < float(climb[k][1]) + 1.3 and player.global_position.y < c.y - 0.6:
+					player.test_jump = true
+				await get_tree().physics_frame
+				t2 += get_physics_process_delta_time()
+				if player.global_position.y > c.y - 0.45 and to.length() < float(climb[k][1]) and player.is_on_floor():
+					got = true
+					break
+			if not got:
+				print("[fantasy] grove: stuck before cap %d (top %.1f), player y %.1f" % [k, c.y - gyv, player.global_position.y - gyv])
+				break
+			reached += 1
+		player.test_input = Vector2.INF
+		print("[fantasy] grove: climbed %d / %d caps" % [reached, climb.size()])
+		all_ok = all_ok and reached == climb.size()
+	print("[fantasy] %s" % ("ALL CLIMBABLE" if all_ok else "FAIL"))
+	get_tree().quit()
+
+
+## Every window, door and arch on the map: wherever the wall is visibly
+## open, a bullet must pass straight through (both ways), and wherever it
+## is visibly solid, a bullet must stop.
+func _run_shoot_through_test() -> void:
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	var vil := world.villages
+	var space := get_world_3d().direct_space_state
+	var raster := {}
+	var walls := 0
+	var cells_open := 0
+	var cells_solid := 0
+	var blocked_open := 0
+	var leaking_solid := 0
+	var reports: Array = []
+	var blockers := {}
+	for e in vil.opening_walls:
+		var key: String = e[0]
+		var xf: Transform3D = e[1]
+		var data: Dictionary = vil._model(key)
+		var aabb: AABB = data.aabb
+		var offset := Vector3(-aabb.get_center().x, -aabb.position.y, -aabb.get_center().z)
+		if not raster.has(key):
+			var faces: PackedVector3Array = (data.mesh as Mesh).get_faces()
+			var grid := {}
+			var v := 0.05
+			while v < 3.1:
+				var u := -0.95
+				while u < 0.96:
+					var hit := false
+					for i in range(0, faces.size(), 3):
+						if Geometry3D.segment_intersects_triangle(Vector3(u, v, -1.0) - offset, Vector3(u, v, 1.0) - offset, faces[i], faces[i + 1], faces[i + 2]) != null:
+							hit = true
+							break
+					# Only judge cells well inside open or solid areas (not on an edge).
+					grid[Vector2(u, v)] = hit
+					u += 0.1
+				v += 0.1
+			raster[key] = grid
+		walls += 1
+		var g: Dictionary = raster[key]
+		for cell in g:
+			var c: Vector2 = cell
+			var solid: bool = g[cell]
+			# Skip cells within 6 cm of an edge between open and solid.
+			var edge := false
+			for dd in [Vector2(0.1, 0), Vector2(-0.1, 0), Vector2(0, 0.1), Vector2(0, -0.1)]:
+				var nb: Vector2 = (c + dd).snapped(Vector2(0.05, 0.05))
+				for k2 in g:
+					if (k2 as Vector2).distance_to(c + dd) < 0.01 and bool(g[k2]) != solid:
+						edge = true
+			if edge:
+				continue
+			var a := xf * (Vector3(c.x, c.y, -1.6) - offset)
+			var b := xf * (Vector3(c.x, c.y, 1.6) - offset)
+			var hits_both := 0
+			for dir in 2:
+				var q := PhysicsRayQueryParameters3D.create(a if dir == 0 else b, b if dir == 0 else a, 1)
+				var r := space.intersect_ray(q)
+				if not r.is_empty():
+					hits_both += 1
+					if not solid:
+						var body := r["collider"] as CollisionObject3D
+						var sn: Node = body.shape_owner_get_owner(body.shape_find_owner(int(r["shape"]))) if body != null else null
+						var desc := "%s %s" % [body.name if body else "?", str(((sn as CollisionShape3D).shape as BoxShape3D).size.snapped(Vector3.ONE * 0.01)) if sn is CollisionShape3D and (sn as CollisionShape3D).shape is BoxShape3D else (sn as CollisionShape3D).shape.get_class() if sn is CollisionShape3D else ""]
+						blockers[desc] = int(blockers.get(desc, 0)) + 1
+						if reports.size() < 25:
+							reports.append("%s at %s cell (%.2f, %.2f) dir %d blocked by %s at %s" % [key, str(xf.origin.round()), c.x, c.y, dir, desc, str((r["position"] as Vector3).snapped(Vector3.ONE * 0.01))])
+			if solid:
+				cells_solid += 1
+				if hits_both < 2:
+					leaking_solid += 1
+			else:
+				cells_open += 1
+				if hits_both > 0:
+					blocked_open += 1
+	print("[shootthru] %d opening walls, %d open cells, %d solid cells" % [walls, cells_open, cells_solid])
+	print("[shootthru] visibly open but blocked: %d   visibly solid but shot passes: %d" % [blocked_open, leaking_solid])
+	for k in blockers:
+		print("[shootthru] blocker ", k, " x", blockers[k])
+	for r2 in reports:
+		print("[shootthru] ", r2)
+	get_tree().quit()
+
+
 ## Cautious armed bots upstairs take a window and watch the street.
 func _run_camp_test() -> void:
 	_start_match()

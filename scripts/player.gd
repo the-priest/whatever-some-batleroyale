@@ -209,7 +209,14 @@ func _ap(action: String) -> bool:
 
 
 func _ajp(action: String) -> bool:
+	if action == "jump" and test_jump:
+		test_jump = false
+		return true
 	return not _locked() and Input.is_action_just_pressed(action)
+
+
+## Tests press jump with this.
+var test_jump := false
 
 
 ## Tests drive the player with this instead of the keyboard.

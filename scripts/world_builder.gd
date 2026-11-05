@@ -31,6 +31,7 @@ var _chunk_pads: Array = []
 var falls_sound_pos := Vector3.ZERO
 ## Parking spots for jeeps: [Vector3 position, float yaw].
 var vehicle_spawns: Array = []
+var grass: GrassField
 
 var sun: DirectionalLight3D
 var fill_light: DirectionalLight3D
@@ -82,6 +83,12 @@ func build(p_seed: int) -> void:
 	_build_clouds()
 	_build_minimap()
 	_build_water_audio()
+	grass = GrassField.new()
+	grass.name = "GrassField"
+	add_child(grass)
+	grass.setup(self)
+	if DisplayServer.get_name() == "headless":
+		grass.set_radius(0.0)
 	tick.call("minimap")
 	print("[world] timing: ", ", ".join(marks))
 	stats.loot = loot_points.size()
@@ -624,6 +631,45 @@ func _loop_stream(name: String) -> AudioStream:
 
 # ------------------------------------------------------------------- scatter
 
+var _shape_cache: Dictionary = {}
+
+
+## Collision made of a nature model's own triangles (only surfaces whose
+## material name contains `filter`, e.g. "Bark"; all when empty).
+func _mesh_shape(name: String, filter: String, max_y := INF) -> ConcavePolygonShape3D:
+	var ck := name + "|" + filter + "|" + str(max_y)
+	if _shape_cache.has(ck):
+		return _shape_cache[ck]
+	var faces := PackedVector3Array()
+	var data := _nature_mesh(name)
+	if not data.is_empty():
+		var mesh: Mesh = data.mesh
+		for si in mesh.get_surface_count():
+			var mat := mesh.surface_get_material(si)
+			if filter != "" and (mat == null or not mat.resource_name.contains(filter)):
+				continue
+			var arrays := mesh.surface_get_arrays(si)
+			var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+			var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX] if arrays[Mesh.ARRAY_INDEX] != null else PackedInt32Array()
+			if idx.is_empty():
+				for i in verts.size():
+					idx.append(i)
+			for t in range(0, idx.size() - 2, 3):
+				var a := verts[idx[t]]
+				var b := verts[idx[t + 1]]
+				var c := verts[idx[t + 2]]
+				if minf(a.y, minf(b.y, c.y)) > max_y:
+					continue
+				faces.append(a)
+				faces.append(b)
+				faces.append(c)
+	var shape := ConcavePolygonShape3D.new()
+	shape.set_faces(faces)
+	shape.backface_collision = true
+	_shape_cache[ck] = shape
+	return shape
+
+
 func _nature_mesh(name: String) -> Dictionary:
 	if _nature_cache.has(name):
 		return _nature_cache[name]
@@ -738,6 +784,16 @@ func _scatter_trees() -> void:
 		var mm := MultiMesh.new()
 		mm.transform_format = MultiMesh.TRANSFORM_3D
 		mm.mesh = data.mesh
+		if key == "DeadTree_5":
+			# The kit's dead bark is a cold blue-grey; weather it to warm grey.
+			var dm: Mesh = (data.mesh as Mesh).duplicate()
+			for si in dm.get_surface_count():
+				var sm := dm.surface_get_material(si)
+				if sm is StandardMaterial3D:
+					var tm := (sm as StandardMaterial3D).duplicate() as StandardMaterial3D
+					tm.albedo_color = Color(0.86, 0.74, 0.62)
+					dm.surface_set_material(si, tm)
+			mm.mesh = dm
 		mm.instance_count = list.size()
 		for i in list.size():
 			var it: Dictionary = list[i]
@@ -751,15 +807,27 @@ func _scatter_trees() -> void:
 		add_child(mmi)
 		stats.trees += list.size()
 
-		# Trunks collide only where gameplay actually happens.
+		# Trunks and branches collide with their own bark mesh (shared per
+		# species, scaled per tree): shots hit exactly the wood you can see.
+		# Above the lowest leaves the wood is hidden in the canopy anyway.
+		var canopy := INF
+		var leafy := _nature_mesh(key)
+		if not leafy.is_empty():
+			var lm: Mesh = leafy.mesh
+			for si in lm.get_surface_count():
+				var mat := lm.surface_get_material(si)
+				if mat != null and mat.resource_name.contains("Leaves"):
+					var lv: PackedVector3Array = lm.surface_get_arrays(si)[Mesh.ARRAY_VERTEX]
+					var low := INF
+					for v in lv:
+						low = minf(low, v.y)
+					canopy = minf(canopy, low + 0.8)
+		var bark := _mesh_shape(key, "Bark", canopy)
 		for it in list:
 			var sc: float = it.scale
 			var shape := CollisionShape3D.new()
-			var cyl := CylinderShape3D.new()
-			cyl.radius = maxf(0.22, 0.30 * sc)
-			cyl.height = 4.4 * sc
-			shape.shape = cyl
-			shape.position = it.pos + Vector3(0, 2.2 * sc, 0)
+			shape.shape = bark
+			shape.transform = Transform3D(Basis(Vector3.UP, it.rot).scaled(Vector3.ONE * sc), it.pos)
 			trunk_body.add_child(shape)
 			stats.colliders += 1
 	# Into the tree only once every shape is attached: adding shapes to a live
@@ -953,17 +1021,13 @@ func _scatter_rocks() -> void:
 		body.name = "RockCollision_" + k
 		body.collision_layer = 1
 		body.collision_mask = 0
-		var aabb: AABB = data.aabb
 		for it in list:
 			var sc: float = it.scale
 			if sc < 0.6:
 				continue
 			var cs := CollisionShape3D.new()
-			var box := BoxShape3D.new()
-			box.size = aabb.size * sc * Vector3(0.82, 0.92, 0.82)
-			cs.shape = box
-			var b := Basis(Vector3.UP, it.rot)
-			cs.transform = Transform3D(b, Vector3(it.pos) + b * (aabb.get_center() * sc))
+			cs.shape = _mesh_shape(k, "")
+			cs.transform = Transform3D(Basis(Vector3.UP, it.rot).scaled(Vector3.ONE * sc), Vector3(it.pos))
 			body.add_child(cs)
 			stats.colliders += 1
 		add_child(body)

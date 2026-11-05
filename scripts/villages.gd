@@ -683,12 +683,9 @@ func _build_house(h: Dictionary) -> void:
 					key = "Wall_%s_Straight" % style
 				var world_pos: Vector3 = origin + house_basis * local
 				_place(key, world_pos, yaw_house + wall_yaw)
-				if is_window:
-					_add_window_collider(world_pos, yaw_house + wall_yaw)
-					if shutters:
-						_place("WindowShutters_Wide_Flat_Open", world_pos, yaw_house + wall_yaw, false, Vector3(0, 0, 0.11))
-				else:
-					_add_wall_collider(world_pos, yaw_house + wall_yaw, is_door)
+				_add_wall_for(key, world_pos, yaw_house + wall_yaw)
+				if is_window and shutters:
+					_place("WindowShutters_Wide_Flat_Open", world_pos, yaw_house + wall_yaw, false, Vector3(0, 0, 0.11))
 				if is_door:
 					# The door itself, swung open into the room.
 					var hinge: Vector3 = world_pos + Basis(Vector3.UP, yaw_house + wall_yaw) * Vector3(-0.56, 0.0, 0.0)
@@ -1029,6 +1026,40 @@ func _place(key: String, bottom_center: Vector3, yaw: float, _align := true, piv
 	_stat.pieces += 1
 
 
+## Collision for a kit wall piece. Pieces with an opening (windows, doors,
+## arches) collide with their own render mesh, so whatever you can see
+## through you can shoot through, and nothing else.
+func _add_wall_for(key: String, pos: Vector3, yaw: float) -> void:
+	if key.contains("Window") or key.contains("Door") or key.contains("Arch"):
+		_add_mesh_collider(key, pos, yaw)
+	else:
+		_add_wall_collider(pos, yaw, false)
+
+
+var _mesh_shapes: Dictionary = {}
+## Every wall piece with an opening that was placed: [key, model-to-world xform].
+var opening_walls: Array = []
+
+
+## A collider that is the model's own mesh, placed exactly like `_place` does.
+func _add_mesh_collider(key: String, bottom_center: Vector3, yaw: float) -> void:
+	var data := _model(key)
+	if data.is_empty():
+		_add_wall_collider(bottom_center, yaw, false)
+		return
+	if not _mesh_shapes.has(key):
+		var shape := ConcavePolygonShape3D.new()
+		shape.set_faces((data.mesh as Mesh).get_faces())
+		shape.backface_collision = true
+		_mesh_shapes[key] = shape
+	var aabb: AABB = data.aabb
+	var basis := Basis(Vector3.UP, yaw)
+	var offset := Vector3(-aabb.get_center().x, -aabb.position.y, -aabb.get_center().z)
+	var xf := Transform3D(basis, bottom_center + basis * offset)
+	_colliders.append({"xform": xf, "shape": _mesh_shapes[key]})
+	opening_walls.append([key, xf])
+
+
 func _add_wall_collider(pos: Vector3, yaw: float, has_door: bool) -> void:
 	var basis := Basis(Vector3.UP, yaw)
 	if not has_door:
@@ -1299,9 +1330,12 @@ func _commit_colliders() -> void:
 	body.collision_mask = 0
 	for c in _colliders:
 		var shape := CollisionShape3D.new()
-		var box := BoxShape3D.new()
-		box.size = c.size
-		shape.shape = box
+		if c.has("shape"):
+			shape.shape = c.shape
+		else:
+			var box := BoxShape3D.new()
+			box.size = c.size
+			shape.shape = box
 		shape.transform = c.xform
 		body.add_child(shape)
 	add_child(body)
@@ -1393,10 +1427,7 @@ func _build_tower(t: Dictionary) -> void:
 				elif level == 0 and i != 1 and rng.randf() < 0.3:
 					key = "Wall_UnevenBrick_Window_Thin_Round"
 				_place(key, pos, yaw + wall_yaw)
-				if hole == "window":
-					_add_window_collider(pos, yaw + wall_yaw)
-				else:
-					_add_wall_collider(pos, yaw + wall_yaw, hole == "door")
+				_add_wall_for(key, pos, yaw + wall_yaw)
 	# Floors: brick downstairs, timber upstairs with a stairwell (same
 	# layout as the two-storey houses).
 	for fx in [-2.0, 0.0, 2.0]:
@@ -1412,17 +1443,6 @@ func _build_tower(t: Dictionary) -> void:
 		loot_points.append({"pos": lp, "kind": "weapon" if i == 0 else "gear", "village": true, "tier": "hi"})
 	loot_points.append({"pos": origin + b * Vector3(-1.5, 0.08, rng.randf_range(-1.5, 1.5)), "kind": "gear", "village": true})
 	_stat.towers += 1
-
-
-func _add_window_collider(pos: Vector3, yaw: float) -> void:
-	# Solid below the sill and above the lintel, open in between to shoot through.
-	var basis := Basis(Vector3.UP, yaw)
-	var sill := 1.05
-	var top := 2.35
-	_colliders.append({"xform": Transform3D(basis, pos + Vector3(0, sill * 0.5, 0)), "size": Vector3(1.98, sill, 0.42)})
-	_colliders.append({"xform": Transform3D(basis, pos + Vector3(0, (top + WALL_HEIGHT) * 0.5, 0)), "size": Vector3(1.98, WALL_HEIGHT - top, 0.42)})
-	for sx in [-1.0, 1.0]:
-		_colliders.append({"xform": Transform3D(basis, pos + basis * Vector3(sx * 0.85, (sill + top) * 0.5, 0)), "size": Vector3(0.28, top - sill, 0.42)})
 
 
 # ------------------------------------------------------------------- ruins --
@@ -1481,10 +1501,10 @@ func _build_ruin(c: Vector2, pad: float) -> void:
 			var roll := rng.randf()
 			if roll < 0.2:
 				_place("Wall_Arch", pos, yaw + wall_yaw)
-				_add_arch_collider(pos, yaw + wall_yaw)
+				_add_wall_for("Wall_Arch", pos, yaw + wall_yaw)
 			elif roll < 0.45:
 				_place("Wall_UnevenBrick_Window_Wide_Round", pos, yaw + wall_yaw)
-				_add_window_collider(pos, yaw + wall_yaw)
+				_add_wall_for("Wall_UnevenBrick_Window_Wide_Round", pos, yaw + wall_yaw)
 			else:
 				_place("Wall_UnevenBrick_Straight", pos, yaw + wall_yaw)
 				_add_wall_collider(pos, yaw + wall_yaw, false)
@@ -1501,10 +1521,3 @@ func _build_ruin(c: Vector2, pad: float) -> void:
 		var lp := origin + b * Vector3(rng.randf_range(-w + 1.0, w - 1.0), 0.08, rng.randf_range(-d + 1.0, d - 1.0))
 		loot_points.append({"pos": lp, "kind": "weapon" if i == 0 else "gear", "village": false})
 	_stat.ruins += 1
-
-
-func _add_arch_collider(pos: Vector3, yaw: float) -> void:
-	var basis := Basis(Vector3.UP, yaw)
-	for sx in [-1.0, 1.0]:
-		_colliders.append({"xform": Transform3D(basis, pos + basis * Vector3(sx * 0.82, 1.5, 0.03)), "size": Vector3(0.36, 3.0, 0.3)})
-	_colliders.append({"xform": Transform3D(basis, pos + basis * Vector3(0, 2.75, 0.03)), "size": Vector3(2.0, 0.5, 0.3)})
