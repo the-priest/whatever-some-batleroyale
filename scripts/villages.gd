@@ -329,6 +329,65 @@ func _on_road(p: Vector2, margin: float) -> bool:
 	return false
 
 
+## The house whose footprint (grown by `margin`) contains `p`, or {}.
+## Uses a coarse grid so bots can ask every few frames.
+var _house_grid: Dictionary = {}
+
+
+func house_at(p: Vector2, margin := 0.0) -> Dictionary:
+	if _house_grid.is_empty():
+		for i in houses.size():
+			var h: Dictionary = houses[i]
+			var c: Vector2 = h.center
+			var r := Vector2(float(h.w), float(h.d)).length() * 0.5 + 2.0
+			for gx in range(int(floor((c.x - r) / 16.0)), int(floor((c.x + r) / 16.0)) + 1):
+				for gz in range(int(floor((c.y - r) / 16.0)), int(floor((c.y + r) / 16.0)) + 1):
+					var k := Vector2i(gx, gz)
+					if not _house_grid.has(k):
+						_house_grid[k] = []
+					_house_grid[k].append(i)
+		if _house_grid.is_empty():
+			_house_grid[Vector2i(1 << 20, 0)] = []
+	var cell: Array = _house_grid.get(Vector2i(int(floor(p.x / 16.0)), int(floor(p.y / 16.0))), [])
+	for i in cell:
+		var h: Dictionary = houses[int(i)]
+		var local: Vector2 = (p - (h.center as Vector2)).rotated(float(h.yaw))
+		if absf(local.x) < float(h.w) * 0.5 + margin and absf(local.y) < float(h.d) * 0.5 + margin:
+			return h
+	return {}
+
+
+## World-space walking points for a house: "out" in front of the door, "in"
+## just inside it, and for two-storey houses "up": stair side, stair foot,
+## stair top and the landing beside it (the order you climb them).
+func house_nav(h: Dictionary) -> Dictionary:
+	if h.has("_nav"):
+		return h["_nav"]
+	var w := float(h.w)
+	var d := float(h.d)
+	var side := int(h.door_side)
+	var b := Basis(Vector3.UP, float(h.yaw))
+	var o := Vector3((h.center as Vector2).x, float(h.pad), (h.center as Vector2).y)
+	var cells := int(w * 0.5) if side % 2 == 0 else int(d * 0.5)
+	var along := -((cells - 1) * 0.5) * 2.0 + float(cells / 2) * 2.0
+	var door: Vector3 = [Vector3(along, 0, d * 0.5), Vector3(w * 0.5, 0, along), Vector3(-along, 0, -d * 0.5), Vector3(-w * 0.5, 0, -along)][side]
+	var nrm: Vector3 = [Vector3(0, 0, 1), Vector3(1, 0, 0), Vector3(0, 0, -1), Vector3(-1, 0, 0)][side]
+	var nav := {"out": o + b * (door + nrm * 1.2), "in": o + b * (door - nrm * 1.3), "up": [], "floor_y": o.y + WALL_HEIGHT,
+		"stair": [w * 0.5 - 1.1, stair_foot_z(d), stair_foot_z(d) - 4.58]}
+	if int(h.get("built_levels", 1)) > 1:
+		var foot := stair_foot_z(d)
+		var sx := w * 0.5 - 1.1
+		var top := foot - 4.58
+		nav["up"] = [
+			o + b * Vector3(sx - 1.0, 0, foot + 0.45),
+			o + b * Vector3(sx, 0, foot + 0.45),
+			o + b * Vector3(sx, WALL_HEIGHT - 0.3, top + 0.4),
+			o + b * Vector3(sx - 1.6, WALL_HEIGHT, top + 0.3),
+		]
+	h["_nav"] = nav
+	return nav
+
+
 ## True if something of radius `margin` at `p` would be in a house or in
 ## front of its door.
 func blocks_house(p: Vector2, margin: float) -> bool:
@@ -712,31 +771,70 @@ func _build_square(sq: Dictionary) -> void:
 	var axis: float = sq.axis
 	var b := Basis(Vector3.UP, -axis)
 	var o := Vector3(c.x, pad, c.y)
-	# Fountain: stepped basin, pillar and bowl.
-	_proc_box(Transform3D(b.scaled_local(Vector3(6.4, 0.7, 6.4)), o + Vector3(0, 0.35, 0)), "stone")
-	_proc_box(Transform3D(b.scaled_local(Vector3(5.6, 0.12, 5.6)), o + Vector3(0, 0.66, 0)), "water")
-	_proc_box(Transform3D(b.scaled_local(Vector3(0.8, 2.2, 0.8)), o + Vector3(0, 1.1, 0)), "stone")
-	_proc_box(Transform3D(b.scaled_local(Vector3(2.2, 0.3, 2.2)), o + Vector3(0, 2.2, 0)), "stone")
-	_add_box_collider(o + Vector3(0, 0.35, 0), Vector3(6.4, 0.7, 6.4), -axis)
-	_add_box_collider(o + Vector3(0, 1.1, 0), Vector3(0.8, 2.2, 0.8), -axis)
+	# Fountain: a round stone basin, a pedestal and a raised bowl on top.
+	_stone_ring(o, 3.0, 12, 0.7, 0.45, -axis)
+	for k in 3:
+		_proc_box(Transform3D(Basis(Vector3.UP, -axis + float(k) * PI / 6.0).scaled_local(Vector3(4.3, 0.1, 4.3)), o + Vector3(0, 0.5, 0)), "water")
+	_proc_box(Transform3D(b.scaled_local(Vector3(0.9, 1.7, 0.9)), o + Vector3(0, 0.85, 0)), "stone")
+	_stone_ring(o + Vector3(0, 1.55, 0), 0.95, 8, 0.35, 0.25, -axis)
+	_proc_box(Transform3D(b.scaled_local(Vector3(1.5, 0.08, 1.5)), o + Vector3(0, 1.82, 0)), "water")
+	_proc_box(Transform3D(b.scaled_local(Vector3(0.35, 0.7, 0.35)), o + Vector3(0, 2.1, 0)), "stone")
+	for k in 2:
+		_add_box_collider(o + Vector3(0, 0.35, 0), Vector3(6.1, 0.7, 6.1), -axis + float(k) * PI * 0.25)
+	_add_box_collider(o + Vector3(0, 1.2, 0), Vector3(1.0, 2.4, 1.0), -axis)
 	# Market stalls around the square.
-	var cloth := ["cloth_red", "cloth_blue", "cloth_green", "cloth_yellow"]
 	for i in 8:
 		var a := TAU * float(i) / 8.0 + 0.2
-		var p := o + Vector3(cos(a) * 11.0, 0, sin(a) * 11.0)
-		var sb := Basis(Vector3.UP, -a + PI * 0.5)
-		_proc_box(Transform3D(sb.scaled_local(Vector3(2.6, 0.9, 1.2)), p + Vector3(0, 0.45, 0)), "wood")
-		for px in [-1.2, 1.2]:
-			for pz in [-0.55, 0.55]:
-				_proc_box(Transform3D(sb.scaled_local(Vector3(0.1, 2.4, 0.1)), p + sb * Vector3(px, 1.2, pz)), "wood_dark")
-		_proc_box(Transform3D((sb * Basis(Vector3.RIGHT, 0.25)).scaled_local(Vector3(2.9, 0.05, 1.7)), p + Vector3(0, 2.45, 0)), cloth[i % cloth.size()])
-		_add_box_collider(p + Vector3(0, 0.45, 0), Vector3(2.6, 0.9, 1.2), -a + PI * 0.5)
-		loot_points.append({"pos": p + sb * Vector3(0, 0.95, 0), "kind": "gear" if i % 3 else "weapon", "village": true})
+		_build_stall(o + Vector3(cos(a) * 11.0, 0, sin(a) * 11.0), -a + PI * 0.5, i)
 	# Bell tower on one corner of the square (a lookout with the best loot).
 	var tc: Vector2 = sq.tower
 	var t := {"center": tc, "pad": pad}
 	towers.append(t)
 	_build_tower(t)
+
+
+const CLOTHS := ["cloth_red", "cloth_blue", "cloth_green", "cloth_yellow"]
+
+
+## A market stall: counter, four posts and a sloped awning, loot on the counter.
+func _build_stall(p: Vector3, yaw: float, i: int) -> void:
+	var sb := Basis(Vector3.UP, yaw)
+	_proc_box(Transform3D(sb.scaled_local(Vector3(2.6, 0.9, 1.2)), p + Vector3(0, 0.45, 0)), "wood")
+	for px in [-1.2, 1.2]:
+		for pz in [-0.55, 0.55]:
+			_proc_box(Transform3D(sb.scaled_local(Vector3(0.1, 2.4, 0.1)), p + sb * Vector3(px, 1.2, pz)), "wood_dark")
+	_proc_box(Transform3D((sb * Basis(Vector3.RIGHT, 0.25)).scaled_local(Vector3(2.9, 0.05, 1.7)), p + Vector3(0, 2.45, 0)), CLOTHS[i % CLOTHS.size()])
+	_add_box_collider(p + Vector3(0, 0.45, 0), Vector3(2.6, 0.9, 1.2), yaw)
+	loot_points.append({"pos": p + sb * Vector3(0, 0.95, 0), "kind": "gear" if i % 3 else "weapon", "village": true})
+
+
+## A ring of stone blocks (basin kerbs, well heads), `n` segments around `r`.
+func _stone_ring(c: Vector3, r: float, n: int, h: float, t: float, yaw: float) -> void:
+	var seg := 2.0 * r * tan(PI / float(n)) + 0.08
+	for i in n:
+		var a := TAU * float(i) / float(n) + yaw
+		var sb := Basis(Vector3.UP, -a + PI * 0.5)
+		_proc_box(Transform3D(sb.scaled_local(Vector3(seg, h, t)), c + Vector3(cos(a) * r, h * 0.5, sin(a) * r)), "stone")
+
+
+## A stone well: an octagonal kerb, two timber posts, a winch beam and a
+## little tiled roof. Waist-high cover in the middle of a square.
+func _build_well(p: Vector3, yaw: float) -> void:
+	var b := Basis(Vector3.UP, yaw)
+	for i in 8:
+		var a := TAU * float(i) / 8.0
+		# Each kerb stone runs along the ring (tangent), slightly overlapping.
+		var sb := b * Basis(Vector3.UP, -a + PI * 0.5)
+		_proc_box(Transform3D(sb.scaled_local(Vector3(0.78, 0.85, 0.3)), p + b * Vector3(cos(a) * 0.84, 0.425, sin(a) * 0.84)), "stone")
+	_proc_box(Transform3D(b.scaled_local(Vector3(1.4, 0.06, 1.4)), p + Vector3(0, 0.55, 0)), "water")
+	for sx in [-1.0, 1.0]:
+		_proc_box(Transform3D(b.scaled_local(Vector3(0.14, 1.9, 0.14)), p + b * Vector3(float(sx) * 0.95, 1.4, 0)), "wood_dark")
+	_proc_box(Transform3D(b.scaled_local(Vector3(2.1, 0.12, 0.12)), p + b * Vector3(0, 2.05, 0)), "wood_dark")
+	_proc_box(Transform3D(b.scaled_local(Vector3(0.05, 0.6, 0.05)), p + b * Vector3(0, 1.72, 0)), "wood")
+	for sz in [-1.0, 1.0]:
+		var roof := b * Basis(Vector3.RIGHT, float(sz) * 0.6)
+		_proc_box(Transform3D(roof.scaled_local(Vector3(2.4, 0.06, 1.1)), p + b * Vector3(0, 2.55, float(sz) * 0.42)), "cloth_red")
+	_add_box_collider(p + Vector3(0, 0.42, 0), Vector3(2.0, 0.85, 2.0), yaw)
 
 
 ## Timber upper floor with a stairwell, the stair against the +x wall.
@@ -806,6 +904,42 @@ func _build_village_extras() -> void:
 		var vr: float = v.radius
 		var is_farm: bool = v.type == "farm"
 
+		# The village well and a couple of market stalls on the square.
+		var taken: Array[Vector2] = []
+		if not is_farm and v.type != "city":
+			var axis := float(v.get("axis", 0.0))
+			var sdir := Vector2(cos(axis), sin(axis))
+			var sperp := Vector2(-sdir.y, sdir.x)
+			# Towns have streets crossing in the middle: use the corners of the
+			# crossing. Villages have an open green: the middle, or near it.
+			var spots: Array[Vector2] = []
+			if v.type == "town":
+				for a in [1.0, -1.0]:
+					for b in [1.0, -1.0]:
+						spots.append(site + sdir * float(a) * 5.0 + sperp * float(b) * 6.2)
+			else:
+				spots.append(site)
+				for k in 8:
+					var ang := TAU * float(k) / 8.0 + axis
+					spots.append(site + Vector2(cos(ang), sin(ang)) * 7.0)
+			var placed := 0
+			for sp in spots:
+				var ok := not blocks_house(sp, 1.8) and not _on_road(sp, 1.6)
+				for q in taken:
+					if q.distance_to(sp) < 4.6:
+						ok = false
+				if not ok:
+					continue
+				var yaw := -atan2((sp - site).y, (sp - site).x) + PI * 0.5 if sp != site else -axis
+				if placed == 0:
+					_build_well(Vector3(sp.x, pad, sp.y), -axis)
+				else:
+					_build_stall(Vector3(sp.x, pad, sp.y), yaw, placed)
+				taken.append(sp)
+				placed += 1
+				if placed >= 3:
+					break
+
 		# Plaza loot (open air crates) + cover.
 		for i in (rng.randi_range(2, 3) if is_farm else rng.randi_range(3, 6)):
 			var ang := rng.randf() * TAU
@@ -817,6 +951,13 @@ func _build_village_extras() -> void:
 			# Streets stay drivable.
 			if _on_road(Vector2(p.x, p.z), 1.2 if crate else 2.2):
 				continue
+			var clash := false
+			for q in taken:
+				if q.distance_to(Vector2(p.x, p.z)) < (2.6 if crate else 3.6):
+					clash = true
+			if clash:
+				continue
+			taken.append(Vector2(p.x, p.z))
 			var py := rng.randf_range(0.0, TAU)
 			var pb := Basis(Vector3.UP, py)
 			if crate:
@@ -856,8 +997,18 @@ func _build_village_extras() -> void:
 			var p := Vector3(site.x + cos(ang) * dist, pad, site.y + sin(ang) * dist)
 			if _inside_house(Vector2(p.x, p.z), 2.0):
 				continue
+			# A ruined corner of an old building: two walls meeting in an L,
+			# the second one broken down to a low stub.
 			_place("Wall_UnevenBrick_Straight", p, ang)
 			_add_wall_collider(p, ang, false)
+			var wb := Basis(Vector3.UP, ang)
+			var p2 := p + wb * Vector3(1.0, 0, 1.0)
+			if not _inside_house(Vector2(p2.x, p2.z), 1.2):
+				var stub := Transform3D(Basis(Vector3.UP, ang + PI * 0.5).scaled_local(Vector3(2.0, 1.1, 0.4)), p2 + Vector3(0, 0.55, 0))
+				_proc_box(stub, "stone")
+				_add_box_collider(p2 + Vector3(0, 0.55, 0), Vector3(2.0, 1.1, 0.4), ang + PI * 0.5)
+				for k in 3:
+					_place("Prop_Brick%d" % rng.randi_range(1, 4), p2 + wb * Vector3(rng.randf_range(-0.6, 1.4), 0, rng.randf_range(-1.2, 0.8)), rng.randf() * TAU)
 
 
 func _place(key: String, bottom_center: Vector3, yaw: float, _align := true, pivot := Vector3.INF) -> void:

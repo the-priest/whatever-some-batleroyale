@@ -99,6 +99,18 @@ var _net_yaw := 0.0
 var _net_flags := 0
 var _net_seen := false
 var _tag: Label3D
+## Walking route through doors and up/down stairs: [[Vector3 point, bool indoor], ...].
+var _route: Array = []
+var _route_goal := Vector3.INF
+var _route_replan := 0.0
+var _route_stuck := 0.0
+## Tests set this so the zone and gunfire do not pick the roam point.
+var test_hold_roam := false
+## Holding an upstairs window: time left, where, which way to look.
+var _camp_t := 0.0
+var _camp_cool := 4.0
+var _camp_pos := Vector3.ZERO
+var _camp_yaw := 0.0
 
 const NF_ALIVE := 1
 const NF_CROUCH := 2
@@ -239,7 +251,8 @@ func _physics_process(delta: float) -> void:
 	_lod_mult = 1.0
 	if state == State.GROUND or state == State.DEAD:
 		var far: bool = game != null and game.player != null and game.player.global_position.distance_squared_to(global_position) > 180.0 * 180.0
-		if far:
+		# Doors and stairs need every tick to stay on the line.
+		if far and not (not _route.is_empty() and bool(_route[0][1])):
 			_lod_odd = not _lod_odd
 			if _lod_odd:
 				_lod_skip = delta
@@ -399,7 +412,16 @@ func _ground(delta: float) -> void:
 			# shoot, then dash to a new spot facing the way you run, then shoot
 			# again. Nobody moonwalks.
 			_fight_t -= delta
-			if _fight_t <= 0.0:
+			if _camp_t > 0.0 and _camp_pos.distance_to(global_position) < 1.5:
+				# Holding a window: no dashing about the room. Pop up and
+				# shoot, then duck below the sill, then up again.
+				fight_moving = false
+				if _fight_t <= 0.0:
+					var ducking := not crouched and randf() < 0.45
+					_set_crouch(ducking)
+					_fight_t = randf_range(0.8, 1.6) if ducking else randf_range(1.6, 3.2)
+				_fight_t = minf(_fight_t, 3.2)
+			elif _fight_t <= 0.0:
 				fight_moving = not fight_moving
 				if fight_moving:
 					_set_crouch(false)
@@ -411,6 +433,14 @@ func _ground(delta: float) -> void:
 					elif d < hold - 8.0:
 						push = -0.8
 					_fight_dir = (side * (1.0 - absf(push) * 0.6) + to_e * push).normalized()
+					# Never dash off a ledge, down a stairwell or out of a window.
+					if not _floor_ahead(_fight_dir):
+						var alt := (-side * (1.0 - absf(push) * 0.6) + to_e * push).normalized()
+						if _floor_ahead(alt):
+							_fight_dir = alt
+						else:
+							fight_moving = false
+							_fight_t = randf_range(1.4, 3.0)
 				else:
 					_fight_t = randf_range(1.4, 3.4)
 					_set_crouch(d > 30.0 and randf() < 0.4 + shoot_skill * 0.35)
@@ -421,12 +451,18 @@ func _ground(delta: float) -> void:
 			else:
 				target_pos = global_position
 				stop_dist = 1.0
+		elif _camp_t > 0.0 and crouched and _fight_t > 0.0 and enemy != null and is_instance_valid(enemy):
+			# Ducked below a window sill: stay down until it is time to pop up.
+			_fight_t -= delta
+			target_pos = global_position
+			stop_dist = 1.0
 		else:
 			enemy = null
 			_set_crouch(false)
 			fight_moving = false
 			var here := Vector2(global_position.x, global_position.z)
-			if game != null and game.zone != null:
+			var must_move := false
+			if game != null and game.zone != null and not test_hold_roam:
 				var zc: Vector2 = game.zone.center
 				var r: float = game.zone.radius
 				# Head for safety early, not when the storm is already on top of us.
@@ -434,21 +470,49 @@ func _ground(delta: float) -> void:
 				var nc: Vector2 = game.zone.next_center()
 				# Rotate when the storm is coming or we are well outside the
 				# next circle; otherwise keep to our own area.
-				var must_move: bool = here.distance_to(zc) > r * 0.8 or (game.zone.warning and here.distance_to(nc) > nr * 0.9)
+				must_move = here.distance_to(zc) > r * 0.8 or (game.zone.warning and here.distance_to(nc) > nr * 0.9)
 				if must_move and roam_point.distance_to(nc) > nr * 0.85:
 					roam_point = nc + (here - nc).normalized() * (nr * randf_range(0.45, 0.8))
 					roam_point += Vector2(randf_range(-10, 10), randf_range(-10, 10))
-			if alert_timer > 0.0 and aggression > 0.6 and heard_pos.distance_to(global_position) > 10.0:
+			if alert_timer > 0.0 and aggression > 0.6 and heard_pos.distance_to(global_position) > 10.0 and not test_hold_roam:
 				# Go and see who is shooting.
 				roam_point = Vector2(heard_pos.x, heard_pos.z)
-			if here.distance_to(roam_point) < 3.0:
-				_roam_wait -= delta
-				if _roam_wait <= 0.0:
-					_roam_wait = randf_range(1.0, 5.0)
-					_pick_roam_point()
-			target_pos = Vector3(roam_point.x, global_position.y, roam_point.y)
-			stop_dist = 2.5
-			want_sprint = alert_timer <= 0.0
+			_camp_cool -= delta
+			if _camp_t > 0.0 and (must_move or (alert_timer > 0.0 and aggression > 0.75)):
+				_camp_t = 0.0
+			if _camp_t <= 0.0 and armed and _camp_cool <= 0.0 and not must_move and not test_hold_roam:
+				_camp_cool = 8.0
+				_try_camp()
+			if _camp_t > 0.0:
+				# Holding a window upstairs: stand at it and watch the street.
+				_camp_t -= delta
+				target_pos = _camp_pos
+				stop_dist = 0.35
+				want_sprint = false
+			else:
+				if here.distance_to(roam_point) < 3.0:
+					_roam_wait -= delta
+					if _roam_wait <= 0.0:
+						_roam_wait = randf_range(1.0, 5.0)
+						_pick_roam_point()
+				target_pos = Vector3(roam_point.x, global_position.y, roam_point.y)
+				stop_dist = 2.5
+				want_sprint = alert_timer <= 0.0
+
+	var routing := false
+	if not fighting:
+		var goal_up := (loot_target != null and target_pos.is_equal_approx(loot_target.global_position)) or (_camp_t > 0.0 and target_pos.is_equal_approx(_camp_pos))
+		var wp := _routed(target_pos, goal_up, delta)
+		if not wp.is_equal_approx(target_pos):
+			target_pos = wp
+			stop_dist = 0.0
+			routing = true
+			# Indoors and on stairs: walk, do not sprint into the door frame.
+			if bool(_route[0][1]):
+				want_sprint = false
+	else:
+		_route.clear()
+		_route_goal = Vector3.INF
 
 	var flat := Vector3(target_pos.x - global_position.x, 0, target_pos.z - global_position.z)
 	var dist := flat.length()
@@ -470,6 +534,8 @@ func _ground(delta: float) -> void:
 	if dist <= stop_dist:
 		velocity.x = move_toward(velocity.x, 0.0, 30.0 * delta)
 		velocity.z = move_toward(velocity.z, 0.0, 30.0 * delta)
+		if _camp_t > 0.0 and not fighting and not routing:
+			rotation.y = lerp_angle(rotation.y, _camp_yaw, clampf(delta * 4.0, 0.0, 1.0))
 		if loot_target != null and is_instance_valid(loot_target) and not loot_target.taken:
 			if loot_target.global_position.distance_to(global_position) < 2.8:
 				_take_loot(loot_target)
@@ -483,7 +549,9 @@ func _ground(delta: float) -> void:
 			var q := PhysicsRayQueryParameters3D.create(global_position + Vector3.UP * 1.0, global_position + Vector3.UP * 1.0 + dir * 1.6, 1)
 			q.exclude = [get_rid()]
 			_probe_blocked = not space.intersect_ray(q).is_empty()
-		if _probe_blocked:
+		# Inside a house the route is exact: the probe would only see the
+		# stair treads ahead and steer off them.
+		if _probe_blocked and not (routing and bool(_route[0][1])):
 			dir = dir.rotated(Vector3.UP, deg_to_rad(70.0))
 		if game != null and game.terrain != null and bool(game.terrain.is_water(global_position.x, global_position.z)):
 			speed *= 0.6
@@ -492,14 +560,17 @@ func _ground(delta: float) -> void:
 		if not fighting or fight_moving:
 			rotation.y = lerp_angle(rotation.y, atan2(-dir.x, -dir.z), clampf(delta * 10.0, 0.0, 1.0))
 		_blocked -= delta
-		if _blocked <= 0.0 and _probe_t == 4 and is_on_floor() and dist > 3.0:
+		if _blocked <= 0.0 and _probe_t == 4 and is_on_floor() and dist > 3.0 and not routing:
 			var q2 := PhysicsRayQueryParameters3D.create(global_position + Vector3.UP * 0.4, global_position + Vector3.UP * 0.4 + dir * 0.9, 1)
 			q2.exclude = [get_rid()]
 			if not space.intersect_ray(q2).is_empty():
 				velocity.y = 5.2
 				_blocked = 1.2
 
+	var wish := Vector3(velocity.x, 0.0, velocity.z)
+	var grounded_before := is_on_floor()
 	_move()
+	_step_up(wish, grounded_before)
 	_ground_safety()
 	_animate_ground()
 	# Stuck detection: if we have barely moved in a while, try somewhere else.
@@ -507,6 +578,8 @@ func _ground(delta: float) -> void:
 	if _progress_t > 3.0:
 		if global_position.distance_to(_progress_pos) < 1.2 and dist > stop_dist + 1.0:
 			_pick_roam_point()
+			_route.clear()
+			_route_goal = Vector3.INF
 			if loot_target != null:
 				_skip_loot.append(loot_target.get_instance_id())
 				loot_target = null
@@ -514,6 +587,178 @@ func _ground(delta: float) -> void:
 				velocity.y = 5.2
 		_progress_pos = global_position
 		_progress_t = 0.0
+
+
+## Is there floor at about our height a dash-length ahead?
+func _floor_ahead(dir: Vector3) -> bool:
+	var space := get_world_3d().direct_space_state
+	for dist in [1.0, 2.2]:
+		var p := global_position + dir * float(dist) + Vector3.UP * 1.0
+		var q := PhysicsRayQueryParameters3D.create(p, p - Vector3.UP * 2.2, 1)
+		q.exclude = [get_rid()]
+		var hit := space.intersect_ray(q)
+		if hit.is_empty():
+			# Open terrain has no collider under some LOD tiles: trust the heightmap.
+			if game != null and game.terrain != null and global_position.y - game_ground_y() < 0.6:
+				var gy: float = game.terrain.height_at(p.x, p.z)
+				if absf(gy - global_position.y) < 1.2:
+					continue
+			return false
+	return true
+
+
+## Upstairs in a house with a gun and in no hurry? Cautious bots sometimes
+## take a window and hold it for a while, PUBG style.
+func _try_camp() -> void:
+	if game == null or game.world == null or game.world.villages == null:
+		return
+	if global_position.y - game_ground_y() < 2.2 or randf() > (1.0 - aggression) * 0.9:
+		return
+	var vil: Villages = game.world.villages
+	var h := vil.house_at(Vector2(global_position.x, global_position.z), 0.0)
+	if h.is_empty() or int(h.get("built_levels", 1)) < 2:
+		return
+	var nav := vil.house_nav(h)
+	if global_position.y < float(nav.floor_y) - 1.0:
+		return
+	var w := float(h.w)
+	var d := float(h.d)
+	var b := Basis(Vector3.UP, float(h.yaw))
+	var o := Vector3((h.center as Vector2).x, float(nav.floor_y), (h.center as Vector2).y)
+	var space := get_world_3d().direct_space_state
+	for attempt in 6:
+		# Any wall but the stair wall (+x); keep clear of the stairwell.
+		# Watch the street first: the door side, unless the stair is on it.
+		var door := int(h.door_side)
+		var side: int = door if attempt < 3 and door != 1 else [0, 2, 3][randi() % 3]
+		var local := Vector3.ZERO
+		var out_dir := Vector3.ZERO
+		match side:
+			0:
+				local = Vector3(randf_range(-w * 0.5 + 1.0, w * 0.5 - 2.4), 0, d * 0.5 - 0.75)
+				out_dir = Vector3(0, 0, 1)
+			2:
+				local = Vector3(randf_range(-w * 0.5 + 1.0, w * 0.5 - 2.4), 0, -d * 0.5 + 0.75)
+				out_dir = Vector3(0, 0, -1)
+			_:
+				local = Vector3(-w * 0.5 + 0.75, 0, randf_range(-d * 0.5 + 1.0, d * 0.5 - 1.0))
+				out_dir = Vector3(-1, 0, 0)
+		var p := o + b * local
+		var od := b * out_dir
+		# Only a spot with an actual window in front of it.
+		var q := PhysicsRayQueryParameters3D.create(p + Vector3.UP * 1.5, p + Vector3.UP * 1.5 + od * 2.0, 1)
+		if not space.intersect_ray(q).is_empty():
+			continue
+		_camp_pos = p + Vector3.UP * 0.05
+		_camp_yaw = atan2(-od.x, -od.z)
+		_camp_t = randf_range(20.0, 55.0)
+		return
+
+
+## Next point to walk to on the way to `goal`: through the door of a house
+## and up or down its stairs when the goal (or the bot) is inside one.
+func _routed(goal: Vector3, goal_up: bool, delta: float) -> Vector3:
+	if game == null or game.world == null or game.world.villages == null:
+		return goal
+	var vil: Villages = game.world.villages
+	_route_replan -= delta
+	# Compare goals on the ground plane: roam goals ride along at our own
+	# height, which changes on every stair.
+	var moved := Vector2(goal.x - _route_goal.x, goal.z - _route_goal.z).length() > 2.0 if _route_goal != Vector3.INF else true
+	if moved or (_route.is_empty() and _route_replan <= 0.0):
+		_route_replan = 0.6
+		_route_goal = goal
+		_route = _plan_route(vil, goal, goal_up)
+		_route_stuck = 0.0
+	while not _route.is_empty():
+		var p: Vector3 = _route[0][0]
+		var flat := Vector2(p.x - global_position.x, p.z - global_position.z).length()
+		# Points on the stair also need the height, so a bot standing under
+		# the stair top does not count as having climbed it.
+		if flat < 0.55 and absf(p.y - global_position.y) < 1.2:
+			_route.pop_front()
+			_route_stuck = 0.0
+			continue
+		break
+	if _route.is_empty():
+		return goal
+	_route_stuck += delta
+	if _route_stuck > 6.0:
+		# Something is in the way: drop the route and let the stuck logic
+		# pick something else.
+		_route.clear()
+		_route_replan = 3.0
+		return goal
+	return _route[0][0]
+
+
+func _plan_route(vil: Villages, goal: Vector3, goal_up: bool) -> Array:
+	var me := Vector2(global_position.x, global_position.z)
+	var hb := vil.house_at(me, 0.1)
+	var ht := vil.house_at(Vector2(goal.x, goal.z), -0.2)
+	var out: Array = []
+	if not hb.is_empty():
+		var nav := vil.house_nav(hb)
+		var pad := float(nav.floor_y) - Villages.WALL_HEIGHT
+		var up: Array = nav.up
+		# Standing on the flight itself?
+		var st: Array = nav.stair
+		var local := (me - (hb.center as Vector2)).rotated(float(hb.yaw))
+		var on_stair := up.size() == 4 and absf(local.x - float(st[0])) < 0.95 and local.y < float(st[1]) + 0.2 \
+				and local.y > float(st[2]) - 0.2 and global_position.y > pad + 0.25
+		var me_up := global_position.y > pad + (1.6 if on_stair else 2.1)
+		var same := not ht.is_empty() and ht == hb
+		var tgt_up := same and goal_up and goal.y > pad + 2.1
+		if same and me_up == tgt_up and not on_stair:
+			return []
+		if up.size() == 4 and (me_up or on_stair) and not (same and tgt_up):
+			# Down: landing, stair top, stair foot, beside the foot (from the
+			# stair itself, straight to its foot).
+			for i in ([1, 0] if on_stair else [3, 2, 1, 0]):
+				out.append([up[i], true])
+		if same:
+			if tgt_up and up.size() == 4:
+				for q in (up.slice(2) if on_stair or me_up else up):
+					out.append([q, true])
+			return out
+		out.append([nav["in"], true])
+		out.append([nav.out, true])
+	if not ht.is_empty() and ht != hb:
+		var nav2 := vil.house_nav(ht)
+		out.append([nav2.out, false])
+		out.append([nav2["in"], true])
+		if goal_up and goal.y > float(nav2.floor_y) - 1.0:
+			for q in nav2.up:
+				out.append([q, true])
+	return out
+
+
+## Walk up small ledges (stair edges, floor lips, kerbs) like the player does.
+func _step_up(wish: Vector3, grounded: bool) -> void:
+	if not grounded or wish.length() < 0.5:
+		return
+	var got := Vector2(velocity.x, velocity.z).length()
+	if got > wish.length() * 0.6 and not is_on_wall():
+		return
+	var dir := wish.normalized()
+	if not test_move(global_transform, dir * 0.25):
+		return
+	for h in [0.16, 0.3, 0.45]:
+		var up := Vector3.UP * float(h)
+		if test_move(global_transform, up):
+			return
+		var raised := global_transform.translated(up)
+		if test_move(raised, dir * 0.48):
+			continue
+		var land := global_position + up + dir * 0.48
+		var q := PhysicsRayQueryParameters3D.create(land + Vector3.UP * 0.05, land - Vector3.UP * (float(h) + 0.1), 1)
+		q.exclude = [get_rid()]
+		var hit := get_world_3d().direct_space_state.intersect_ray(q)
+		if hit.is_empty():
+			continue
+		global_position = Vector3(land.x, float(hit["position"].y) + 0.02, land.z)
+		velocity.y = 0.0
+		return
 
 
 func _ground_safety() -> void:

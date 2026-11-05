@@ -202,6 +202,10 @@ func _ready() -> void:
 		_run_shot()
 	elif OS.get_cmdline_user_args().has("--houses"):
 		_run_house_walk_test()
+	elif OS.get_cmdline_user_args().has("--camp"):
+		_run_camp_test()
+	elif OS.get_cmdline_user_args().has("--botstairs"):
+		_run_bot_stairs_test()
 	elif OS.get_cmdline_user_args().has("--stairs"):
 		_run_stairs_test()
 	elif OS.get_cmdline_user_args().has("--mantle"):
@@ -1965,7 +1969,11 @@ func _run_shot() -> void:
 		if a.begins_with("--pad="):
 			for v in world.villages.village_pads:
 				if String(v.type) == a.substr(6):
-					var c: Vector2 = v.center + Vector2(1, 0.4).normalized() * (float(v.radius) * 0.6)
+					var pr := 0.6
+					for a2 in OS.get_cmdline_user_args():
+						if a2.begins_with("--padr="):
+							pr = float(a2.substr(7))
+					var c: Vector2 = v.center + Vector2(1, 0.4).normalized() * (float(v.radius) * pr)
 					spot = Vector3(c.x, 0.0, c.y)
 					var to: Vector2 = (v.center as Vector2) - c
 					ang = atan2(-to.x, -to.y)
@@ -2133,6 +2141,37 @@ func _run_shot() -> void:
 				jeep.steer_in = 0.25
 				await get_tree().physics_frame
 			_update_driving(0.5)
+	if args.has("--camper"):
+		# A cautious bot on the upper floor of the framed house takes a window.
+		var hh: Dictionary = world.villages.house_at(Vector2(p.global_position.x, p.global_position.z) + Vector2(-sin(p.yaw), -cos(p.yaw)) * 9.0, 1.0)
+		if not hh.is_empty() and int(hh.get("built_levels", 1)) > 1:
+			var nav := world.villages.house_nav(hh)
+			var cb: Bot = bots[0]
+			p.spawn_protect = 9999.0
+			cb.state = Bot.State.GROUND
+			cb.visible = true
+			cb.global_position = (nav.up[3] as Vector3) + Vector3(0, 0.2, 0)
+			cb.arm_weapon("rifle")
+			cb.aggression = 0.0
+			cb.shoot_skill = 0.0
+			cb._camp_cool = 0.0
+			var sight0 := cb.sight
+			cb.sight = 0.0
+			cb.set_physics_process(true)
+			zone.center = Vector2(cb.global_position.x, cb.global_position.z)
+			for i in 300:
+				cb.enemy = null
+				cb.loot_target = null
+				cb._loot_scan = 99.0
+				await get_tree().physics_frame
+			cb.set_physics_process(false)
+			cb.sight = sight0
+			var to: Vector3 = cb.global_position + Vector3(0, 1.4, 0) - p.camera.global_position
+			p.yaw = atan2(-to.x, -to.z)
+			p.pitch = atan2(to.y, Vector2(to.x, to.z).length())
+			print("[shot] camper camp_t=%.1f at %s" % [cb._camp_t, str(cb.global_position.round())])
+			for i in 10:
+				await get_tree().process_frame
 	if args.has("--bot"):
 		var poses := [["aim", "Idle", Vector3(-1.4, 0, -5.5), 2, 2], ["idle", "Jog_Fwd", Vector3(1.6, 0, -7.0), 1, 0], ["idle", "Sprint", Vector3(4.2, 0, -9.0), 3, 3]]
 		var k := 0
@@ -4049,6 +4088,168 @@ func _run_stairs_test() -> void:
 
 ## Walk into every house through its door (and upstairs if it has one),
 ## steering through waypoints like a player would.
+## Cautious armed bots upstairs take a window and watch the street.
+func _run_camp_test() -> void:
+	_start_match()
+	await get_tree().physics_frame
+	_land_player_now()
+	player.spawn_protect = 9999.0
+	for bt in bots:
+		if is_instance_valid(bt):
+			bt.set_physics_process(false)
+	var vil := world.villages
+	var bot: Bot = bots[0]
+	bot.set_physics_process(true)
+	var n := 0
+	var camped := 0
+	var at_window := 0
+	for h in vil.houses:
+		if int(h.get("built_levels", 1)) < 2 or n >= 20:
+			continue
+		n += 1
+		var nav := vil.house_nav(h)
+		var landing: Vector3 = nav.up[3]
+		bot.global_position = landing + Vector3(0, 0.2, 0)
+		bot.velocity = Vector3.ZERO
+		bot.state = Bot.State.GROUND
+		bot.alive = true
+		bot.armed = true
+		bot.weapon_id = "rifle"
+		bot.aggression = 0.0
+		bot.enemy = null
+		bot.loot_target = null
+		bot._loot_scan = 99.0
+		bot._camp_t = 0.0
+		bot._camp_cool = 0.0
+		bot._route.clear()
+		bot._route_goal = Vector3.INF
+		# Keep it in the zone so it has no reason to leave.
+		zone.center = Vector2(landing.x, landing.z)
+		var t := 0.0
+		var ok_camp := false
+		while t < 8.0:
+			bot._loot_scan = 99.0
+			await get_tree().physics_frame
+			t += get_physics_process_delta_time()
+			if bot._camp_t > 0.0:
+				ok_camp = true
+		if ok_camp:
+			camped += 1
+			var fwd := -bot.global_basis.z
+			var p0 := bot.global_position + Vector3.UP * 1.5
+			var q := PhysicsRayQueryParameters3D.create(p0, p0 + fwd * 2.5, 1)
+			var clear := get_world_3d().direct_space_state.intersect_ray(q).is_empty()
+			var close := Vector2(bot.global_position.x - bot._camp_pos.x, bot.global_position.z - bot._camp_pos.z).length() < 0.6
+			if clear and close and bot.global_position.y > float(nav.floor_y) - 0.4:
+				at_window += 1
+			else:
+				print("[camp] miss house %s: close=%s clear=%s y=%.1f floor=%.1f" % [str(h.center.round()), close, clear, bot.global_position.y, float(nav.floor_y)])
+	print("[camp] %d houses: %d took a window, %d standing at it looking out" % [n, camped, at_window])
+	get_tree().quit()
+
+
+## A bot walks in through the door, up the stairs to loot on the upper
+## floor, picks it up, then walks back down and out to the street.
+func _run_bot_stairs_test() -> void:
+	_start_match()
+	await get_tree().physics_frame
+	_land_player_now()
+	player.spawn_protect = 9999.0
+	player.global_position = Vector3(0, terrain.height_at(0, 0) + 1.0, 0)
+	for bt in bots:
+		if is_instance_valid(bt):
+			bt.set_physics_process(false)
+	if zone != null:
+		zone.set_process(false)
+	var vil := world.villages
+	var bot: Bot = bots[0]
+	bot.set_physics_process(true)
+	bot.test_hold_roam = true
+	var up_ok := 0
+	var down_ok := 0
+	var n := 0
+	var fails: Array = []
+	var limit := 40
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--limit="):
+			limit = int(a.substr(8))
+	for h in vil.houses:
+		if int(h.get("built_levels", 1)) < 2 or n >= limit:
+			continue
+		var nav := vil.house_nav(h)
+		var hc: Vector2 = h.center
+		var lp: LootPickup = null
+		for l in loot_pool:
+			var lo := l as LootPickup
+			if lo == null or lo.taken or not is_instance_valid(lo):
+				continue
+			if lo.global_position.y > float(nav.floor_y) - 0.5 and vil.house_at(Vector2(lo.global_position.x, lo.global_position.z), -0.3) == h:
+				lp = lo
+				break
+		if lp == null:
+			continue
+		n += 1
+		var o: Vector3 = nav.out
+		var nrm := (o - (nav["in"] as Vector3))
+		nrm.y = 0.0
+		nrm = nrm.normalized()
+		bot.global_position = o + nrm * 3.0 + Vector3(0, 0.3, 0)
+		bot.velocity = Vector3.ZERO
+		bot.state = Bot.State.GROUND
+		bot.alive = true
+		bot.hp = 100.0
+		bot.armed = false
+		bot.enemy = null
+		bot.loot_target = lp
+		bot._skip_loot.clear()
+		bot._route.clear()
+		bot._route_goal = Vector3.INF
+		var t := 0.0
+		while t < 35.0 and not lp.taken:
+			bot.loot_target = lp if not lp.taken else null
+			bot._loot_scan = 99.0
+			await get_tree().physics_frame
+			t += get_physics_process_delta_time()
+		var got := lp.taken
+		if got:
+			up_ok += 1
+		# Now send it back out to the street.
+		var street: Vector3 = o + nrm * 6.0
+		bot.loot_target = null
+		bot.armed = true
+		bot.enemy = null
+		bot.roam_point = Vector2(street.x, street.z)
+		var t2 := 0.0
+		var out_ok := false
+		while t2 < 35.0:
+			bot.roam_point = Vector2(street.x, street.z)
+			bot._roam_wait = 99.0
+			bot.enemy = null
+			await get_tree().physics_frame
+			t2 += get_physics_process_delta_time()
+			if vil.house_at(Vector2(bot.global_position.x, bot.global_position.z), 0.3) != h and bot.global_position.distance_to(street) < 4.0:
+				out_ok = true
+				break
+		if out_ok:
+			down_ok += 1
+		if not got or not out_ok:
+			var local := Basis(Vector3.UP, float(h.yaw)).inverse() * (bot.global_position - Vector3(hc.x, float(h.pad), hc.y))
+			var hits: Array = []
+			for k in bot.get_slide_collision_count():
+				var c := bot.get_slide_collision(k)
+				var cob := c.get_collider() as CollisionObject3D
+				if cob == null:
+					continue
+				var sn = cob.shape_owner_get_owner(cob.shape_find_owner(c.get_collider_shape_index()))
+				var hb := Basis(Vector3.UP, float(h.yaw)).inverse()
+				hits.append("%s@%s" % [cob.name, str((hb * ((sn as Node3D).global_position - Vector3(hc.x, float(h.pad), hc.y))).snapped(Vector3.ONE * 0.01)) if sn is Node3D else "?"])
+			fails.append("%dx%d door %d at %s: up=%s (%.0fs) out=%s, bot local %s vel %s route=%d hits %s" % [int(h.w), int(h.d), int(h.door_side), str(Vector3(hc.x, float(h.pad), hc.y).round()), got, t, out_ok, str(local.snapped(Vector3.ONE * 0.1)), str(bot.velocity.snapped(Vector3.ONE * 0.1)), bot._route.size(), str(hits)])
+	print("[botstairs] %d houses: %d looted upstairs, %d walked back out" % [n, up_ok, down_ok])
+	for f in fails.slice(0, 20):
+		print("[botstairs] FAIL ", f)
+	get_tree().quit()
+
+
 func _run_house_walk_test() -> void:
 	_start_match()
 	await get_tree().physics_frame

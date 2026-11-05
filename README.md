@@ -127,6 +127,10 @@ Two islands about 2.4 km across:
   perch) and the Elder Oak.
 - Street towns, villages and farmsteads are linked by dirt roads. Lookout towers stand on high
   ground, and ruins and boulders give cover in the open.
+- Every house can be entered through its door, and every two-storey house has a stair to its
+  upper floor, where the better loot is. Village and town squares have a well and market stalls.
+- Bots use doors and stairs too: they loot upper floors, and cautious ones sometimes hold an
+  upstairs window and watch the street.
 
 The storm closes in eight phases. It starts slow and weak, so there is time to land and loot,
 then each circle gets tighter, faster and more painful. The next safe zone is shown on the map as
@@ -148,3 +152,8 @@ then fast-forwards a full match. `--smoke` is a shorter check, and `--shot --out
 screenshot (needs a display, e.g. `xvfb-run`; `--lm=castle|bridge|falls|...` frames a landmark).
 `--nethost` and `--netjoin` (run in two terminals, without `--fixed-fps`) test a LAN match on
 this machine.
+
+Building checks (add `--seed=N` to pick a map): `--houses` walks the player in through every
+door and up every stair, `--stairs` climbs every house and tower, `--botstairs` sends a bot up
+to loot every upper floor and back out, `--camp` checks bots holding windows, and `--drive`
+tests the jeep.
