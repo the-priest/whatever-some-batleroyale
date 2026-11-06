@@ -118,6 +118,7 @@ var _route: Array = []
 var _route_goal := Vector3.INF
 var _route_replan := 0.0
 var _route_stuck := 0.0
+var _route_fast := false
 ## Tests set this so the zone and gunfire do not pick the roam point.
 var test_hold_roam := false
 ## Holding an upstairs window: time left, where, which way to look.
@@ -416,7 +417,8 @@ func _ground(delta: float) -> void:
 		_progress_t = 0.0
 		_progress_pos = global_position
 		return
-	if armed and meds > 0 and hp < 55.0 and (enemy == null or not is_instance_valid(enemy)) and not in_deep_water():
+	var safe := enemy == null or not is_instance_valid(enemy) or (_tactic == "hide" and _hidden_t > 0.6 and _hurt_t > 2.0)
+	if armed and meds > 0 and hp < (62.0 if _tactic == "hide" else 55.0) and safe and not in_deep_water():
 		heal_timer = 3.0
 		_heal_sound("kit_zip_open", -6.0)
 		return
@@ -425,7 +427,12 @@ func _ground(delta: float) -> void:
 	var want_sprint := false
 	var stop_dist := 0.0
 
-	var fighting := armed and enemy != null and is_instance_valid(enemy) and enemy_visible()
+	_hurt_t += delta
+	_hit_them_t += delta
+	var sees := armed and enemy != null and is_instance_valid(enemy) and enemy_visible()
+	# A fight does not end the moment they duck out of sight: the bot keeps
+	# working the last place it saw them for a while.
+	var fighting := sees or (armed and enemy != null and is_instance_valid(enemy) and bool(enemy.get("alive")) and _last_seen_t < 14.0)
 	if not fighting:
 		if loot_target == null or not is_instance_valid(loot_target) or loot_target.taken:
 			loot_target = null
@@ -445,65 +452,23 @@ func _ground(delta: float) -> void:
 			target_pos = Vector3(leg.x, global_position.y, leg.y)
 			stop_dist = 3.0 if leg == roam_point else 0.0
 	else:
-		if enemy != null and is_instance_valid(enemy) and enemy_visible():
-			var d := global_position.distance_to(enemy.global_position)
-			var to_e := (enemy.global_position - global_position)
-			to_e.y = 0.0
-			to_e = to_e.normalized()
-			# Fight at the range the weapon is made for.
-			var hold := 45.0
-			match Weapons.cls(weapon_id):
-				"smg", "pistol":
-					hold = 16.0
-				"shotgun":
-					hold = 8.0
-				"dmr", "sniper":
-					hold = 90.0
-				"lmg":
-					hold = 55.0
-			# Fire and move in bounds: hold still (standing or crouched) and
-			# shoot, then dash to a new spot facing the way you run, then shoot
-			# again. Nobody moonwalks.
+		if _camp_t > 0.0 and _camp_pos.distance_to(global_position) < 1.5 and sees:
+			# Holding a window: no dashing about the room. Pop up and shoot,
+			# then duck below the sill, then up again.
 			_fight_t -= delta
-			if _camp_t > 0.0 and _camp_pos.distance_to(global_position) < 1.5:
-				# Holding a window: no dashing about the room. Pop up and
-				# shoot, then duck below the sill, then up again.
-				fight_moving = false
-				if _fight_t <= 0.0:
-					var ducking := not crouched and randf() < 0.45
-					_set_crouch(ducking)
-					_fight_t = randf_range(0.8, 1.6) if ducking else randf_range(1.6, 3.2)
-				_fight_t = minf(_fight_t, 3.2)
-			elif _fight_t <= 0.0:
-				fight_moving = not fight_moving
-				if fight_moving:
-					_set_crouch(false)
-					_fight_t = randf_range(0.7, 1.5) * (1.6 if d > hold + 10.0 else 1.0)
-					var side := Vector3(-to_e.z, 0, to_e.x) * (1.0 if randf() < 0.5 else -1.0)
-					var push := 0.0
-					if d > hold + 6.0:
-						push = 1.0
-					elif d < hold - 8.0:
-						push = -0.8
-					_fight_dir = (side * (1.0 - absf(push) * 0.6) + to_e * push).normalized()
-					# Never dash off a ledge, down a stairwell or out of a window.
-					if not _floor_ahead(_fight_dir):
-						var alt := (-side * (1.0 - absf(push) * 0.6) + to_e * push).normalized()
-						if _floor_ahead(alt):
-							_fight_dir = alt
-						else:
-							fight_moving = false
-							_fight_t = randf_range(1.4, 3.0)
-				else:
-					_fight_t = randf_range(1.4, 3.4)
-					_set_crouch(d > 30.0 and randf() < 0.4 + shoot_skill * 0.35)
-			if fight_moving:
-				target_pos = global_position + _fight_dir * 6.0
-				stop_dist = 0.0
-				want_sprint = true
-			else:
-				target_pos = global_position
-				stop_dist = 1.0
+			fight_moving = false
+			if _fight_t <= 0.0:
+				var ducking := not crouched and randf() < 0.45
+				_set_crouch(ducking)
+				_fight_t = randf_range(0.8, 1.6) if ducking else randf_range(1.6, 3.2)
+			_fight_t = minf(_fight_t, 3.2)
+			target_pos = global_position
+			stop_dist = 1.0
+		elif fighting:
+			var plan := _combat(delta, sees)
+			target_pos = plan[0]
+			stop_dist = float(plan[1])
+			want_sprint = bool(plan[2])
 		elif _camp_t > 0.0 and crouched and _fight_t > 0.0 and enemy != null and is_instance_valid(enemy):
 			# Ducked below a window sill: stay down until it is time to pop up.
 			_fight_t -= delta
@@ -562,7 +527,8 @@ func _ground(delta: float) -> void:
 			stop_dist = 0.0
 			routing = true
 			# Indoors and on stairs: walk, do not sprint into the door frame.
-			if bool(_route[0][1]):
+			# Treetop Town's stair is wide and open: run it.
+			if bool(_route[0][1]) and not _route_fast:
 				want_sprint = false
 	else:
 		_route.clear()
@@ -677,6 +643,338 @@ func _terrain_leg(goal: Vector2) -> Vector2:
 	if _tp_i >= _tpath.size():
 		return goal
 	return _tpath[_tp_i]
+
+
+# ------------------------------------------------------------------ combat --
+## Fighting like a person: get behind something solid (a trunk, a rock, a
+## wall, the brow of a hill), lean out to shoot in bursts and duck back in to
+## reload or patch up; push an enemy who is hurt or hiding, flank one who
+## holds an angle, flush them out with a grenade. Out in the open with
+## nothing to hide behind: shoot from a crouch and dash between bursts.
+var _tactic := ""
+var _tactic_t := 0.0
+var _cover := Vector3.INF
+var _peek := Vector3.INF
+var _cover_eval := 0.0
+var _last_seen := Vector3.INF
+var _last_seen_t := 99.0
+var _engage_t := 0.0
+var _hidden_t := 0.0
+var _hurt_t := 99.0
+var _hit_them_t := 99.0
+var _flank := Vector3.INF
+var _foe_id := 0
+var grenades := 0
+var _nade_cd := 4.0
+
+
+func _hold_range() -> float:
+	match Weapons.cls(weapon_id):
+		"smg", "pistol":
+			return 16.0
+		"shotgun":
+			return 8.0
+		"dmr", "sniper":
+			return 90.0
+		"lmg":
+			return 55.0
+	return 45.0
+
+
+## One of our rounds hit someone (from the ballistics).
+func on_bullet_hit(_shot_id: int, _pos: Vector3, _dmg: float, _headshot: bool, _killed: bool) -> void:
+	_hit_them_t = 0.0
+
+
+func _set_tactic(t: String, dur: float) -> void:
+	_tactic = t
+	_tactic_t = dur
+
+
+## [target, stop distance, sprint] for this tick of a fight.
+func _combat(delta: float, sees: bool) -> Array:
+	var e := enemy as Node3D
+	if e.get_instance_id() != _foe_id:
+		_foe_id = e.get_instance_id()
+		_engage_t = 0.0
+		_cover = Vector3.INF
+		_peek = Vector3.INF
+		_cover_eval = 0.0
+		_set_tactic("", 0.0)
+	_engage_t += delta
+	_tactic_t -= delta
+	_cover_eval -= delta
+	_nade_cd -= delta
+	if sees:
+		_last_seen = e.global_position
+		_last_seen_t = 0.0
+		_hidden_t = 0.0
+	else:
+		_last_seen_t += delta
+		_hidden_t += delta
+	var here := global_position
+	var ep := _last_seen if _last_seen != Vector3.INF else e.global_position
+	var to_e := Vector3(ep.x - here.x, 0, ep.z - here.z)
+	var d := to_e.length()
+	to_e = to_e / maxf(d, 0.01)
+	var hold := _hold_range()
+	# The enemy moved round our cover: it is not cover any more.
+	if _cover != Vector3.INF and _cover_eval <= 0.0:
+		_cover_eval = 1.2
+		if not _hidden_from(_cover, ep):
+			_cover = Vector3.INF
+			_peek = Vector3.INF
+			if _tactic in ["hide", "peek"]:
+				_set_tactic("", 0.0)
+	# Look for cover when the fight starts, when hit out in the open, or
+	# every few seconds while exposed.
+	if _cover == Vector3.INF and _cover_eval <= 0.0 and _tactic not in ["push", "flank"]:
+		var found := _find_cover(ep, hold)
+		_cover_eval = 1.0 if not found.is_empty() else (1.2 if _hurt_t < 1.0 else 3.0)
+		if not found.is_empty():
+			_cover = found[0]
+			_peek = found[1]
+			_set_tactic("dash", 6.0)
+	# Pre-aim where they were: when we lean out the gun is already there.
+	if not fight_moving or _tactic in ["hide", "peek"]:
+		rotation.y = lerp_angle(rotation.y, atan2(-to_e.x, -to_e.z), clampf(delta * 8.0, 0.0, 1.0))
+	match _tactic:
+		"dash":
+			fight_moving = true
+			_set_crouch(false)
+			if _cover == Vector3.INF or _tactic_t <= 0.0:
+				_set_tactic("", 0.0)
+			elif _flat_d(here, _cover) < 0.8:
+				_set_tactic("hide", randf_range(0.6, 1.4))
+			else:
+				return [_cover, 0.0, true]
+		"hide":
+			fight_moving = false
+			_set_crouch(true)
+			if _cover == Vector3.INF:
+				_set_tactic("", 0.0)
+			else:
+				# Reload out of sight rather than in the middle of a burst.
+				if mag < int(Weapons.def(weapon_id)["mag"]) / 2 and _reload_t <= 0.0:
+					_start_reload()
+				if _wants_grenade(d, sees):
+					_throw_nade(ep)
+				if _tactic_t <= 0.0 and heal_timer <= 0.0 and _reload_t <= 0.0:
+					if _hidden_t > 7.0 and _last_seen_t > 7.0:
+						_set_tactic("push" if (aggression > 0.55 or _hit_them_t < 8.0) else "flank", 0.0)
+					else:
+						_set_tactic("peek", randf_range(1.2, 2.6))
+						fire_timer = maxf(fire_timer, reaction * 0.5)
+				return [_cover, 0.0, false]
+		"peek":
+			if _peek == Vector3.INF or _cover == Vector3.INF:
+				_set_tactic("", 0.0)
+			else:
+				var at_peek := _flat_d(here, _peek) < 0.6
+				fight_moving = not at_peek
+				_set_crouch(false)
+				# Hit while leaning out, or the burst is done: back in.
+				if _hurt_t < 0.25 or _tactic_t <= 0.0:
+					_set_tactic("hide", randf_range(0.7, 1.8))
+				elif at_peek and not sees and _tactic_t < 0.8:
+					# Nobody there any more: they moved. Try again from cover.
+					_cover_eval = 0.0
+					_set_tactic("hide", 0.4)
+				return [_peek, 0.0, false]
+		"push":
+			fight_moving = not sees or d > hold + 10.0
+			_set_crouch(false)
+			if sees and d < hold + 10.0:
+				# Caught them: fight it out from here.
+				_set_tactic("", 0.0)
+				_cover_eval = 0.0
+			elif _flat_d(here, ep) < 3.0 and not sees:
+				# They are not where we left them: give it up.
+				enemy = null
+				_last_seen = Vector3.INF
+				_last_seen_t = 99.0
+				_set_tactic("", 0.0)
+			else:
+				var leg := _terrain_leg(Vector2(ep.x, ep.z))
+				return [Vector3(leg.x, here.y, leg.y), 0.0, d > 18.0]
+		"flank":
+			if _flank == Vector3.INF:
+				# Round them by a right angle at about the same range.
+				var side := 1.0 if randf() < 0.5 else -1.0
+				var rel := (here - ep)
+				rel.y = 0.0
+				var r := clampf(rel.length(), hold * 0.6, hold * 1.2)
+				var dir := rel.normalized().rotated(Vector3.UP, side * deg_to_rad(80.0))
+				_flank = ep + dir * r
+				_flank.y = here.y
+				_tactic_t = 14.0
+			fight_moving = true
+			_set_crouch(false)
+			if sees or _tactic_t <= 0.0 or _flat_d(here, _flank) < 3.0:
+				_flank = Vector3.INF
+				_cover = Vector3.INF
+				_cover_eval = 0.0
+				_set_tactic("", 0.0)
+			else:
+				var leg2 := _terrain_leg(Vector2(_flank.x, _flank.z))
+				return [Vector3(leg2.x, here.y, leg2.y), 0.0, true]
+	# No cover to use: fight in the open. Hold still (crouched at range) and
+	# shoot, then dash sideways to a new spot, closing or opening the range.
+	if not sees:
+		# Lost them and nothing to hide behind: go and look.
+		if _last_seen_t > 2.5:
+			_set_tactic("push", 0.0)
+		fight_moving = false
+		return [here, 1.0, false]
+	_fight_t -= delta
+	if _fight_t <= 0.0:
+		fight_moving = not fight_moving
+		if fight_moving:
+			_set_crouch(false)
+			_fight_t = randf_range(0.6, 1.3) * (1.6 if d > hold + 10.0 else 1.0)
+			var side := Vector3(-to_e.z, 0, to_e.x) * (1.0 if randf() < 0.5 else -1.0)
+			var push := 0.0
+			if d > hold + 6.0:
+				push = 1.0
+			elif d < hold - 8.0:
+				push = -0.8
+			_fight_dir = (side * (1.0 - absf(push) * 0.6) + to_e * push).normalized()
+			# Never dash off a ledge, down a stairwell or out of a window.
+			if not _floor_ahead(_fight_dir):
+				var alt := (-side * (1.0 - absf(push) * 0.6) + to_e * push).normalized()
+				if _floor_ahead(alt):
+					_fight_dir = alt
+				else:
+					fight_moving = false
+					_fight_t = randf_range(1.4, 3.0)
+		else:
+			_fight_t = randf_range(1.2, 3.0)
+			_set_crouch(d > 25.0 and randf() < 0.45 + shoot_skill * 0.35)
+	if fight_moving:
+		return [here + _fight_dir * 6.0, 0.0, true]
+	return [here, 1.0, false]
+
+
+func _flat_d(a: Vector3, b: Vector3) -> float:
+	return Vector2(a.x - b.x, a.z - b.z).length()
+
+
+## Is a body at `p` (crouched) out of sight of someone standing at `ep`?
+func _hidden_from(p: Vector3, ep: Vector3) -> bool:
+	var q := PhysicsRayQueryParameters3D.create(ep + Vector3.UP * 1.5, p + Vector3.UP * 1.0, 1)
+	return not get_world_3d().direct_space_state.intersect_ray(q).is_empty()
+
+
+## The nearest spot out of the enemy's sight that has somewhere to lean out
+## from and shoot (step to the side, or stand up over low cover):
+## [cover, peek], or [] when there is none within reach.
+func _find_cover(ep: Vector3, hold: float) -> Array:
+	if game == null:
+		return []
+	var space := get_world_3d().direct_space_state
+	var here := global_position
+	var eye := ep + Vector3.UP * 1.5
+	var best: Array = []
+	var best_score := INF
+	var a0 := randf() * TAU
+	for r in [2.5, 5.0, 8.5, 12.5]:
+		for k in 8:
+			var a := a0 + TAU * float(k) / 8.0
+			var c: Vector3 = game.ground_at(here + Vector3(cos(a), 0.0, sin(a)) * float(r) + Vector3.UP * 1.0)
+			if absf(c.y - here.y) > 1.8:
+				continue
+			if game.terrain != null and bool(game.terrain.is_water(c.x, c.z)):
+				continue
+			# Out of sight at crouch height.
+			var hid := space.intersect_ray(PhysicsRayQueryParameters3D.create(eye, c + Vector3.UP * 1.0, 1))
+			if hid.is_empty():
+				continue
+			# Straight run to it.
+			if not space.intersect_ray(PhysicsRayQueryParameters3D.create(here + Vector3.UP * 0.9, c + Vector3.UP * 0.9, 1)).is_empty():
+				continue
+			# Somewhere to shoot from: stand up over it, or lean out a step.
+			var peek := Vector3.INF
+			if space.intersect_ray(PhysicsRayQueryParameters3D.create(c + Vector3.UP * 1.65, eye, 1)).is_empty():
+				peek = c
+			else:
+				var fe := Vector3(ep.x - c.x, 0, ep.z - c.z).normalized()
+				var side := Vector3(-fe.z, 0, fe.x)
+				for sd in [1.0, -1.0]:
+					var pp: Vector3 = c + side * float(sd) * 1.3
+					if not space.intersect_ray(PhysicsRayQueryParameters3D.create(c + Vector3.UP * 0.9, pp + Vector3.UP * 0.9, 1)).is_empty():
+						continue
+					if space.intersect_ray(PhysicsRayQueryParameters3D.create(pp + Vector3.UP * 1.35, eye, 1)).is_empty():
+						peek = pp
+						break
+			if peek == Vector3.INF:
+				continue
+			# Close cover with the blocker right beside it, at a range the gun
+			# likes, not closer to the enemy than we already are.
+			var blocker_d: float = (hid["position"] as Vector3).distance_to(c)
+			var de := _flat_d(c, ep)
+			var score: float = float(r) + blocker_d * 0.6 + absf(de - hold) * 0.04 + maxf(0.0, _flat_d(here, ep) - de - 4.0) * 0.5
+			if score < best_score:
+				best_score = score
+				best = [c + Vector3.UP * 0.05, peek + Vector3.UP * 0.05]
+		if not best.is_empty():
+			return best
+	return best
+
+
+func _start_reload() -> void:
+	var d: Dictionary = Weapons.def(weapon_id)
+	mag = int(d["mag"])
+	fire_timer = float(d["reload"])
+	_reload_t = float(d["reload"])
+	if game != null and game.player != null and game.player.global_position.distance_to(global_position) < 30.0:
+		# Enemies are heard reloading: a cue to push.
+		var c := Weapons.cls(weapon_id)
+		if c == "shotgun":
+			for k in 3:
+				game._delayed_sfx("rl_shotgun_shell", global_position, -5.0, 0.4 + k * 0.5, 0.05)
+		else:
+			if c not in ["ar", "smg", "pistol", "lmg", "dmr", "sniper"]:
+				c = "ar"
+			game.play_sfx_at("rl_%s_out" % c, global_position, -4.0)
+			game._delayed_sfx("rl_%s_in" % c, global_position, -3.0, _reload_t * 0.55, 0.05)
+			game._delayed_sfx("rl_%s_rack" % c, global_position, -4.0, _reload_t * 0.75, 0.05)
+
+
+## Someone is dug in out of sight at grenade range: flush them out.
+func _wants_grenade(d: float, sees: bool) -> bool:
+	return grenades > 0 and _nade_cd <= 0.0 and not sees and _hidden_t > 1.5 and _last_seen_t < 10.0 and d > 9.0 and d < 34.0
+
+
+func _throw_nade(at: Vector3) -> void:
+	var from := global_position + Vector3.UP * 1.6 - global_basis.z * 0.4
+	var flat := Vector3(at.x - from.x, 0.0, at.z - from.z)
+	var dist := flat.length()
+	var h := at.y + 0.3 - from.y
+	var th := deg_to_rad(40.0)
+	var denom := 2.0 * cos(th) * cos(th) * (dist * tan(th) - h)
+	if denom <= 0.1:
+		return
+	var g: float = ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)
+	var v := minf(sqrt(g * dist * dist / denom) * 1.04, 24.0)
+	var vel := flat.normalized() * v * cos(th) + Vector3.UP * v * sin(th)
+	# Make sure the arc is not blocked right in front of us (a wall, a trunk).
+	var q := PhysicsRayQueryParameters3D.create(from, from + vel.normalized() * 3.0, 1)
+	if not get_world_3d().direct_space_state.intersect_ray(q).is_empty():
+		_nade_cd = 2.0
+		return
+	grenades -= 1
+	_nade_cd = randf_range(7.0, 12.0)
+	var gr := Grenade.new()
+	gr.game = game
+	gr.thrower = self
+	game.add_child(gr)
+	gr.global_position = from
+	gr.linear_velocity = vel
+	gr.angular_velocity = Vector3(randf_range(-8, 8), randf_range(-8, 8), randf_range(-8, 8))
+	if body != null:
+		body.play_throw()
+	if game.has_method("net_bot_grenade"):
+		game.net_bot_grenade(self, from, vel)
 
 
 func _ray_blocked(space: PhysicsDirectSpaceState3D, dir: Vector3, length: float) -> bool:
@@ -818,7 +1116,7 @@ func _routed(goal: Vector3, goal_up: bool, delta: float) -> Vector3:
 		var flat := Vector2(p.x - global_position.x, p.z - global_position.z).length()
 		# Points on the stair also need the height, so a bot standing under
 		# the stair top does not count as having climbed it.
-		if flat < 0.55 and absf(p.y - global_position.y) < 1.2:
+		if flat < 0.55 and absf(p.y - global_position.y) < (0.7 if _route_fast else 1.2):
 			_route.pop_front()
 			_route_stuck = 0.0
 			continue
@@ -828,14 +1126,18 @@ func _routed(goal: Vector3, goal_up: bool, delta: float) -> Vector3:
 	_route_stuck += delta
 	if _route_stuck > 6.0:
 		# Something is in the way: drop the route and let the stuck logic
-		# pick something else.
+		# pick something else. Up the giant tree, plan again from here.
 		_route.clear()
-		_route_replan = 3.0
+		_route_replan = 0.2 if _route_fast else 3.0
 		return goal
 	return _route[0][0]
 
 
 func _plan_route(vil: Villages, goal: Vector3, goal_up: bool) -> Array:
+	var tree_route := _tree_town_route(vil, goal, goal_up)
+	_route_fast = not tree_route.is_empty()
+	if not tree_route.is_empty() or _on_tree_town(vil, global_position):
+		return tree_route
 	var me := Vector2(global_position.x, global_position.z)
 	var hb := vil.house_at(me, 0.1)
 	var ht := vil.house_at(Vector2(goal.x, goal.z), -0.2)
@@ -873,6 +1175,106 @@ func _plan_route(vil: Villages, goal: Vector3, goal_up: bool) -> Array:
 		if goal_up and goal.y > float(nav2.floor_y) - 1.0:
 			for q in nav2.up:
 				out.append([q, true])
+	return out
+
+
+func _tree_town(vil: Villages) -> TreeTown:
+	if vil.landmarks == null or vil.landmarks.fantasy == null:
+		return null
+	return vil.landmarks.fantasy.tree_town
+
+
+## Up on Treetop Town (a deck, the stair, a lookout)?
+func _on_tree_town(vil: Villages, p: Vector3) -> bool:
+	var tt := _tree_town(vil)
+	if tt == null:
+		return false
+	return Vector2(p.x - tt.o.x, p.z - tt.o.z).length() < TreeTown.LOOKOUT_R + 6.0 and p.y > tt.o.y + 3.0
+
+
+## Treetop Town by its spiral stair: up to the goal's deck and round the
+## walkway to it, round and down again, or deck to deck by the stair.
+func _tree_town_route(vil: Villages, goal: Vector3, goal_is_spot: bool) -> Array:
+	var tt := _tree_town(vil)
+	if tt == null or tt.helix.is_empty():
+		return []
+	var me := global_position
+	var me_up := _on_tree_town(vil, me)
+	# Only loot and lookout spots carry a real height; a roam point is given
+	# our own height and is somewhere on the ground.
+	var goal_up := goal_is_spot and _on_tree_town(vil, goal)
+	if not me_up and not goal_up:
+		return []
+	var my_lv := tt.level_of(me) if me_up else -1.0
+	var goal_lv := tt.level_of(goal) if goal_up else -1.0
+	# In or out of a hut by its door (it faces the trunk).
+	var my_hut := tt.hut_at(me) if me_up else {}
+	var goal_hut := tt.hut_at(goal) if goal_up else {}
+	var head: Array = []
+	var tail: Array = []
+	var me_a := tt.angle_of(me)
+	var goal_a := tt.angle_of(goal)
+	if not my_hut.is_empty():
+		head = tt.hut_door(my_hut)
+		me_a = float(my_hut.a)
+	if not goal_hut.is_empty():
+		var door := tt.hut_door(goal_hut)
+		tail = [door[1], door[0]]
+		goal_a = float(goal_hut.a)
+	if me_up and goal_up and my_lv >= 0.0 and my_lv == goal_lv:
+		if not my_hut.is_empty() and my_hut == goal_hut:
+			return []
+		# Same deck: round the walkway.
+		var same: Array = head.duplicate()
+		same.append_array(tt.ring_points(my_lv, me_a, goal_a))
+		same.append_array(tail)
+		return _wrap_route(same)
+	var pts: Array = head.duplicate()
+	# Along the stair to the goal's level (or the ground).
+	var i1 := tt.helix_index(goal_lv) if goal_up and goal_lv >= 0.0 else (tt.helix.size() - 1 if goal_up else 0)
+	var goal_h := (tt.helix[i1] as Vector3).y
+	# From where we are to the stair: off a deck by its walkway to where the
+	# stair arrives, or on the stair itself from the next point along it in
+	# the direction we are going (picked by height: the nearest point can be
+	# the one up at the deck while we are still below it).
+	var i0 := 0
+	if me_up and my_lv >= 0.0:
+		# Round the walkway to where the stair arrives, then straight in.
+		var off_a := tt.stair_angle(my_lv) + 0.08
+		pts.append_array(tt.ring_points(my_lv, me_a, off_a))
+		i0 = tt.helix_index(my_lv)
+	elif me_up:
+		var up := goal_h > me.y
+		i0 = 0 if up else tt.helix.size() - 1
+		for i in tt.helix.size():
+			var hy := (tt.helix[i] as Vector3).y
+			if up and hy >= me.y - 0.2:
+				i0 = i
+				break
+			if not up and hy <= me.y + 0.2:
+				i0 = i
+	var step := 1 if i1 >= i0 else -1
+	var i := i0
+	while true:
+		pts.append(tt.helix[i])
+		if i == i1:
+			break
+		i += step
+	# Step straight out onto the deck where the stair arrives (behind that
+	# point the stair is still below the deck), then round its walkway.
+	if goal_up and goal_lv >= 0.0:
+		var on_a := tt.stair_angle(goal_lv) + 0.08
+		var wr := tt.walk_r(goal_lv)
+		pts.append(tt.o + Vector3(cos(on_a) * wr, goal_lv + 0.1, sin(on_a) * wr))
+		pts.append_array(tt.ring_points(goal_lv, on_a, goal_a))
+		pts.append_array(tail)
+	return _wrap_route(pts)
+
+
+func _wrap_route(pts: Array) -> Array:
+	var out: Array = []
+	for q in pts:
+		out.append([q, true])
 	return out
 
 
@@ -1230,6 +1632,8 @@ func _wants(l: LootPickup, my_tier: int) -> bool:
 			return armed and int(l.item_id) > helmet_level
 		"med", "bandage":
 			return armed and meds < 2
+		"grenade":
+			return armed and grenades < 2
 	return false
 
 
@@ -1247,6 +1651,8 @@ func _take_loot(l: LootPickup) -> void:
 		helmet_level = int(l.item_id)
 	elif l.kind == "med" or l.kind == "bandage":
 		meds += 1
+	elif l.kind == "grenade":
+		grenades += 1
 	l.consume()
 	if game != null and game.has_method("play_sfx_at"):
 		game.play_sfx_at("pickup", global_position, 0.7)
@@ -1307,21 +1713,7 @@ func _shoot_logic(delta: float) -> void:
 	if fire_timer > 0.0:
 		return
 	if mag <= 0:
-		mag = int(d["mag"])
-		fire_timer = float(d["reload"])
-		_reload_t = float(d["reload"])
-		if game != null and game.player != null and game.player.global_position.distance_to(global_position) < 30.0:
-			# Enemies are heard reloading: a cue to push.
-			var c := Weapons.cls(weapon_id)
-			if c == "shotgun":
-				for k in 3:
-					game._delayed_sfx("rl_shotgun_shell", global_position, -5.0, 0.4 + k * 0.5, 0.05)
-			else:
-				if c not in ["ar", "smg", "pistol", "lmg", "dmr", "sniper"]:
-					c = "ar"
-				game.play_sfx_at("rl_%s_out" % c, global_position, -4.0)
-				game._delayed_sfx("rl_%s_in" % c, global_position, -3.0, _reload_t * 0.55, 0.05)
-				game._delayed_sfx("rl_%s_rack" % c, global_position, -4.0, _reload_t * 0.75, 0.05)
+		_start_reload()
 		return
 	fire_timer = 60.0 / float(d["rpm"]) * (1.15 if dist < 45.0 else 1.6)
 	# Fire in bursts with short pauses, like a person re-acquiring the target.
@@ -1482,6 +1874,7 @@ func take_damage(amount: float, _pos: Vector3 = Vector3.ZERO, headshot: bool = f
 	if body != null:
 		body.flinch(1.4 if headshot else 1.0)
 	heal_timer = 0.0
+	_hurt_t = 0.0
 	# Being shot at makes bots fight back.
 	if source != null and is_instance_valid(source) and source != self:
 		alert_timer = 6.0

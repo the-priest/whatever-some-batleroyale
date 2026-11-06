@@ -25,6 +25,8 @@ var stair_a0 := 0.0
 var stair_turns := 0.0
 ## Points up the spiral stair, bottom to top: [Vector3, ...] (for bots).
 var helix: Array = []
+## Huts for bots finding the door: {level, a, r, w, d}.
+var huts: Array = []
 
 
 static func trunk_r(y: float) -> float:
@@ -34,6 +36,68 @@ static func trunk_r(y: float) -> float:
 		if y <= y1:
 			return lerpf(float(TRUNK[k][1]), float(TRUNK[k + 1][1]), clampf((y - y0) / (y1 - y0), 0.0, 1.0))
 	return float(TRUNK[TRUNK.size() - 1][1])
+
+
+# ------------------------------------------------------------- for bots --
+## Deck height (above the base) a point stands on, or -1 on the stair/ground.
+func level_of(p: Vector3) -> float:
+	var y := p.y - o.y
+	for d in DECKS:
+		if absf(y - float(d[0])) < 0.6:
+			return float(d[0])
+	return -1.0
+
+
+func angle_of(p: Vector3) -> float:
+	return atan2(p.z - o.z, p.x - o.x)
+
+
+## The walkway round a deck: just outside the stair lane, inside the huts.
+func walk_r(level: float) -> float:
+	return trunk_r(level) + STAIR_GAP + STAIR_W + 0.85
+
+
+func ring_points(level: float, a_from: float, a_to: float) -> Array:
+	var da := wrapf(a_to - a_from, -PI, PI)
+	var n := maxi(1, int(ceil(absf(da) / 0.3)))
+	var r := walk_r(level)
+	var out: Array = []
+	for k in range(1, n + 1):
+		var a := a_from + da * float(k) / float(n)
+		out.append(o + Vector3(cos(a) * r, level + 0.1, sin(a) * r))
+	return out
+
+
+## The hut a point is inside, or {}.
+func hut_at(p: Vector3) -> Dictionary:
+	var lv := level_of(p)
+	if lv < 0.0:
+		return {}
+	var a := angle_of(p)
+	var r := Vector2(p.x - o.x, p.z - o.z).length()
+	for h in huts:
+		if absf(float(h.level) - lv) > 0.5:
+			continue
+		var tang := wrapf(a - float(h.a), -PI, PI) * r
+		if absf(r - float(h.r)) < float(h.d) * 0.5 + 0.15 and absf(tang) < float(h.w) * 0.5 + 0.15:
+			return h
+	return {}
+
+
+## Just inside and just outside a hut's door (it faces the trunk).
+func hut_door(h: Dictionary) -> Array:
+	var ri := float(h.r) - float(h.d) * 0.5
+	var dir := Vector3(cos(float(h.a)), 0, sin(float(h.a)))
+	var up := Vector3.UP * (float(h.level) + 0.1)
+	return [o + dir * (ri + 0.75) + up, o + dir * (ri - 0.7) + up]
+
+
+## Index of the first point up the stair at or above `level`.
+func helix_index(level: float) -> int:
+	for i in helix.size():
+		if (helix[i] as Vector3).y > o.y + level + 0.15:
+			return i
+	return helix.size() - 1
 
 
 func build(p_ft: Fantasy, p_c: Vector2) -> void:
@@ -313,6 +377,7 @@ func _ring_piece(y: float, r0: float, r1: float, am: float, da: float) -> void:
 func _hut(p: Vector3, a: float, size: float, level: int) -> void:
 	var w := size
 	var d := size * 0.9
+	huts.append({"level": p.y - o.y, "a": a, "r": Vector2(p.x - o.x, p.z - o.z).length(), "w": w, "d": d})
 	var h := 2.9
 	# Local frame: +Z points out from the trunk; the door is on -Z.
 	var yaw := -a + PI * 0.5

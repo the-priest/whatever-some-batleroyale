@@ -269,6 +269,10 @@ func _ready() -> void:
 		_run_camp_test()
 	elif OS.get_cmdline_user_args().has("--gunaudio"):
 		_run_gun_audio_test()
+	elif OS.get_cmdline_user_args().has("--bottree"):
+		_run_bot_tree_test()
+	elif OS.get_cmdline_user_args().has("--botfight"):
+		_run_botfight_test()
 	elif OS.get_cmdline_user_args().has("--corpse"):
 		_run_corpse_test()
 	elif OS.get_cmdline_user_args().has("--botstairs"):
@@ -3888,6 +3892,14 @@ func net_grenade_thrown(from: Vector3, vel: Vector3) -> void:
 		net.send_grenade(net.my_key(), from, vel)
 
 
+## A bot (simulated here, on the host) threw one: show it everywhere else.
+func net_bot_grenade(b: Bot, from: Vector3, vel: Vector3) -> void:
+	if net_on() and net.hosting:
+		var i := bots.find(b)
+		if i >= 0:
+			net.send_grenade("b%d" % i, from, vel)
+
+
 func net_remote_grenade(key: String, from: Vector3, vel: Vector3) -> void:
 	var g := Grenade.new()
 	g.game = self
@@ -6275,6 +6287,151 @@ func _run_gun_audio_test() -> void:
 		print("[gunaudio] t=%.1f d=%d" % [Time.get_ticks_msec() / 1000.0, int(d)])
 		_play_gunshot(cls, ear + fwd * d, 0.85)
 		await get_tree().create_timer(5.0 + d / SOUND_SPEED).timeout
+	get_tree().quit()
+
+
+## A bot climbs Treetop Town for loot on each deck, then comes back down.
+func _run_bot_tree_test() -> void:
+	_start_match()
+	await get_tree().physics_frame
+	_land_player_now()
+	player.spawn_protect = 9999.0
+	player.global_position = Vector3(0, terrain.height_at(0, 0) + 300.0, 0)
+	for bt in bots:
+		if is_instance_valid(bt):
+			bt.set_physics_process(false)
+	if zone != null:
+		zone.set_process(false)
+	var tt: TreeTown = world.villages.landmarks.fantasy.tree_town
+	if tt == null:
+		print("[bottree] no tree town on this island")
+		get_tree().quit()
+		return
+	var b: Bot = bots[0]
+	b.state = Bot.State.GROUND
+	b.arm_weapon("rifle")
+	b.calm_t = 99.0
+	b.test_hold_roam = true
+	b.set_physics_process(true)
+	var ok := 0
+	for di in 3:
+		var dy: float = float(TreeTown.DECKS[di][0])
+		# Loot inside a hut on that deck, like the town's own.
+		var lp := Vector3.ZERO
+		for h in tt.huts:
+			if absf(float(h.level) - dy) < 0.5:
+				lp = tt.o + Vector3(cos(float(h.a)) * float(h.r), dy + 0.1, sin(float(h.a)) * float(h.r))
+				break
+		var l := _spawn_loot("med", "", lp)
+		b.global_position = ground_at((tt.helix[0] as Vector3) + Vector3(3.0, 2.0, 0.0)) + Vector3.UP * 0.1
+		b.velocity = Vector3.ZERO
+		b.meds = 0
+		b.loot_target = l
+		b._last_loot_d = 9999.0
+		b._skip_loot.clear()
+		var t := 0.0
+		var top := -INF
+		while t < 180.0 and not l.taken:
+			await get_tree().physics_frame
+			t += get_physics_process_delta_time()
+			top = maxf(top, b.global_position.y - tt.o.y)
+			if b.loot_target != l and not l.taken:
+				b.loot_target = l
+		print("[bottree] deck %d (%.0f m): took loot=%s in %.0fs (highest %.1f m)" % [di + 1, dy, l.taken, t, top])
+		if l.taken:
+			ok += 1
+	# Back down to the ground.
+	var gp := tt.o + Vector3(TreeTown.LOOKOUT_R + 20.0, 0, 0)
+	b.roam_point = Vector2(gp.x, gp.z)
+	b.loot_target = null
+	var t2 := 0.0
+	while t2 < 180.0 and b.global_position.y > tt.o.y + 2.0:
+		await get_tree().physics_frame
+		t2 += get_physics_process_delta_time()
+	var down := b.global_position.y < tt.o.y + 2.0
+	var bp := b.global_position
+	print("[bottree] came back down=%s in %.0fs (ended y %.1f a %.2f r %.1f route %d tactic '%s' enemy %s)" % [down, t2, bp.y - tt.o.y, tt.angle_of(bp), Vector2(bp.x - tt.o.x, bp.z - tt.o.z).length(), b._route.size(), b._tactic, b.enemy != null])
+	print("[bottree] ", "ALL GOOD" if ok == 3 and down else "FAILED")
+	get_tree().quit()
+
+
+## Bot against bot in the woods: do they take cover, lean out to shoot,
+## duck back to reload, push, flank and use grenades? Five duels.
+func _run_botfight_test() -> void:
+	_start_match()
+	await get_tree().physics_frame
+	_land_player_now()
+	player.spawn_protect = 9999.0
+	player.global_position = Vector3(0, terrain.height_at(0, 0) + 300.0, 0)
+	for bt in bots:
+		if is_instance_valid(bt):
+			bt.set_physics_process(false)
+	if zone != null:
+		zone.set_process(false)
+	var rr := RandomNumberGenerator.new()
+	rr.seed = 99
+	var totals := {}
+	var wins := 0
+	var nades := 0
+	for duel in 5:
+		# A spot in the woods with room for a firefight.
+		var c := Vector3.ZERO
+		for tries in 400:
+			var x := rr.randf_range(-900.0, 900.0)
+			var z := rr.randf_range(-900.0, 900.0)
+			if terrain.forest_density(x, z) > 0.62 and terrain.height_at(x, z) > Terrain.WATER_LEVEL + 2.0 and terrain.slope_at(x, z) < 0.25:
+				c = Vector3(x, 0, z)
+				break
+		var ang := rr.randf() * TAU
+		var dir := Vector3(cos(ang), 0, sin(ang))
+		var pair: Array = []
+		for k in 2:
+			var b: Bot = bots[duel * 2 + k]
+			var p := ground_at(c + dir * (18.0 if k == 0 else -18.0) + Vector3.UP * 2.0)
+			b.global_position = p + Vector3.UP * 0.1
+			b.state = Bot.State.GROUND
+			b.velocity = Vector3.ZERO
+			b.arm_weapon("rifle")
+			b.mag = 30
+			b.meds = 2
+			b.grenades = 2
+			b.hp = 100.0
+			b.calm_t = 0.0
+			b.aggression = 0.6
+			b.test_hold_roam = true
+			b.roam_point = Vector2(p.x, p.z)
+			var to := (c - p)
+			b.rotation.y = atan2(-to.x, -to.z)
+			b.set_physics_process(true)
+			pair.append(b)
+		var t := 0.0
+		var seen := {}
+		var nade0: int = int(pair[0].grenades) + int(pair[1].grenades)
+		while t < 90.0 and pair[0].alive and pair[1].alive:
+			await get_tree().physics_frame
+			t += get_physics_process_delta_time()
+			if int(t * 60.0) % 15 == 0:
+				for b in pair:
+					var tac: String = b._tactic if b._tactic != "" else ("open" if b.enemy != null else "idle")
+					seen[tac] = int(seen.get(tac, 0)) + 1
+		var used: int = nade0 - int(pair[0].grenades) - int(pair[1].grenades)
+		nades += used
+		var won: bool = pair[0].alive != pair[1].alive
+		if won:
+			wins += 1
+		print("[botfight] duel %d: %s after %.0fs  hp %d / %d  grenades thrown %d  tactics %s" % [duel, "decided" if won else "no winner", t, int(pair[0].hp), int(pair[1].hp), used, str(seen)])
+		for k in seen:
+			totals[k] = int(totals.get(k, 0)) + int(seen[k])
+		for b in pair:
+			b.set_physics_process(false)
+			b.global_position = Vector3(0, -500, 0)
+	var all := 0
+	for k in totals:
+		all += int(totals[k])
+	var share := {}
+	for k in totals:
+		share[k] = "%d%%" % int(100.0 * float(totals[k]) / maxf(1.0, float(all)))
+	print("[botfight] %d / 5 duels decided, %d grenades, time share %s" % [wins, nades, str(share)])
 	get_tree().quit()
 
 
