@@ -2997,6 +2997,19 @@ func _run_smoke() -> void:
 			picked += 1
 	print("[smoke] proximity pickups tested=", picked)
 	print("[smoke] audio rifle=", sfx.stream("shot_rifle") != null, " ui=", sfx.stream("zone_warn") != null, " loop=", sfx.stream("plane_loop") != null)
+	# Every gun needs all its distances and its own first-person shot.
+	var missing_gun := []
+	for wid in Weapons.DEFS:
+		var snd := str(Weapons.def(wid)["sound"])
+		for suf in ["_1", "_4", "_fp_1", "_fp_3", "_far", "_vfar"]:
+			if sfx.stream("shot_" + snd + suf) == null:
+				missing_gun.append("shot_" + snd + suf)
+	for env in ["field", "forest", "town", "indoor"]:
+		if sfx.stream("tail_" + env) == null:
+			missing_gun.append("tail_" + env)
+	print("[smoke] gun sounds missing: ", missing_gun if not missing_gun.is_empty() else "none")
+	if not missing_gun.is_empty():
+		push_error("gun sounds missing: " + str(missing_gun))
 	# Fast-forward the plane so every bot jumps, then let them descend.
 	if plane != null:
 		plane.t = 0.97
