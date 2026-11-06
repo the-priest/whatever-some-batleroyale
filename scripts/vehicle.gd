@@ -313,8 +313,48 @@ func _physics_process(delta: float) -> void:
 		_physics_process_body(delta)
 
 
+## Someone getting out keeps passing through the jeep until they are clear
+## of it. Dropping that the moment they leave the seat, while their body
+## is still in it, makes the physics shove the jeep aside: a lurch on every
+## exit, and a launch if they are moved across it.
+var _leaving: Array = []  # [body, physics frames since leaving]
+
+
+func release_rider(b: PhysicsBody3D) -> void:
+	if b == null or not is_instance_valid(b):
+		return
+	for e in _leaving:
+		if e[0] == b:
+			e[1] = 0
+			return
+	_leaving.append([b, 0])
+
+
+func _tick_leaving() -> void:
+	for i in range(_leaving.size() - 1, -1, -1):
+		var e: Array = _leaving[i]
+		var b = e[0]
+		if not is_instance_valid(b):
+			_leaving.remove_at(i)
+			continue
+		e[1] = int(e[1]) + 1
+		if seats.has(b):
+			# Got back in: the seat keeps the exception.
+			_leaving.remove_at(i)
+			continue
+		var l: Vector3 = global_transform.affine_inverse() * ((b as Node3D).global_position + Vector3.UP * 0.9)
+		var c := Vector3(clampf(l.x, -0.95, 0.95), clampf(l.y, 0.6, 1.75), clampf(l.z, -2.05, 2.05))
+		var clear := l.distance_to(c) > 0.55
+		if (clear and int(e[1]) >= 3) or int(e[1]) > 180:
+			(b as PhysicsBody3D).remove_collision_exception_with(self)
+			remove_collision_exception_with(b)
+			_leaving.remove_at(i)
+
+
 func _physics_process_body(delta: float) -> void:
 	_crash_cd = maxf(0.0, _crash_cd - delta)
+	if not _leaving.is_empty():
+		_tick_leaving()
 	speed = linear_velocity.dot(-global_basis.z)
 	if wrecked:
 		_burn(delta)

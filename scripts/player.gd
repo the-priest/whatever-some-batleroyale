@@ -42,6 +42,8 @@ var alive := true
 var kills := 0
 
 var mouse_sens := 0.0022
+## Settings multiplier on top of the zoom-matched scoped sensitivity.
+var scope_sens := 1.0
 var base_fov := 82.0
 var yaw := 0.0
 var pitch := 0.0
@@ -87,6 +89,8 @@ var _gun_scale := 1.0
 var _step_dist := 0.0
 var _damage_flash := 0.0
 var _coyote := 0.0
+var _wedged_t := 0.0
+var _wedge_y := 0.0
 var trauma := 0.0
 var land_dip := 0.0
 var sprinting := false
@@ -265,7 +269,7 @@ func _unhandled_input(event: InputEvent) -> void:
 func _ads_sens_scale() -> float:
 	if not aiming or not has_gun():
 		return 1.0
-	return clampf(0.8 / cur_zoom(), 0.1, 0.75)
+	return clampf(0.8 / cur_zoom(), 0.1, 0.75) * scope_sens
 
 
 func _physics_process(delta: float) -> void:
@@ -527,6 +531,15 @@ func _ground(delta: float) -> void:
 	var grounded_before := is_on_floor()
 	move_and_slide()
 	_step_up(wish_h, grounded_before, delta)
+	# Resting on a seam between two things that are not floor (two walls, a
+	# rock and a trunk) is not falling: let a jump get you out of it.
+	if not is_on_floor() and absf(global_position.y - _wedge_y) < 0.01:
+		_wedged_t += delta
+		if _wedged_t > 0.25:
+			_coyote = 0.12
+	else:
+		_wedged_t = 0.0
+	_wedge_y = global_position.y
 	if is_on_floor() and not _was_on_floor:
 		var impact := clampf(-_fall_speed / 12.0, 0.0, 1.0)
 		if impact > 0.15:

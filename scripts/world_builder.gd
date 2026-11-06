@@ -653,6 +653,9 @@ var _shape_cache: Dictionary = {}
 ## material name contains `filter`, e.g. "Bark"; all when empty).
 ## Trunk radius at chest height, collider height (to the canopy) and the
 ## trunk's sideways offset from the model origin (x only), unscaled.
+const TRUNK_SINK := 1.5
+
+
 func _trunk_dims(name: String, canopy: float) -> Vector3:
 	var data := _nature_mesh(name)
 	var r := 0.0
@@ -884,10 +887,14 @@ func _scatter_trees() -> void:
 			var sc: float = it.scale
 			var cyl := CylinderShape3D.new()
 			cyl.radius = maxf(0.12, dims.x * sc)
-			cyl.height = maxf(1.5, dims.y * sc)
+			# Planted well into the ground: on a slope a trunk that starts at
+			# its base point floats above the downhill side, and walkers
+			# snag under its rim.
+			var above := maxf(1.5, dims.y * sc)
+			cyl.height = above + TRUNK_SINK
 			var shape := CollisionShape3D.new()
 			shape.shape = cyl
-			shape.position = Vector3(it.pos.x + dims.z * sc * cos(it.rot), it.pos.y + cyl.height * 0.5, it.pos.z - dims.z * sc * sin(it.rot))
+			shape.position = Vector3(it.pos.x + dims.z * sc * cos(it.rot), it.pos.y + above * 0.5 - TRUNK_SINK * 0.5, it.pos.z - dims.z * sc * sin(it.rot))
 			trunk_body.add_child(shape)
 			stats.colliders += 1
 	# Into the tree only once every shape is attached: adding shapes to a live

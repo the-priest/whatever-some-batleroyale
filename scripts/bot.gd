@@ -71,6 +71,18 @@ var calm_t := 0.0
 var fight_moving := false
 var _probe_t := 0
 var _probe_blocked := false
+## Which way the probe last went round an obstacle (+1 left, -1 right): kept,
+## so a bot follows a wall out of a corner instead of flip-flopping in it.
+var _avoid_side := 1.0
+var _avoid_dir := Vector3.ZERO
+## Backing out of a corner the slide could not get us out of.
+var _escape_t := 0.0
+var _escape_dir := Vector3.ZERO
+var _stuck_n := 0
+## Way round cliffs to the roam point, from the terrain's walking grid.
+var _tpath := PackedVector2Array()
+var _tp_i := 0
+var _tp_goal := Vector2.INF
 var _fight_t := 0.0
 var _fight_dir := Vector3.FORWARD
 var _posture_t := 0.0
@@ -392,6 +404,9 @@ func _ground(delta: float) -> void:
 		_move()
 		_ground_safety()
 		_animate_ground()
+		# Standing still on purpose: not stuck.
+		_progress_t = 0.0
+		_progress_pos = global_position
 		return
 	if armed and meds > 0 and hp < 55.0 and (enemy == null or not is_instance_valid(enemy)) and not in_deep_water():
 		heal_timer = 3.0
@@ -418,8 +433,9 @@ func _ground(delta: float) -> void:
 		else:
 			if Vector2(global_position.x, global_position.z).distance_to(roam_point) < 3.5:
 				_pick_roam_point()
-			target_pos = Vector3(roam_point.x, global_position.y, roam_point.y)
-			stop_dist = 3.0
+			var leg := _terrain_leg(roam_point)
+			target_pos = Vector3(leg.x, global_position.y, leg.y)
+			stop_dist = 3.0 if leg == roam_point else 0.0
 	else:
 		if enemy != null and is_instance_valid(enemy) and enemy_visible():
 			var d := global_position.distance_to(enemy.global_position)
@@ -524,8 +540,9 @@ func _ground(delta: float) -> void:
 					if _roam_wait <= 0.0:
 						_roam_wait = randf_range(1.0, 5.0)
 						_pick_roam_point()
-				target_pos = Vector3(roam_point.x, global_position.y, roam_point.y)
-				stop_dist = 2.5
+				var leg := _terrain_leg(roam_point)
+				target_pos = Vector3(leg.x, global_position.y, leg.y)
+				stop_dist = 2.5 if leg == roam_point else 0.0
 				want_sprint = alert_timer <= 0.0
 
 	var routing := false
@@ -575,13 +592,26 @@ func _ground(delta: float) -> void:
 		_probe_t -= 1
 		if _probe_t <= 0:
 			_probe_t = 4
-			var q := PhysicsRayQueryParameters3D.create(global_position + Vector3.UP * 1.0, global_position + Vector3.UP * 1.0 + dir * 1.6, 1)
-			q.exclude = [get_rid()]
-			_probe_blocked = not space.intersect_ray(q).is_empty()
+			_probe_blocked = _ray_blocked(space, dir, 1.6)
+			_avoid_dir = Vector3.ZERO
+			if _probe_blocked:
+				# Go round on whichever side is open, keeping the side we
+				# went last time; with both shut, back off.
+				for deg in [55.0, -55.0, 100.0, -100.0]:
+					var d2 := dir.rotated(Vector3.UP, deg_to_rad(deg * _avoid_side))
+					if not _ray_blocked(space, d2, 1.6):
+						_avoid_dir = d2
+						_avoid_side *= signf(deg)
+						break
+				if _avoid_dir == Vector3.ZERO:
+					_avoid_dir = -dir
 		# Inside a house the route is exact: the probe would only see the
 		# stair treads ahead and steer off them.
 		if _probe_blocked and not (routing and bool(_route[0][1])):
-			dir = dir.rotated(Vector3.UP, deg_to_rad(70.0))
+			dir = _avoid_dir if _avoid_dir != Vector3.ZERO else dir.rotated(Vector3.UP, deg_to_rad(70.0))
+		if _escape_t > 0.0:
+			_escape_t -= delta
+			dir = _escape_dir
 		if game != null and game.terrain != null and bool(game.terrain.is_water(global_position.x, global_position.z)):
 			speed *= 0.5
 		velocity.x = move_toward(velocity.x, dir.x * speed, 26.0 * delta)
@@ -606,6 +636,7 @@ func _ground(delta: float) -> void:
 	_progress_t += delta
 	if _progress_t > 3.0:
 		if global_position.distance_to(_progress_pos) < 1.2 and dist > stop_dist + 1.0:
+			_unstick()
 			_pick_roam_point()
 			_route.clear()
 			_route_goal = Vector3.INF
@@ -614,8 +645,83 @@ func _ground(delta: float) -> void:
 				loot_target = null
 			if is_on_floor():
 				velocity.y = 5.2
+		elif global_position.distance_to(_progress_pos) > 3.0:
+			_stuck_n = maxi(0, _stuck_n - 1)
 		_progress_pos = global_position
 		_progress_t = 0.0
+
+
+## Next point on the way to a roam goal: the goal itself, or the next turn of
+## a path round the cliffs between us.
+func _terrain_leg(goal: Vector2) -> Vector2:
+	if game == null or game.terrain == null:
+		return goal
+	var here := Vector2(global_position.x, global_position.z)
+	if goal.distance_to(_tp_goal) > 6.0:
+		var res: Dictionary = game.terrain.walk_path(here, goal)
+		if not bool(res.ok):
+			return goal  # Out of searches this frame: ask again next frame.
+		_tp_goal = goal
+		_tpath = res.path
+		_tp_i = 0
+	while _tp_i < _tpath.size() and here.distance_to(_tpath[_tp_i]) < 4.0:
+		_tp_i += 1
+	if _tp_i >= _tpath.size():
+		return goal
+	return _tpath[_tp_i]
+
+
+func _ray_blocked(space: PhysicsDirectSpaceState3D, dir: Vector3, length: float) -> bool:
+	var q := PhysicsRayQueryParameters3D.create(global_position + Vector3.UP * 1.0, global_position + Vector3.UP * 1.0 + dir * length, 1)
+	q.exclude = [get_rid()]
+	return not space.intersect_ray(q).is_empty()
+
+
+## No headway for a few seconds: back away from whatever we are pressed
+## against (the walls' own normals say which way is out), and if that keeps
+## failing, step to the nearest free bit of ground.
+func _unstick() -> void:
+	_stuck_n += 1
+	_tp_goal = Vector2.INF
+	var away := Vector3.ZERO
+	for ci in get_slide_collision_count():
+		var nrm := get_slide_collision(ci).get_normal()
+		if absf(nrm.y) < 0.7:
+			away += Vector3(nrm.x, 0.0, nrm.z)
+	if away.length() < 0.1:
+		away = Vector3.FORWARD.rotated(Vector3.UP, randf() * TAU)
+	_escape_dir = away.normalized().rotated(Vector3.UP, randf_range(-0.6, 0.6))
+	_escape_t = 0.8 + 0.4 * float(mini(_stuck_n, 4))
+	_avoid_side = -_avoid_side
+	if _stuck_n >= 4:
+		_nudge_free()
+
+
+func _nudge_free() -> void:
+	if game == null:
+		return
+	var space := get_world_3d().direct_space_state
+	var sq := PhysicsShapeQueryParameters3D.new()
+	sq.shape = _cap
+	sq.collision_mask = 1
+	sq.exclude = [get_rid()]
+	var a0 := randf() * TAU
+	for r in [1.6, 2.6, 4.0, 6.0]:
+		for k in 12:
+			var a := a0 + float(k) * TAU / 12.0
+			var p: Vector3 = global_position + Vector3(cos(a), 0.0, sin(a)) * r
+			var g: Vector3 = game.ground_at(p + Vector3.UP * 1.0)
+			# Ground at about our level or a short drop below: not a roof or a
+			# ledge above us.
+			if g.y - global_position.y > 1.6 or global_position.y - g.y > 8.0:
+				continue
+			sq.transform = Transform3D(Basis.IDENTITY, g + Vector3.UP * 1.0)
+			if not space.intersect_shape(sq, 1).is_empty():
+				continue
+			global_position = g + Vector3.UP * 0.05
+			velocity = Vector3.ZERO
+			_stuck_n = 0
+			return
 
 
 ## Is there floor at about our height a dash-length ahead?

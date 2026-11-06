@@ -577,6 +577,93 @@ func water_surface_at(x: float, z: float) -> float:
 	return WATER_LEVEL
 
 
+## Walking grid for bots on the 6 m height grid: cells too steep to walk up
+## are shut, water costs more (swimming is slow). Paths only go round cliffs;
+## houses, rocks and trees are left to the bots' own steering.
+var nav: AStarGrid2D
+const NAV_STEEP_NY := 0.7
+const NAV_SEARCHES_PER_FRAME := 3
+var _nav_frame := -1
+var nav_blocked := 0
+var _nav_calls := 0
+
+
+func build_nav() -> void:
+	nav = AStarGrid2D.new()
+	nav.region = Rect2i(0, 0, RES, RES)
+	nav.cell_size = Vector2(STEP, STEP)
+	nav.diagonal_mode = AStarGrid2D.DIAGONAL_MODE_ONLY_IF_NO_OBSTACLES
+	nav.default_compute_heuristic = AStarGrid2D.HEURISTIC_OCTILE
+	nav.default_estimate_heuristic = AStarGrid2D.HEURISTIC_OCTILE
+	nav.update()
+	nav_blocked = 0
+	var e2 := 2.0 * STEP
+	for iz in RES:
+		var r0 := maxi(iz - 1, 0) * RES
+		var r1 := mini(iz + 1, RES - 1) * RES
+		var row := iz * RES
+		for ix in RES:
+			var dx: float = heights[row + maxi(ix - 1, 0)] - heights[row + mini(ix + 1, RES - 1)]
+			var dz: float = heights[r0 + ix] - heights[r1 + ix]
+			if e2 / sqrt(dx * dx + e2 * e2 + dz * dz) < NAV_STEEP_NY:
+				nav.set_point_solid(Vector2i(ix, iz))
+				nav_blocked += 1
+			else:
+				var x := -HALF + float(ix) * STEP
+				var z := -HALF + float(iz) * STEP
+				if heights[row + ix] < water_surface_at(x, z):
+					nav.set_point_weight_scale(Vector2i(ix, iz), 4.0)
+
+
+func _nav_cell(p: Vector2) -> Vector2i:
+	return Vector2i(clampi(int(round((p.x + HALF) / STEP)), 0, RES - 1), clampi(int(round((p.y + HALF) / STEP)), 0, RES - 1))
+
+
+func _nav_open_near(c: Vector2i) -> Vector2i:
+	if not nav.is_point_solid(c):
+		return c
+	for r in range(1, 5):
+		for dz in range(-r, r + 1):
+			for dx in range(-r, r + 1):
+				var q := Vector2i(clampi(c.x + dx, 0, RES - 1), clampi(c.y + dz, 0, RES - 1))
+				if not nav.is_point_solid(q):
+					return q
+	return c
+
+
+## Points to walk through to get from one place to another without walking
+## into a cliff. Empty when the straight line is fine. Returns null (as
+## an empty array with ok = false) when this frame's search budget is spent.
+func walk_path(from: Vector2, to: Vector2) -> Dictionary:
+	if nav == null:
+		build_nav()
+	var d := from.distance_to(to)
+	var n := int(d / (STEP * 0.7)) + 1
+	var clear := true
+	for i in range(1, n + 1):
+		if nav.is_point_solid(_nav_cell(from.lerp(to, float(i) / float(n)))):
+			clear = false
+			break
+	if clear:
+		return {"ok": true, "path": PackedVector2Array()}
+	var f := Engine.get_physics_frames()
+	if f != _nav_frame:
+		_nav_frame = f
+		_nav_calls = 0
+	if _nav_calls >= NAV_SEARCHES_PER_FRAME:
+		return {"ok": false, "path": PackedVector2Array()}
+	_nav_calls += 1
+	var ids := nav.get_id_path(_nav_open_near(_nav_cell(from)), _nav_open_near(_nav_cell(to)), true)
+	var out := PackedVector2Array()
+	for k in range(1, ids.size()):
+		var c: Vector2i = ids[k]
+		out.append(Vector2(-HALF + float(c.x) * STEP, -HALF + float(c.y) * STEP))
+	if out.is_empty() or out[out.size() - 1].distance_to(to) > STEP * 1.5:
+		return {"ok": true, "path": out}
+	out[out.size() - 1] = to
+	return {"ok": true, "path": out}
+
+
 func is_water(x: float, z: float) -> bool:
 	return height_at(x, z) < water_surface_at(x, z)
 

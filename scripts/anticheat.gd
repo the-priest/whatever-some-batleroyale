@@ -216,8 +216,10 @@ func _watch_movement(p: Player, delta: float) -> void:
 		if v > 15.0 and not p.swimming:
 			strike(0, 3, "speed hack (%.1f m/s on foot)" % v)
 			_hist.clear()
-	# Hovering: off the ground, not falling, for seconds.
-	if not p.is_on_floor() and not p.swimming and absf(p.velocity.y) < 1.2:
+	# Hovering: off the ground, not falling, for seconds, touching nothing.
+	# Someone wedged on a seam between two walls rests on them: their body
+	# is in contact, a flyer's is in open air.
+	if not p.is_on_floor() and not p.swimming and absf(p.velocity.y) < 1.2 and p.get_slide_collision_count() == 0:
 		var gy: float = game.terrain.height_at(pos.x, pos.z)
 		var q := PhysicsRayQueryParameters3D.create(pos + Vector3.UP * 0.2, pos + Vector3.DOWN * 4.0, 1)
 		q.exclude = [p.get_rid()]

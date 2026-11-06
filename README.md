@@ -112,8 +112,10 @@ Settings, then **GRAPHICS**, cycles four presets:
 - **ULTRA:** adds SDFGI ray-marched global illumination, so sunlight bounces into rooms, plus long
   soft shadows and further draw distance. Aim for an RTX 2060 / RX 6600 class GPU.
 
-Each match rolls its weather and time of day: clear noon, golden hour, misty morning or overcast
-(LAN games share the host's).
+Each match rolls its weather and time of day: clear noon, golden hour, misty morning, overcast or
+a thunderstorm (LAN games share the host's). In the storm the rain stops at roofs and trees, so it
+never rains indoors; the downpour goes muffled under a roof, and lightning flashes with the thunder
+rolling in a few seconds later.
 
 The game uses the Vulkan (Forward+) renderer and falls back to OpenGL automatically on machines
 without Vulkan.

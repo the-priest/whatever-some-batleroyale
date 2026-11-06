@@ -13,6 +13,7 @@ signal join_lan_pressed
 signal resume_pressed
 signal quit_pressed
 signal settings_changed(sensitivity: float, volume: float, fov: float, players: int)
+signal scope_sens_changed(mult: float)
 signal loadout_changed(primary: String, secondary: String, optic: String, enabled: bool)
 
 # All HUD is constructed in code so the project stays scene-file free and the
@@ -111,6 +112,8 @@ var lbl_music_match: Label
 var _now_playing: Label
 var vol_slider: HSlider
 var lbl_sens: Label
+var lbl_scope_sens: Label
+var scope_sens_slider: HSlider
 var lbl_vol: Label
 
 var pause_allowed := false
@@ -875,6 +878,21 @@ func _build_pause() -> void:
 	sens_slider.value_changed.connect(func(_v): _settings_changed())
 	col.add_child(sens_slider)
 
+	# Looking through a scope already turns slower with the zoom; this
+	# scales that on top, for people who like their scopes faster or slower.
+	lbl_scope_sens = _lv("SCOPED SENSITIVITY", 12, MUTED)
+	col.add_child(lbl_scope_sens)
+	scope_sens_slider = HSlider.new()
+	scope_sens_slider.min_value = 0.3
+	scope_sens_slider.max_value = 2.0
+	scope_sens_slider.step = 0.05
+	scope_sens_slider.value = 1.0
+	scope_sens_slider.custom_minimum_size = Vector2(300, 22)
+	scope_sens_slider.value_changed.connect(func(v):
+		_settings_labels()
+		scope_sens_changed.emit(v))
+	col.add_child(scope_sens_slider)
+
 	lbl_vol = _lv("VOLUME", 12, MUTED)
 	col.add_child(lbl_vol)
 	vol_slider = HSlider.new()
@@ -1024,6 +1042,8 @@ func _settings_labels() -> void:
 		lbl_music_menu.text = "MENU MUSIC   %s" % ("OFF" if music_menu_slider.value <= 0.001 else "%d%%" % int(music_menu_slider.value * 100.0))
 		lbl_music_match.text = "MATCH MUSIC   %s" % ("OFF" if music_match_slider.value <= 0.001 else "%d%%" % int(music_match_slider.value * 100.0))
 	lbl_sens.text = "MOUSE SENSITIVITY   %.2f" % sens_slider.value
+	if lbl_scope_sens != null:
+		lbl_scope_sens.text = "SCOPED SENSITIVITY   %.2f×" % scope_sens_slider.value
 	lbl_vol.text = "VOLUME   %d%%" % int(vol_slider.value * 100.0)
 	lbl_fov.text = "FIELD OF VIEW   %d°" % int(fov_slider.value)
 	lbl_size.text = "MATCH SIZE   %d PLAYERS  (NEXT MATCH)" % int(size_slider.value)

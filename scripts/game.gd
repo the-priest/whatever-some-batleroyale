@@ -96,6 +96,7 @@ var end_cam_target: Node3D = null
 var end_cam_spot := Vector3.ZERO
 var end_cam_angle := 0.0
 var mouse_sens := 1.0
+var scope_sens := 1.0
 var volume := 0.8
 var fov := 82.0
 var loadout_primary := "carbine"
@@ -161,6 +162,10 @@ func _ready() -> void:
 	hud.quit_pressed.connect(_quit_to_menu)
 	hud.settings_changed.connect(_on_settings_changed)
 	hud.loadout_changed.connect(_on_loadout_changed)
+	hud.scope_sens_changed.connect(func(v: float):
+		scope_sens = v
+		_apply_settings()
+		_save_settings())
 	hud.show_menu("GENERATING ISLAND ...")
 	music = Music.new()
 	music.name = "Music"
@@ -316,6 +321,10 @@ func _build_world() -> void:
 	terrain = world.terrain
 	_apply_graphics()
 	print("[game] world seed %d built in %d ms, loot=%d" % [seed_value, Time.get_ticks_msec() - t0, world.loot_points.size()])
+	# The bots' walking grid, while the loading screen is still up.
+	var tn := Time.get_ticks_msec()
+	terrain.build_nav()
+	print("[game] bot walking grid in %d ms, %d of %d cells too steep" % [Time.get_ticks_msec() - tn, terrain.nav_blocked, Terrain.RES * Terrain.RES])
 
 
 func _create_player() -> void:
@@ -341,6 +350,7 @@ func _load_settings() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(SETTINGS_PATH) == OK:
 		mouse_sens = float(cfg.get_value("input", "sensitivity", 1.0))
+		scope_sens = clampf(float(cfg.get_value("input", "scoped", 1.0)), 0.3, 2.0)
 		match_size = int(cfg.get_value("match", "players", 64))
 		volume = float(cfg.get_value("audio", "volume", 0.8))
 		fov = float(cfg.get_value("video", "fov", 82.0))
@@ -358,6 +368,7 @@ func _load_settings() -> void:
 	match_size = clampi(match_size, 10, 100)
 	MAX_BOTS = match_size - 1
 	hud.set_settings(mouse_sens, volume, fov, match_size)
+	hud.scope_sens_slider.set_value_no_signal(scope_sens)
 	hud.set_music(music_menu, music_match)
 	hud.set_graphics(graphics_quality)
 	if music != null:
@@ -369,6 +380,7 @@ func _load_settings() -> void:
 func _apply_settings() -> void:
 	if player != null:
 		player.mouse_sens = 0.0022 * mouse_sens
+		player.scope_sens = scope_sens
 		player.base_fov = fov
 	AudioServer.set_bus_volume_db(0, linear_to_db(maxf(0.0001, volume)))
 
@@ -396,6 +408,7 @@ func _on_loadout_changed(p: String, s: String, o: String, e: bool) -> void:
 func _save_settings() -> void:
 	var cfg := ConfigFile.new()
 	cfg.set_value("input", "sensitivity", mouse_sens)
+	cfg.set_value("input", "scoped", scope_sens)
 	cfg.set_value("audio", "volume", volume)
 	cfg.set_value("audio", "music_menu", music_menu)
 	cfg.set_value("audio", "music_match", music_match)
@@ -4532,6 +4545,8 @@ func _run_net_stress(as_host: bool) -> void:
 			var car := _nearest_vehicle_any(p.global_position)
 			if car != null:
 				p.global_position = car.global_position + car.global_basis.x * 2.4 + Vector3(0, 0.5, 0)
+				p.yaw = atan2(car.global_basis.x.x, car.global_basis.x.z)
+				p.pitch = -0.15
 				await get_tree().physics_frame
 				await get_tree().physics_frame
 				try_pickup(p)
@@ -5039,8 +5054,7 @@ func _leave_seat() -> void:
 	if v != null and is_instance_valid(v):
 		if player.seat >= 0 and v.seats[player.seat] == player:
 			v.seats[player.seat] = null
-		player.remove_collision_exception_with(v)
-		v.remove_collision_exception_with(player)
+		v.release_rider(player)
 		if player.seat == 0:
 			v.throttle = 0.0
 			v.steer_in = 0.0
@@ -5255,8 +5269,7 @@ func _seat_remote(h: Bot, vid: int, slot: int) -> void:
 	if h.seated_in != null and is_instance_valid(h.seated_in) and (h.seated_in != v or h.seated_slot != slot):
 		if h.seated_slot >= 0 and h.seated_in.seats[h.seated_slot] == h:
 			h.seated_in.seats[h.seated_slot] = null
-		h.remove_collision_exception_with(h.seated_in)
-		h.seated_in.remove_collision_exception_with(h)
+		h.seated_in.release_rider(h)
 		h.seated_in = null
 		h.seated_slot = -1
 	if v != null and slot >= 0 and h.seated_in == null:
