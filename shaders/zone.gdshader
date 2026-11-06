@@ -9,7 +9,6 @@ uniform vec4 edge : source_color = vec4(0.86, 0.72, 1.0, 1.0);
 uniform float opacity : hint_range(0.0, 1.0) = 0.42;
 uniform float radius = 430.0;
 
-varying float v_h;
 varying vec3 v_world;
 
 float hash(vec2 p) {
@@ -38,7 +37,6 @@ float fbm(vec2 p) {
 }
 
 void vertex() {
-	v_h = UV.y;
 	v_world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 }
 
@@ -49,9 +47,12 @@ void fragment() {
 	float n = fbm(p + vec2(t, -t * 1.6));
 	n = mix(n, fbm(p * 2.3 - vec2(t * 1.3, t * 0.7)), 0.4);
 
-	// Fade out toward the top so the storm does not read as a hard tube.
-	float h = clamp(1.0 - v_h, 0.0, 1.0);
-	float vertical = smoothstep(0.0, 0.08, h) * (1.0 - smoothstep(0.55, 1.0, h) * 0.85);
+	// Fade out toward the top so the storm does not read as a hard tube: by
+	// world height, all the way to nothing well below the mesh's top edge
+	// (a cylinder's side UVs only span 0..0.5, so they cannot do this).
+	float h = clamp((v_world.y - 30.0) / 330.0, 0.0, 1.0);
+	float vertical = 1.0 - smoothstep(0.0, 1.0, h);
+	vertical *= vertical;
 
 	// Do not paint a solid sheet right in front of the camera.
 	float d = length(v_world - CAMERA_POSITION_WORLD);

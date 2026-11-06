@@ -549,7 +549,7 @@ func _build_inland_water() -> void:
 
 ## Time of day and weather for a match. Every preset keeps the island
 ## readable; they change mood, shadow length and how far you can see.
-const WEATHERS := ["clear", "golden", "misty", "overcast"]
+const WEATHERS := ["clear", "golden", "misty", "overcast", "clear", "rain"]
 
 
 func set_weather(kind: String) -> void:
@@ -569,6 +569,8 @@ func set_weather(kind: String) -> void:
 			Color(0.76, 0.8, 0.83), Color(0.5, 0.56, 0.6), Color(0.78, 0.82, 0.86), 0.0016, 0.72, 1.1],
 		"overcast": [-58.0, -10.0, Color(0.86, 0.88, 0.92), 0.7, Color(0.4, 0.45, 0.52), Color(0.66, 0.7, 0.75),
 			Color(0.62, 0.66, 0.7), Color(0.4, 0.45, 0.5), Color(0.64, 0.68, 0.73), 0.0007, 0.85, 1.15],
+		"rain": [-52.0, 25.0, Color(0.74, 0.78, 0.86), 0.26, Color(0.24, 0.27, 0.31), Color(0.46, 0.49, 0.53),
+			Color(0.42, 0.45, 0.48), Color(0.26, 0.28, 0.31), Color(0.44, 0.47, 0.52), 0.0019, 1.02, 1.12],
 	}
 	var p: Array = presets.get(kind, presets["clear"])
 	sun.rotation_degrees = Vector3(float(p[0]), float(p[1]), 0.0)
@@ -583,6 +585,19 @@ func set_weather(kind: String) -> void:
 	env.volumetric_fog_albedo = (p[8] as Color).lightened(0.25)
 	env.ambient_light_energy = float(p[10])
 	env.tonemap_exposure = float(p[11])
+	# Rain: falling streaks, splashes, the rain bed and thunder.
+	var old := get_node_or_null("Rain")
+	if old != null:
+		remove_child(old)
+		old.queue_free()
+	if kind == "rain":
+		var r := Rain.new()
+		r.name = "Rain"
+		r.game = get_parent()
+		r.world = self
+		var g = get_parent()
+		r.quality = int(g.get("graphics_quality")) if g != null and g.get("graphics_quality") != null else 2
+		add_child(r)
 
 
 ## The falls roar from far off; the river babbles along its banks.

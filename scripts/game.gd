@@ -436,6 +436,8 @@ func _resume() -> void:
 
 
 func _quit_to_menu() -> void:
+	if hud != null and hud.map_open():
+		hud.set_map_open(false)
 	hud.show_pause(false)
 	get_tree().paused = false
 	if net != null and net.active and net.hosting and net.match_running:
@@ -1412,7 +1414,7 @@ func _update_prompt() -> void:
 		return
 	var best := _nearest_loot(player.global_position, 3.0)
 	var car := _nearest_vehicle(player.global_position, 1.7)
-	if car != null and (best == null or best.global_position.distance_to(player.global_position) > _vehicle_gap(player.global_position + Vector3.UP * 0.9, car) + 0.4):
+	if _interact_wants_car(player, best, car):
 		var seat := car.free_seat()
 		hud.set_prompt("JEEP IS FULL" if seat < 0 else ("[F]  DRIVE THE JEEP" if seat == 0 else "[F]  RIDE AS PASSENGER"))
 	elif best != null:
@@ -1636,6 +1638,8 @@ func _on_player_died(killer: String) -> void:
 			wpn = str(Weapons.def((k as Bot).weapon_id)["short"])
 		net.report_death(kk, _name_for_key(kk) if kk != "" else ("THE STORM" if killer == "THE STORM" else killer), wpn)
 	phase = "end"
+	if hud.map_open():
+		hud.set_map_open(false)
 	player.alive = false
 	hud.pause_allowed = false
 	hud.set_storm(false)
@@ -1744,6 +1748,8 @@ func _win() -> void:
 	if phase == "end":
 		return
 	phase = "end"
+	if hud.map_open():
+		hud.set_map_open(false)
 	winner = true
 	_stop_ambience()
 	hud.pause_allowed = false
@@ -1805,7 +1811,7 @@ func try_pickup(p: Player) -> void:
 	# tick this frame: without this you were put straight back in.
 	if Engine.get_physics_frames() - _veh_exit_frame < 20:
 		car = null
-	if car != null and (best == null or best.global_position.distance_to(p.global_position) > _vehicle_gap(p.global_position + Vector3.UP * 0.9, car) + 0.4):
+	if _interact_wants_car(p, best, car):
 		_enter_vehicle(car)
 		return
 	if best == null:
@@ -4937,6 +4943,48 @@ func _nearest_vehicle(pos: Vector3, max_d: float) -> Vehicle:
 	return best
 
 
+## With a jeep and an item both in reach, F does what you look at: the jeep
+## when the crosshair is on its body, else whichever sits nearer the
+## crosshair.
+func _interact_wants_car(p: Player, best: Node3D, car: Vehicle) -> bool:
+	if car == null:
+		return false
+	if best == null:
+		return true
+	var eye := p.global_position + Vector3.UP * 1.55
+	var fwd := -p.global_basis.z
+	if p.camera != null:
+		eye = p.camera.global_position
+		fwd = -p.camera.global_basis.z
+	# Crosshair ray against the body box, in the jeep's own space.
+	var inv := car.global_transform.affine_inverse()
+	var o := inv * eye
+	var d := inv.basis * fwd
+	var lo := Vector3(-1.05, 0.3, -2.2)
+	var hi := Vector3(1.05, 1.95, 2.2)
+	var t0 := 0.0
+	var t1 := 4.5
+	var hit := true
+	for a in 3:
+		if absf(d[a]) < 0.00001:
+			if o[a] < lo[a] or o[a] > hi[a]:
+				hit = false
+				break
+			continue
+		var ta := (lo[a] - o[a]) / d[a]
+		var tb := (hi[a] - o[a]) / d[a]
+		t0 = maxf(t0, minf(ta, tb))
+		t1 = minf(t1, maxf(ta, tb))
+		if t0 > t1:
+			hit = false
+			break
+	if hit:
+		return true
+	var to_car := (car.global_position + car.global_basis.y * 1.0 - eye).normalized()
+	var to_loot := (best.global_position - eye).normalized()
+	return fwd.dot(to_car) > fwd.dot(to_loot)
+
+
 ## Distance from a point to the jeep's body box.
 static func _vehicle_gap(p: Vector3, v: Vehicle) -> float:
 	var l := v.global_transform.affine_inverse() * p
@@ -5285,6 +5333,8 @@ func _run_carexit_test() -> void:
 			var flat_x := Basis(Vector3.UP, v.global_basis.get_euler().y) * Vector3(1, 0, 0)
 			player.global_position = ground_at(v.global_position + flat_x * 2.6) + Vector3.UP * 0.1
 			player.velocity = Vector3.ZERO
+			player.yaw = atan2(flat_x.x, flat_x.z)
+			player.pitch = -0.15
 			for i in 3:
 				await get_tree().physics_frame
 			var nl := _nearest_loot(player.global_position, 3.2)
