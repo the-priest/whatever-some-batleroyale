@@ -22,30 +22,20 @@ var _mat_sniper: StandardMaterial3D
 func _ready() -> void:
 	_mesh = BoxMesh.new()
 	_mesh.size = Vector3(1.0, 1.0, 1.0)
-	_mat_mine = _tracer_mat(Color(1.0, 0.78, 0.25))
-	_mat_enemy = _tracer_mat(Color(1.0, 0.32, 0.16))
-	_mat_sniper = _tracer_mat(Color(1.0, 0.92, 0.55))
+	# A round in daylight is a faint warm streak, not a glowing bolt: the
+	# same pale colour whoever fired it, and see-through.
+	_mat_mine = _tracer_mat(Color(1.0, 0.9, 0.68, 0.5))
+	_mat_enemy = _tracer_mat(Color(1.0, 0.9, 0.72, 0.38))
+	_mat_sniper = _tracer_mat(Color(1.0, 0.92, 0.75, 0.55))
 
 
 func _tracer_mat(c: Color) -> StandardMaterial3D:
-	# Solid core with a soft halo as a second pass: reads against both sky and
-	# grass, where a pale additive line all but vanished.
 	var m := StandardMaterial3D.new()
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
 	m.albedo_color = c
 	m.disable_receive_shadows = true
-	m.disable_fog = true
-	var glow := StandardMaterial3D.new()
-	glow.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	glow.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	glow.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	glow.cull_mode = BaseMaterial3D.CULL_DISABLED
-	glow.albedo_color = Color(c.r, c.g * 0.7, c.b * 0.4, 0.45)
-	glow.disable_fog = true
-	glow.grow = true
-	glow.grow_amount = 0.6
-	m.next_pass = glow
 	return m
 
 
@@ -168,13 +158,18 @@ func _place_tracer(b: Dictionary, cam: Camera3D = null) -> void:
 	# Muzzle offset fades out over the first ~18 m of flight.
 	var k := clampf(1.0 - float(b["dist"]) / 18.0, 0.0, 1.0)
 	var head: Vector3 = b["pos"] + Vector3(b["off"]) * k
-	var length := minf(float(b["speed"]) * 0.028, maxf(0.4, float(b["trail"])))
-	var width := 0.022
-	if cam != null:
-		# Keep a few pixels wide however far away it is.
-		width = maxf(width, head.distance_to(cam.global_position) * 0.0032)
+	var length := minf(float(b["speed"]) * 0.011, maxf(0.3, float(b["trail"])))
+	var width := 0.013
 	if Weapons.cls(b["id"]) == "sniper":
-		width *= 1.5
+		width = 0.017
+	if cam != null:
+		# About a pixel at most far away, and fading out with distance:
+		# across a valley you hear a rifle long before you see its rounds.
+		var dc := head.distance_to(cam.global_position)
+		width = maxf(width, dc * 0.0011)
+		mi.transparency = clampf((dc - 60.0) / 260.0, 0.0, 0.9)
+	else:
+		mi.transparency = 0.0
 	var center := head - dir * length * 0.5
 	var up := Vector3.UP if absf(dir.y) < 0.98 else Vector3.RIGHT
 	var basis := Basis.looking_at(dir, up)
@@ -189,10 +184,12 @@ func _near_miss(b: Dictionary, a: Vector3, c: Vector3, player: Node3D) -> void:
 	var t := clampf((ear - a).dot(seg) / maxf(0.0001, seg.length_squared()), 0.0, 1.0)
 	var p := a + seg * t
 	var d := p.distance_to(ear)
-	if d < 3.0 and t > 0.0 and t < 1.0:
+	if d < 6.0 and t > 0.0 and t < 1.0:
 		b["cracked"] = true
 		if game != null:
-			game.play_sfx_at("bullet_crack" if float(b["speed"]) > 450.0 else "bullet_whiz", p, -2.0 if d < 1.5 else -7.0)
+			# A round that misses you by a hand cracks like a whip; one a few
+			# metres off is a sharp snap going past.
+			game.play_sfx_at("bullet_crack" if float(b["speed"]) > 450.0 else "bullet_whiz", p, lerpf(-1.0, -13.0, clampf((d - 1.0) / 5.0, 0.0, 1.0)))
 			if d < 1.2 and player.has_method("add_trauma"):
 				player.add_trauma(0.12)
 

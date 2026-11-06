@@ -1026,16 +1026,29 @@ func _build_village_extras() -> void:
 				_add_box_collider(p + Vector3(0, 0.7, 0), Vector3(1.7, 1.4, 3.4), py)
 				loot_points.append({"pos": p + pb * Vector3(1.4, 0.06, 0.0), "kind": "gear", "village": true})
 
-		# Perimeter fence posts, broken up so they read as an old village edge.
-		# Farms get a near-complete paddock fence, towns a broken edge.
-		var posts := 28 if is_farm else rng.randi_range(6, 12)
-		for i in posts:
-			var ang := (TAU * float(i) / float(posts)) if is_farm else rng.randf() * TAU
-			if is_farm and rng.randf() < 0.12:
-				continue
-			var dist := vr - 1.0 if is_farm else rng.randf_range(vr - 6.0, vr - 2.0)
-			var p := Vector3(site.x + cos(ang) * dist, pad, site.y + sin(ang) * dist)
-			_place("Prop_WoodenFence_Single", p, ang + PI * 0.5 + rng.randf_range(-0.15, 0.15))
+		# Farms get a paddock fence all the way round: pieces end to end along
+		# the circle (each one turned along it), on the ground where it is,
+		# with a gate and gaps where a road or a house cuts through. Towns
+		# keep a few broken old lengths at their edge.
+		if is_farm:
+			var fr := vr - 1.0
+			var n := int(ceil(TAU * fr / (FENCE_LEN - 0.04)))
+			var gate := rng.randi() % n
+			for i in n:
+				if i == gate or i == (gate + 1) % n:
+					continue
+				var ang := TAU * (float(i) + 0.5) / float(n)
+				var c2 := site + Vector2(cos(ang), sin(ang)) * fr * cos(PI / float(n))
+				if _on_road(c2, 1.2) or not house_at(c2, 1.2).is_empty():
+					continue
+				_fence_piece(c2, -ang - PI * 0.5)
+		else:
+			for i in rng.randi_range(6, 12):
+				var ang := rng.randf() * TAU
+				var c2 := site + Vector2(cos(ang), sin(ang)) * rng.randf_range(vr - 6.0, vr - 2.0)
+				if _on_road(c2, 1.2) or not house_at(c2, 1.2).is_empty():
+					continue
+				_fence_piece(c2, -ang - PI * 0.5 + rng.randf_range(-0.12, 0.12))
 
 		# Vines climbing a couple of house walls.
 		for h in houses:
@@ -1139,6 +1152,21 @@ func _add_wall_collider(pos: Vector3, yaw: float, has_door: bool) -> void:
 		"xform": Transform3D(basis, pos + Vector3(0, WALL_HEIGHT - top_h * 0.5, 0)),
 		"size": Vector3(DOOR_WIDTH, top_h, 0.42),
 	})
+
+
+const FENCE_LEN := 2.06
+
+
+## One length of wooden fence (2 m along its own X) standing on the ground,
+## solid to walk into and low enough to hop over.
+func _fence_piece(c: Vector2, yaw: float) -> void:
+	var dir := Vector2(cos(yaw), -sin(yaw)) * FENCE_LEN * 0.5
+	# Sit on the lower end so neither end floats on a slope.
+	var y := minf(terrain.height_at(c.x - dir.x, c.y - dir.y), terrain.height_at(c.x + dir.x, c.y + dir.y)) - 0.04
+	y = minf(y, terrain.height_at(c.x, c.y) - 0.04)
+	var p := Vector3(c.x, y, c.y)
+	_place("Prop_WoodenFence_Single", p, yaw)
+	_add_box_collider(p + Vector3(0, 0.45, 0), Vector3(FENCE_LEN, 0.9, 0.14), yaw)
 
 
 func _add_box_collider(center: Vector3, size: Vector3, yaw: float) -> void:

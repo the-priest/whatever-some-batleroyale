@@ -14,6 +14,10 @@ var _next_flat := 0
 var cache: Dictionary = {}
 var _next := 0
 var _missing: Dictionary = {}
+var _own: Array[AudioStreamPlayer] = []
+var _next_own := 0
+var _tails: Array[AudioStreamPlayer] = []
+var _next_tail := 0
 
 
 func _ready() -> void:
@@ -34,6 +38,18 @@ func _ready() -> void:
 		f.bus = "Master"
 		add_child(f)
 		flat.append(f)
+	# Your own gun and the echoes around you get their own voices: a long
+	# burst must not cut off footsteps, or the other way round.
+	for i in 12:
+		var g := AudioStreamPlayer.new()
+		g.bus = "Master"
+		add_child(g)
+		_own.append(g)
+	for i in 8:
+		var t := AudioStreamPlayer.new()
+		t.bus = "Master"
+		add_child(t)
+		_tails.append(t)
 	_preload_all()
 
 
@@ -115,25 +131,53 @@ func play_at(name: String, pos: Vector3, db := 0.0, pitch_jitter := 0.08) -> voi
 	p.stream = s
 	p.global_position = pos
 	p.volume_db = db
-	if name.ends_with("_far") or name.begins_with("tail_"):
-		# Distant gunfire and echoes: the game already scaled them by
-		# distance, so keep them audible across the island.
-		p.unit_size = 400.0
-		p.max_distance = 1500.0
+	if name.begins_with("shot_") or name.begins_with("tail_"):
+		# Gunfire: the game picks the close, far or very far recording and
+		# sets the level for the distance itself; here it is only placed.
+		p.attenuation_model = AudioStreamPlayer3D.ATTENUATION_DISABLED
+		p.max_distance = 0.0
 		p.attenuation_filter_cutoff_hz = 20500.0
 		p.attenuation_filter_db = 0.0
-	elif name.begins_with("shot_") or name == "explosion":
+	elif name == "explosion":
+		p.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
 		# Gunfire carries across the island and loses its top end with distance.
 		p.unit_size = 45.0
 		p.max_distance = 950.0
 		p.attenuation_filter_cutoff_hz = 2600.0
 		p.attenuation_filter_db = -20.0
 	else:
+		p.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
 		p.unit_size = 14.0
 		p.max_distance = 260.0
 		p.attenuation_filter_cutoff_hz = 9000.0
 		p.attenuation_filter_db = -6.0
 	p.pitch_scale = 1.0 + randf_range(-pitch_jitter, pitch_jitter)
+	p.play()
+
+
+## Your own gunshot, in stereo, from its own voices.
+func play_own(name: String, db := 0.0, pitch_jitter := 0.03) -> void:
+	var s := stream(name)
+	if s == null:
+		return
+	var p := _own[_next_own]
+	_next_own = (_next_own + 1) % _own.size()
+	p.stream = s
+	p.volume_db = db
+	p.pitch_scale = 1.0 + randf_range(-pitch_jitter, pitch_jitter)
+	p.play()
+
+
+## The surroundings answering a shot: all around you, not from one point.
+func play_tail(name: String, db := 0.0) -> void:
+	var s := stream(name)
+	if s == null:
+		return
+	var p := _tails[_next_tail]
+	_next_tail = (_next_tail + 1) % _tails.size()
+	p.stream = s
+	p.volume_db = db
+	p.pitch_scale = 1.0 + randf_range(-0.05, 0.05)
 	p.play()
 
 

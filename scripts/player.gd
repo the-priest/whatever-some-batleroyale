@@ -1342,7 +1342,7 @@ func _try_fire() -> void:
 	if game != null and game.has_method("on_gunshot"):
 		game.on_gunshot(from, self)
 	if game != null and game.has_method("play_sfx_at"):
-		game.play_sfx_at("shot_" + str(d["sound"]), from, 1.0)
+		game.play_own_gunshot(str(d["sound"]))
 	_emit_ammo()
 
 

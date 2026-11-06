@@ -79,6 +79,8 @@ var _avoid_dir := Vector3.ZERO
 var _escape_t := 0.0
 var _escape_dir := Vector3.ZERO
 var _stuck_n := 0
+var _dead_floor := INF
+var _dead_vy := 0.0
 ## Way round cliffs to the roam point, from the terrain's walking grid.
 var _tpath := PackedVector2Array()
 var _tp_i := 0
@@ -301,8 +303,14 @@ func _physics_process_body(delta: float) -> void:
 		dead_timer += delta
 		velocity.x = move_toward(velocity.x, 0.0, 6.0 * delta)
 		velocity.z = move_toward(velocity.z, 0.0, 6.0 * delta)
-		_move()
-		if dead_timer > 7.0:
+		if dead_timer <= 7.0:
+			# A body falls like anything else: shot mid-jump, off a ledge or
+			# thrown by a jeep, it comes down instead of drifting on up.
+			if is_on_floor():
+				velocity.y = minf(velocity.y, 0.0)
+			velocity.y = maxf(velocity.y - GRAVITY * delta, -50.0)
+			_move()
+		else:
 			# Settle into the ground rather than vanish.
 			position.y -= delta * 0.6
 		if dead_timer > 10.0:
@@ -1062,6 +1070,13 @@ func _puppet_tick(delta: float) -> void:
 		hit_flash = maxf(0.0, hit_flash - delta)
 	if state == State.DEAD or not alive:
 		dead_timer += delta
+		# The last update may have caught them mid-air (a jump, a ledge, the
+		# parachute): the body comes down to the ground under it.
+		if _dead_floor == INF and game != null:
+			_dead_floor = float(game.ground_at(global_position).y)
+		if dead_timer <= 7.0 and global_position.y > _dead_floor + 0.01:
+			_dead_vy = minf(_dead_vy + GRAVITY * delta, 50.0)
+			global_position.y = maxf(_dead_floor, global_position.y - _dead_vy * delta)
 		if dead_timer > 7.0 and not is_human:
 			position.y -= delta * 0.6
 		if dead_timer > 10.0 and not is_human:
@@ -1159,6 +1174,8 @@ func puppet_die() -> void:
 	alive = false
 	state = State.DEAD
 	dead_timer = 0.0
+	_dead_floor = INF
+	_dead_vy = 0.0
 	collision_layer = 0
 	chute_node.visible = false
 	if _tag != null:

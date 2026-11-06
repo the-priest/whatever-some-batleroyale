@@ -267,6 +267,10 @@ func _ready() -> void:
 		_run_shoot_through_test()
 	elif OS.get_cmdline_user_args().has("--camp"):
 		_run_camp_test()
+	elif OS.get_cmdline_user_args().has("--gunaudio"):
+		_run_gun_audio_test()
+	elif OS.get_cmdline_user_args().has("--corpse"):
+		_run_corpse_test()
 	elif OS.get_cmdline_user_args().has("--botstairs"):
 		_run_bot_stairs_test()
 	elif OS.get_cmdline_user_args().has("--stairs"):
@@ -2100,33 +2104,66 @@ func _update_listener_env() -> void:
 		_listener_env = "field"
 
 
-## A shot as heard from here: the close crack fades into a distant boom
-## with distance, arrives late (sound travels 343 m/s) and the surroundings
-## answer with their own echo.
+## A shot as heard from here. Close up it is the full shot; past ~40 m it
+## crossfades into the far recording (the air has eaten the crack, the
+## valley rolls it back), past ~450 m into the very far thump. It arrives
+## late (sound travels 343 m/s), and it fades with distance more gently than
+## the inverse-square law so a fight across the valley stays audible.
+## Shots near you also wake the surroundings' own echo, all around you.
+const SHOT_REF_D := 10.0
+
+
 func _play_gunshot(cls: String, pos: Vector3, vol: float) -> void:
 	var cam := get_viewport().get_camera_3d()
 	var ear := cam.global_position if cam != null else pos
 	var d := ear.distance_to(pos)
-	if d > 1400.0:
+	if d > 1500.0:
 		return
-	_listener_env_t -= 0.0
+	_refresh_listener_env()
+	var delay := d / SOUND_SPEED
+	var att := -20.0 * log(maxf(d, SHOT_REF_D) / SHOT_REF_D) / log(10.0) * 0.78
+	var w_close := clampf(1.0 - (d - 40.0) / 140.0, 0.0, 1.0)
+	var w_far := clampf((d - 40.0) / 140.0, 0.0, 1.0) * clampf(1.0 - (d - 450.0) / 350.0, 0.0, 1.0)
+	var w_vfar := clampf((d - 450.0) / 350.0, 0.0, 1.0)
+	if w_close > 0.0:
+		var variant := "shot_%s_%d" % [cls, randi() % 4 + 1]
+		if sfx.stream(variant) == null:
+			variant = "shot_" + cls
+		_delayed_sfx(variant, pos, vol + att + linear_to_db(w_close), delay, 0.04)
+		_delayed_tail(vol + att + _tail_db() + linear_to_db(w_close), delay + 0.02)
+	if w_far > 0.0:
+		_delayed_sfx("shot_%s_far" % cls, pos, vol + att + 3.0 + linear_to_db(w_far), delay, 0.06)
+	if w_vfar > 0.0:
+		_delayed_sfx("shot_%s_vfar" % cls, pos, vol + att + 5.0 + linear_to_db(w_vfar), delay, 0.06)
+
+
+## Your own gun: the stereo first-person shot right in your hands, and the
+## surroundings answering.
+func play_own_gunshot(cls: String, vol := 0.0) -> void:
+	_refresh_listener_env()
+	var v := "shot_%s_fp_%d" % [cls, randi() % 3 + 1]
+	if sfx.stream(v) == null:
+		v = "shot_%s_1" % cls
+	sfx.play_own(v, vol)
+	_delayed_tail(vol + _tail_db(), 0.02)
+
+
+func _refresh_listener_env() -> void:
 	if Time.get_ticks_msec() - int(_listener_env_t) > 500:
 		_listener_env_t = Time.get_ticks_msec()
 		_update_listener_env()
-	var close_k := clampf(1.0 - (d - 60.0) / 180.0, 0.0, 1.0)
-	var delay := d / SOUND_SPEED
-	var variant := "shot_%s_%d" % [cls, randi() % 4 + 1]
-	if sfx.stream(variant) == null:
-		variant = "shot_" + cls
-	if close_k > 0.0:
-		_delayed_sfx(variant, pos, vol + linear_to_db(maxf(close_k, 0.001)), delay, 0.04)
-		# Environment tail: louder indoors, carried further outdoors.
-		var tail_db: float = {"indoor": 0.0, "town": -5.0, "forest": -7.0, "field": -6.0}.get(_listener_env, -6.0)
-		_delayed_sfx("tail_" + _listener_env, pos, vol + float(tail_db) + linear_to_db(maxf(close_k, 0.05)), delay + 0.02, 0.06)
-	if close_k < 1.0:
-		var far := "shot_%s_far" % cls
-		var far_db := vol + 2.0 - clampf((d - 150.0) / 1250.0, 0.0, 1.0) * 14.0 + linear_to_db(maxf(1.0 - close_k, 0.001))
-		_delayed_sfx(far, pos, far_db, delay, 0.08)
+
+
+func _tail_db() -> float:
+	return float({"indoor": -1.0, "town": -5.0, "forest": -7.0, "field": -6.0}.get(_listener_env, -6.0))
+
+
+func _delayed_tail(db: float, delay: float) -> void:
+	var nm := "tail_" + _listener_env
+	if delay < 0.03:
+		sfx.play_tail(nm, db)
+		return
+	get_tree().create_timer(delay, false).timeout.connect(func(): sfx.play_tail(nm, db))
 
 
 func _delayed_sfx(name: String, pos: Vector3, db: float, delay: float, jitter: float) -> void:
@@ -2407,6 +2444,27 @@ func _run_shot() -> void:
 			var pose := _landmark_pose(a.substr(5))
 			cam_pos = pose[0]
 			cam_look = pose[1]
+		elif a.begins_with("--farm="):
+			# --farm=<n>[,air]: from inside the n-th farm's paddock, or above it.
+			var fa := a.substr(7).split(",")
+			var k := 0
+			for v in world.villages.village_pads:
+				if str(v.type) != "farm":
+					continue
+				if k < int(fa[0]):
+					k += 1
+					continue
+				var c: Vector2 = v.center
+				var r: float = v.radius
+				var hy := terrain.height_at(c.x, c.y)
+				if fa.size() > 1:
+					cam_pos = Vector3(c.x - r * 0.9, hy + r * 1.3, c.y - r * 0.9)
+					cam_look = Vector3(c.x, hy, c.y)
+				else:
+					cam_pos = Vector3(c.x - r * 0.35, hy + 1.8, c.y)
+					cam_look = Vector3(c.x + r, hy + 0.6, c.y + r * 0.25)
+				print("[shot] farm at ", c, " r=", r)
+				break
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--sweep="):
 			await _sweep(a.substr(8))
@@ -6121,6 +6179,74 @@ func _run_camp_test() -> void:
 
 ## A bot walks in through the door, up the stairs to loot on the upper
 ## floor, picks it up, then walks back down and out to the street.
+## Gunfire as heard in the game, for the record (run with --write-movie):
+## your own gun, then the same gun at growing distances, one every 5 s.
+func _run_gun_audio_test() -> void:
+	var cls := "ak"
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--gun="):
+			cls = a.substr(6)
+	music.set_volumes(0.0, 0.0)
+	await get_tree().create_timer(1.0).timeout
+	var cam := get_viewport().get_camera_3d()
+	var ear := cam.global_position if cam != null else Vector3.ZERO
+	var fwd := -cam.global_basis.z if cam != null else Vector3.FORWARD
+	fwd.y = 0.0
+	fwd = fwd.normalized()
+	print("[gunaudio] t=%.1f own" % (Time.get_ticks_msec() / 1000.0))
+	for k in 3:
+		play_own_gunshot(cls)
+		await get_tree().create_timer(0.11).timeout
+	await get_tree().create_timer(4.0).timeout
+	for d in [5.0, 30.0, 80.0, 200.0, 400.0, 800.0, 1200.0]:
+		print("[gunaudio] t=%.1f d=%d" % [Time.get_ticks_msec() / 1000.0, int(d)])
+		_play_gunshot(cls, ear + fwd * d, 0.85)
+		await get_tree().create_timer(5.0 + d / SOUND_SPEED).timeout
+	get_tree().quit()
+
+
+## Bodies come down: killed mid-jump, high up or as a LAN puppet whose last
+## update left it in the air, every body ends on the ground.
+func _run_corpse_test() -> void:
+	_start_match()
+	await get_tree().physics_frame
+	_land_player_now()
+	player.spawn_protect = 9999.0
+	for bt in bots:
+		if is_instance_valid(bt):
+			bt.set_physics_process(false)
+	if zone != null:
+		zone.set_process(false)
+	var fails := 0
+	var cases := [["mid-jump", 6.0, 0.4], ["thrown", 9.0, 3.0], ["ledge", 0.0, 7.0], ["puppet", 0.0, 6.0]]
+	for i in cases.size():
+		var c: Array = cases[i]
+		var b: Bot = bots[i]
+		var spot := _random_ground_point(300.0)
+		b.state = Bot.State.GROUND
+		b.global_position = spot + Vector3.UP * float(c[2])
+		b.velocity = Vector3(0.0, float(c[1]), 0.0)
+		b.set_physics_process(true)
+		await get_tree().physics_frame
+		if c[0] == "puppet":
+			b.puppet = true
+			b.puppet_die()
+		else:
+			b.take_damage(9999.0, b.global_position, false, null)
+		var top := b.global_position.y
+		for k in 300:
+			await get_tree().physics_frame
+			top = maxf(top, b.global_position.y)
+		var g := ground_at(Vector3(b.global_position.x, spot.y + 2.0, b.global_position.z)).y
+		var dy := b.global_position.y - g
+		var ok := absf(dy) < 0.6 and not b.alive
+		if not ok:
+			fails += 1
+		print("[corpse] %s: above ground %.2f m after 5 s (highest %.1f m over the ground) %s" % [c[0], dy, top - g, "ok" if ok else "FAIL"])
+	print("[corpse] ", "ALL GOOD" if fails == 0 else "%d FAILED" % fails)
+	get_tree().quit()
+
+
 func _run_bot_stairs_test() -> void:
 	_start_match()
 	await get_tree().physics_frame
