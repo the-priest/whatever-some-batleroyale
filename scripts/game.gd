@@ -5272,7 +5272,12 @@ func _run_carexit_test() -> void:
 			v.angular_velocity = Vector3.ZERO
 			v._last_vel = Vector3.ZERO
 			v._crash_cd = 2.0
-			for i in 50:
+			# A tipped jeep rights itself after a few seconds: let it settle.
+			for i in (240 if bool(pl[3]) else 50):
+				await get_tree().physics_frame
+				if bool(pl[3]) and i % 30 == 0:
+					print("[carexit]   settle %d up=%.2f hp=%.0f vel=%.1f grounded=%d" % [i, v.global_basis.y.y, v.hp, v.linear_velocity.length(), v._grounded])
+			while v.linear_velocity.length() > 0.3:
 				await get_tree().physics_frame
 			v.hp = Vehicle.MAX_HP
 			for k in 4:

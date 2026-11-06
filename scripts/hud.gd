@@ -1804,21 +1804,44 @@ func _draw_world(ctrl: Control, inner: Rect2, origin: Vector2, span: float, big:
 		var nc: Vector2 = to_map.call(next_center)
 		ctrl.draw_arc(nc, next_radius * scale, 0, TAU, 96, Color(1, 1, 1, 0.9), 1.5)
 
-	# Named places on the big map.
+	# Named places on the big map. Icons always; names only where they do
+	# not overlap one already drawn (towns first, then landmarks), with a
+	# dark outline so they read over any terrain.
 	if big:
-		for pl in places:
-			var mp: Vector2 = to_map.call(pl[1])
-			var kind: String = pl[2]
-			if kind == "town":
-				ctrl.draw_string(font_bold, mp + Vector2(-60, -14), pl[0], HORIZONTAL_ALIGNMENT_CENTER, 120, 13, WHITE)
-			elif kind == "tower":
-				ctrl.draw_colored_polygon(PackedVector2Array([mp + Vector2(0, -7), mp + Vector2(-6, 5), mp + Vector2(6, 5)]), Color(0.95, 0.75, 0.35))
-				ctrl.draw_string(font_bold, mp + Vector2(-50, 18), "LOOKOUT", HORIZONTAL_ALIGNMENT_CENTER, 100, 10, Color(0.95, 0.85, 0.6))
-			elif kind == "landmark":
-				ctrl.draw_circle(mp, 3.5, Color(1.0, 0.82, 0.42))
-				ctrl.draw_string(font_bold, mp + Vector2(-80, -10), pl[0], HORIZONTAL_ALIGNMENT_CENTER, 160, 12, Color(1.0, 0.86, 0.55))
-			elif kind == "ruin":
-				ctrl.draw_rect(Rect2(mp - Vector2(3, 3), Vector2(6, 6)), Color(0.8, 0.78, 0.72), false, 1.5)
+		var taken: Array[Rect2] = []
+		for pass_kind in ["town", "landmark", "tower", "ruin"]:
+			for pl in places:
+				var kind: String = pl[2]
+				if kind != pass_kind:
+					continue
+				var mp: Vector2 = to_map.call(pl[1])
+				if not inner.grow(20.0).has_point(mp):
+					continue
+				match kind:
+					"tower":
+						ctrl.draw_colored_polygon(PackedVector2Array([mp + Vector2(0, -6), mp + Vector2(-5, 4), mp + Vector2(5, 4)]), Color(0.95, 0.75, 0.35))
+					"landmark":
+						ctrl.draw_circle(mp, 3.5, Color(1.0, 0.82, 0.42))
+					"ruin":
+						ctrl.draw_rect(Rect2(mp - Vector2(3, 3), Vector2(6, 6)), Color(0.8, 0.78, 0.72), false, 1.5)
+				if kind != "town" and kind != "landmark":
+					continue
+				var fs := 13 if kind == "town" else 11
+				var txt: String = pl[0]
+				var tw := font_bold.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+				var at := mp + Vector2(-tw * 0.5, -10 if kind == "town" else -8)
+				var box := Rect2(at + Vector2(-2, -fs), Vector2(tw + 4, fs + 4))
+				var clash := false
+				for r in taken:
+					if r.intersects(box):
+						clash = true
+						break
+				if clash:
+					continue
+				taken.append(box)
+				var col := WHITE if kind == "town" else Color(1.0, 0.86, 0.55)
+				ctrl.draw_string_outline(font_bold, at, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 4, Color(0, 0, 0, 0.55))
+				ctrl.draw_string(font_bold, at, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
 	# Markers (supply drops).
 	for m in markers:
 		var mp: Vector2 = to_map.call(Vector2(m.x, m.z))

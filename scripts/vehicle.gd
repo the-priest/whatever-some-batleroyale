@@ -336,7 +336,9 @@ func _physics_process_body(delta: float) -> void:
 		handbrake = true
 		if linear_velocity.length() < 0.3 and angular_velocity.length() < 0.3:
 			_parked_t += delta
-			if _parked_t > 2.0 and _grounded >= 2:
+			# Only an upright jeep parks: one on its side (two wheels touching)
+			# keeps trying to roll back onto its wheels.
+			if _parked_t > 2.0 and _grounded >= 2 and global_basis.y.y > 0.8:
 				_park()
 				_sound(delta)
 				return
@@ -425,11 +427,13 @@ func _physics_process_body(delta: float) -> void:
 	if up.y < 0.35 and linear_velocity.length() < 2.0:
 		_flip_t += delta
 		if _flip_t > 2.5:
-			# Roll it back onto its wheels.
+			# Roll it back onto its wheels (and do not let the roll count as
+			# a crash).
 			var axis := up.cross(Vector3.UP).normalized()
 			if axis.length() > 0.1:
 				apply_torque(axis * mass * 9.0)
 			linear_velocity.y = maxf(linear_velocity.y, 2.5)
+			_crash_cd = maxf(_crash_cd, 1.5)
 	else:
 		_flip_t = 0.0
 	# Crash damage from sudden velocity changes.

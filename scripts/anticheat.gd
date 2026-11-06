@@ -353,7 +353,7 @@ func host_peer_state(pid: int, pos: Vector3, on_ground: bool, seated: bool) -> v
 func host_peer_hit(pid: int, shooter_pos: Vector3, target_pos: Vector3, dmg: float, world: World3D) -> void:
 	if not enabled or _condemned.has(pid):
 		return
-	if dmg > 260.0:
+	if dmg > _max_hit():
 		strike(pid, 3, "damage hack (%.0f in one hit)" % dmg)
 		return
 	if shooter_pos == Vector3.INF:
@@ -362,24 +362,31 @@ func host_peer_hit(pid: int, shooter_pos: Vector3, target_pos: Vector3, dmg: flo
 	if d > 1750.0:
 		strike(pid, 3, "hit from %.0f m away" % d)
 		return
-	# Through solid ground or walls: neither head nor chest in sight.
+	# Through solid ground or walls: no line from anywhere the shooter could
+	# have been (their position here lags, they may be leaning or peeking)
+	# to the target's head or chest.
 	var space := world.direct_space_state
-	var eye := shooter_pos + Vector3.UP * 1.55
-	var blocked := 0
-	for hgt in [1.1, 1.6]:
-		var q := PhysicsRayQueryParameters3D.create(eye, target_pos + Vector3.UP * hgt, 1)
-		var hit := space.intersect_ray(q)
-		if not hit.is_empty() and Vector3(hit["position"]).distance_to(target_pos) > 2.5:
-			blocked += 1
-	if blocked == 2 and d > 15.0:
+	var side := (target_pos - shooter_pos).cross(Vector3.UP).normalized()
+	var seen := false
+	for off in [Vector3.ZERO, side * 1.2, -side * 1.2, Vector3.UP * 0.6]:
+		var eye: Vector3 = shooter_pos + Vector3.UP * 1.55 + off
+		for hgt in [1.1, 1.6]:
+			var q := PhysicsRayQueryParameters3D.create(eye, target_pos + Vector3.UP * hgt, 1)
+			var hit := space.intersect_ray(q)
+			if hit.is_empty() or Vector3(hit["position"]).distance_to(target_pos) <= 2.5:
+				seen = true
+				break
+		if seen:
+			break
+	if not seen and d > 15.0:
 		var w := _pw(pid)
 		var los: Array = w["los"]
 		var now := Time.get_ticks_msec()
 		los.append(now)
 		while los.size() > 0 and now - int(los[0]) > 30000:
 			los.pop_front()
-		if los.size() >= 5:
-			strike(pid, 2, "shooting through walls")
+		if los.size() >= 8:
+			strike(pid, 1, "shooting through walls")
 			w["los"] = []
 
 
@@ -396,6 +403,19 @@ func host_peer_kill(pid: int) -> void:
 	if k.size() >= 7:
 		strike(pid, 2, "%d kills in 10 seconds" % k.size())
 		w["kills"] = []
+
+
+## The hardest legal hit in the game (strongest gun, headshot), with room.
+static var _max_hit_v := -1.0
+
+
+static func _max_hit() -> float:
+	if _max_hit_v < 0.0:
+		for id in Weapons.ORDER:
+			var d: Dictionary = Weapons.def(id)
+			_max_hit_v = maxf(_max_hit_v, float(d.get("damage", 0.0)) * float(d.get("head", 1.0)))
+		_max_hit_v *= 1.15
+	return _max_hit_v
 
 
 func report() -> Array:
