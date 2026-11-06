@@ -1014,9 +1014,13 @@ func _build_oak() -> void:
 	var prof := [[3.4, 0.0], [2.5, 1.2], [2.05, 3.0], [1.85, 6.0], [1.65, 9.0], [1.4, 12.0]]
 	for k in prof.size() - 1:
 		cyl(o + Vector3(0, float(prof[k][1]), 0), float(prof[k][0]), float(prof[k + 1][0]), float(prof[k + 1][1]) - float(prof[k][1]), "bark", 16, true, false)
+	# Where the stair starts, chosen first so no root lands across its foot.
+	var start_a := rng.randf() * TAU
 	# Root buttresses spreading into the ground.
 	for i in 7:
 		var a := TAU * float(i) / 7.0 + rng.randf() * 0.3
+		if absf(wrapf(a - (start_a - 0.25), -PI, PI)) < 0.75:
+			continue
 		var dir := Vector3(cos(a), 0, sin(a))
 		var p0 := o + dir * 2.2 + Vector3.UP * 1.3
 		var p1 := o + dir * rng.randf_range(5.0, 6.5) - Vector3.UP * 0.3
@@ -1050,7 +1054,7 @@ func _build_oak() -> void:
 		var am := (a0 + a1) * 0.5
 		var r := (inner + outer) * 0.5
 		var chord := 2.0 * outer * sin(PI / float(segs)) + 0.12
-		box(o + Vector3(cos(am) * r, deck_y - 0.15, sin(am) * r), Vector3(outer - inner, 0.3, chord), -am + PI * 0.5, "wood")
+		box(o + Vector3(cos(am) * r, deck_y - 0.15, sin(am) * r), Vector3(outer - inner, 0.3, chord), -am, "wood")
 		# Brackets under the deck.
 		if i % 3 == 0:
 			var p0 := o + Vector3(cos(am) * 1.9, deck_y - 2.6, sin(am) * 1.9)
@@ -1058,17 +1062,20 @@ func _build_oak() -> void:
 			box_b(_frame(p1 - p0), (p0 + p1) * 0.5, Vector3(0.25, 0.25, p0.distance_to(p1)), "wood", false)
 	# Spiral plank stair outside the deck, arriving at its edge.
 	var hr := 6.2
-	var start_a := rng.randf() * TAU
 	var turns := 1.15
 	var end_a := start_a + TAU * turns
 	var steps := 46
+	# Start at the ground where the stair begins (the pad's edge can sit a
+	# metre lower than its middle), not at a step you would have to climb.
+	var sp0 := o + Vector3(cos(start_a) * hr, 0, sin(start_a) * hr)
+	var y_start := minf(0.5, terrain.height_at(sp0.x, sp0.z) - o.y + 0.08)
 	for i in steps:
 		var t0 := float(i) / float(steps)
 		var t1 := float(i + 1) / float(steps)
 		var a0 := lerpf(start_a, end_a, t0)
 		var a1 := lerpf(start_a, end_a, t1)
-		var p0 := o + Vector3(cos(a0) * hr, lerpf(0.5, deck_y, t0), sin(a0) * hr)
-		var p1 := o + Vector3(cos(a1) * hr, lerpf(0.5, deck_y, t1), sin(a1) * hr)
+		var p0 := o + Vector3(cos(a0) * hr, lerpf(y_start, deck_y, t0), sin(a0) * hr)
+		var p1 := o + Vector3(cos(a1) * hr, lerpf(y_start, deck_y, t1), sin(a1) * hr)
 		p0.y = maxf(p0.y, terrain.height_at(p0.x, p0.z) + 0.05)
 		var dv := p1 - p0
 		var hb := _frame(dv)

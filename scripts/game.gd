@@ -2132,9 +2132,11 @@ func _play_gunshot(cls: String, pos: Vector3, vol: float) -> void:
 		_delayed_sfx(variant, pos, vol + att + linear_to_db(w_close), delay, 0.04)
 		_delayed_tail(vol + att + _tail_db() + linear_to_db(w_close), delay + 0.02)
 	if w_far > 0.0:
-		_delayed_sfx("shot_%s_far" % cls, pos, vol + att + 3.0 + linear_to_db(w_far), delay, 0.06)
+		# The far recordings spread their energy over a soft front and a long
+		# echo: lift them so a fight across the valley is clearly heard.
+		_delayed_sfx("shot_%s_far" % cls, pos, vol + att + 7.0 + linear_to_db(w_far), delay, 0.06)
 	if w_vfar > 0.0:
-		_delayed_sfx("shot_%s_vfar" % cls, pos, vol + att + 5.0 + linear_to_db(w_vfar), delay, 0.06)
+		_delayed_sfx("shot_%s_vfar" % cls, pos, vol + att + 9.0 + linear_to_db(w_vfar), delay, 0.06)
 
 
 ## Your own gun: the stereo first-person shot right in your hands, and the
@@ -2334,7 +2336,7 @@ func _sweep(spec: String) -> void:
 		var gy3: float = terrain.height_at(p.x, p.y)
 		var tang := Vector2(-sin(a), cos(a))
 		shots.append(["coast_%d" % k, Vector3(p.x, gy3 + 2.0, p.y), Vector3(p.x + tang.x * 20.0, gy3, p.y + tang.y * 20.0)])
-	for nm in ["castle", "castlein", "field", "henge", "lighthouse", "temple", "oak", "bridge", "falls", "spire", "crystals", "crystals2", "dragon", "grove"]:
+	for nm in ["castle", "castlein", "field", "henge", "lighthouse", "temple", "oak", "bridge", "falls", "spire", "crystals", "crystals2", "dragon", "grove", "treetown", "treetown2"]:
 		var pose := _landmark_pose(nm)
 		shots.append(["lm_" + nm, pose[0], pose[1]])
 	var start := int(parts[1]) if parts.size() > 1 else 0
@@ -2397,13 +2399,14 @@ func _landmark_pose(name: String) -> Array:
 		"overview":
 			return [Vector3(200.0, 900.0, 1300.0), Vector3(60.0, 0.0, -50.0)]
 	var fz: Fantasy = world.villages.landmarks.fantasy
-	var pkey := "spire" if name == "spiretop" else name
+	var pkey := "spire" if name == "spiretop" else ("treetown" if name.begins_with("treetown") else name)
 	if fz != null and fz.poi.has(pkey):
 		var e: Array = fz.poi[pkey]
 		var fc: Vector2 = e[0]
 		var fh: float = e[1]
 		var spec: Array = {"spire": [16.0, Vector2(1.0, 0.5), 70.0, 30.0], "spiretop": [27.0, Vector2(0.4, 1.0), 13.0, 30.0], "crystals": [3.0, Vector2(1.0, 0.4), 32.0, 6.0], "crystals2": [3.0, Vector2(-0.6, 1.0), 32.0, 6.0],
-			"dragon": [3.0, Vector2(0.7, 1.0), 40.0, 9.0], "field": [1.0, Vector2(1.0, 0.7), 16.0, 3.5], "grove": [5.0, Vector2(1.0, 0.3), 28.0, 4.0]}.get(name, [4.0, Vector2(1, 0), 40.0, 8.0])
+			"dragon": [3.0, Vector2(0.7, 1.0), 40.0, 9.0], "field": [1.0, Vector2(1.0, 0.7), 16.0, 3.5], "grove": [5.0, Vector2(1.0, 0.3), 28.0, 4.0],
+			"treetown": [45.0, Vector2(1.0, 0.35), 165.0, 20.0], "treetown2": [20.0, Vector2(-0.4, 1.0), 42.0, 22.0], "treetown3": [60.0, Vector2(0.8, -0.6), 30.0, 62.0]}.get(name, [4.0, Vector2(1, 0), 40.0, 8.0])
 		return at.call(fc, fh + float(spec[0]), spec[1], float(spec[2]), float(spec[3]))
 	return [Vector3(0, 300, 600), Vector3.ZERO]
 
@@ -6008,6 +6011,63 @@ func _run_fantasy_test() -> void:
 		player.test_input = Vector2.INF
 		print("[fantasy] %s stair: reached top deck=%s in %.0fs (y %.1f / deck %.1f)" % [hx[0], top, t, player.global_position.y - o.y, deck])
 		all_ok = all_ok and top
+	# Treetop Town: up the spiral stair from the roots to the crow's nest,
+	# then across a rope bridge to a branch lookout.
+	var tt: TreeTown = fz.tree_town
+	if tt != null and not tt.helix.is_empty():
+		var pts: Array = tt.helix
+		player.global_position = (pts[0] as Vector3) + Vector3.UP * 0.6
+		player.velocity = Vector3.ZERO
+		player.mode = Player.Mode.GROUND
+		var t := 0.0
+		var idx := 0
+		var decks_seen := 0
+		var nest := false
+		var top_y := tt.o.y + TreeTown.NEST_Y
+		while t < 120.0:
+			var pp := player.global_position
+			while idx < pts.size() - 1 and pp.distance_to(pts[idx]) > pp.distance_to(pts[idx + 1]):
+				idx += 1
+			var tgt: Vector3 = pts[mini(idx + 2, pts.size() - 1)]
+			var to := tgt - pp
+			player.yaw = atan2(-to.x, -to.z)
+			player.test_input = Vector2(0, -1)
+			await get_tree().physics_frame
+			t += get_physics_process_delta_time()
+			for d in TreeTown.DECKS:
+				if decks_seen < TreeTown.DECKS.size() and absf(pp.y - (tt.o.y + float(d[0]))) < 0.4 and TreeTown.DECKS.find(d) == decks_seen:
+					decks_seen += 1
+			if pp.y > top_y - 0.4:
+				nest = true
+				break
+		print("[fantasy] treetown stair: reached crow's nest=%s in %.0fs (y %.1f / %.1f), passed %d decks" % [nest, t, player.global_position.y - tt.o.y, TreeTown.NEST_Y, decks_seen])
+		all_ok = all_ok and nest
+		if nest:
+			var ba: float = float(tt.bridge_angles()[0])
+			var dir := Vector3(cos(ba), 0, sin(ba))
+			var outer := TreeTown.trunk_r(TreeTown.NEST_Y) + float(TreeTown.DECKS[TreeTown.DECKS.size() - 1][1])
+			var way := [tt.o + dir * (outer - 1.5) + Vector3.UP * TreeTown.NEST_Y, tt.o + dir * TreeTown.LOOKOUT_R + Vector3.UP * TreeTown.NEST_Y]
+			var wi := 0
+			var t2 := 0.0
+			var made := false
+			while t2 < 40.0:
+				var pp := player.global_position
+				var tgt: Vector3 = way[wi]
+				var to := tgt - pp
+				to.y = 0.0
+				if to.length() < 1.2:
+					if wi == way.size() - 1:
+						made = pp.y > top_y - 1.0
+						break
+					wi += 1
+					continue
+				player.yaw = atan2(-to.x, -to.z)
+				player.test_input = Vector2(0, -1)
+				await get_tree().physics_frame
+				t2 += get_physics_process_delta_time()
+			print("[fantasy] treetown bridge: reached lookout=%s in %.0fs (y %.1f)" % [made, t2, player.global_position.y - tt.o.y])
+			all_ok = all_ok and made
+		player.test_input = Vector2.INF
 	# Grove: vault cap to cap.
 	if fz.poi.has("grove_climb"):
 		var climb: Array = fz.poi["grove_climb"]

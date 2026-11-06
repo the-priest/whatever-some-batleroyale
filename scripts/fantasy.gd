@@ -14,6 +14,8 @@ var rng := RandomNumberGenerator.new()
 var sites: Array = []
 ## Where each set piece stands: name -> [centre, ground height].
 var poi: Dictionary = {}
+## Treetop Town, the giant tree (null if the island had no room for it).
+var tree_town: TreeTown
 
 
 func build(p_lm: Landmarks, p_seed: int) -> void:
@@ -35,6 +37,12 @@ func build(p_lm: Landmarks, p_seed: int) -> void:
 	var grove := _site(20.0, 3.0)
 	if grove != Vector2.INF:
 		_build_grove(grove)
+	var town := _site(46.0, 4.0)
+	if town == Vector2.INF:
+		town = _site(38.0, 3.0)
+	if town != Vector2.INF:
+		tree_town = TreeTown.new()
+		tree_town.build(self, town)
 	_build_farms()
 
 

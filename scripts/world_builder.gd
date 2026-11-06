@@ -683,7 +683,7 @@ func _trunk_dims(name: String, canopy: float) -> Vector3:
 				if v.y > 0.4 and v.y < 1.6:
 					r = maxf(r, Vector2(v.x - cx, v.z - cz).length())
 	var h := canopy if canopy < INF else top * 0.6
-	return Vector3(maxf(0.1, r * 0.9), maxf(1.5, h), cx)
+	return Vector3(maxf(0.1, r), maxf(1.5, h), cx)
 
 
 func _mesh_shape(name: String, filter: String, max_y := INF) -> ConcavePolygonShape3D:
@@ -760,14 +760,14 @@ func _find_mesh(node: Node) -> MeshInstance3D:
 
 func _scatter_trees() -> void:
 	var species := [
-		# Full-grown: 12-22 m broadleaves, 14-24 m pines (the kit's trees are
-		# saplings at scale 1).
-		{"name": "CommonTree_3", "w": 0.26, "scale": Vector2(1.25, 2.15)},
-		{"name": "CommonTree_4", "w": 0.24, "scale": Vector2(1.25, 2.1)},
-		{"name": "CommonTree_5", "w": 0.18, "scale": Vector2(1.3, 2.2)},
-		{"name": "Pine_4", "w": 0.18, "scale": Vector2(1.35, 2.3)},
-		{"name": "Pine_5", "w": 0.10, "scale": Vector2(1.4, 2.4)},
-		{"name": "DeadTree_5", "w": 0.02, "scale": Vector2(0.6, 0.9)},
+		# Old growth: 18-32 m broadleaves, 20-35 m pines with trunks you can
+		# hide behind (the kit's trees are saplings at scale 1).
+		{"name": "CommonTree_3", "w": 0.26, "scale": Vector2(1.85, 3.1)},
+		{"name": "CommonTree_4", "w": 0.24, "scale": Vector2(1.85, 3.05)},
+		{"name": "CommonTree_5", "w": 0.18, "scale": Vector2(1.9, 3.2)},
+		{"name": "Pine_4", "w": 0.18, "scale": Vector2(2.0, 3.35)},
+		{"name": "Pine_5", "w": 0.10, "scale": Vector2(2.05, 3.5)},
+		{"name": "DeadTree_5", "w": 0.02, "scale": Vector2(0.9, 1.3)},
 	]
 	var picks: Dictionary = {}
 	for s in species:
@@ -784,7 +784,7 @@ func _scatter_trees() -> void:
 			continue
 		if terrain.slope_at(x, z) > 0.52:
 			continue
-		if _near_village(x, z, 38.0) or _road_distance(x, z) < 3.0:
+		if _near_village(x, z, 42.0) or _road_distance(x, z) < 4.5:
 			continue
 		var forest := terrain.forest_density(x, z)
 		# Real woods where the forest map is high, open meadows elsewhere.
@@ -792,7 +792,7 @@ func _scatter_trees() -> void:
 		chance = clampf(chance, 0.0, 0.92)
 		if rng.randf() > chance:
 			continue
-		var spacing := 5.6 if forest > 0.62 else 7.5
+		var spacing := 7.6 if forest > 0.62 else 10.0
 		var cell := "%d_%d_%d" % [int(x / spacing), int(z / spacing), int(spacing)]
 		if grid.has(cell):
 			continue
@@ -809,8 +809,8 @@ func _scatter_trees() -> void:
 		var sr: Vector2 = picks[chosen].scale
 		var k := pow(rng.randf(), 0.8)
 		var sc := lerpf(sr.x, sr.y, k)
-		if rng.randf() < 0.06:
-			sc *= 1.25
+		if rng.randf() < 0.07:
+			sc *= 1.3
 		placements.append({"name": chosen, "pos": Vector3(x, h - 0.25, z), "rot": rng.randf_range(0.0, TAU), "scale": sc})
 
 	# Batch into 300 m tiles per species so frustum culling can do its job.
