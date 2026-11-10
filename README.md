@@ -1,8 +1,8 @@
 # Block Royale
 
-A battle royale on a generated fantasy archipelago, built with Godot 4.7 (GL Compatibility
+A battle royale on a generated fantasy archipelago, built with Godot 4.7 (Forward+
 renderer). Drop from the plane with up to 99 bots (64 players by default, set in Settings), loot,
-and be the last one standing, alone or with friends over LAN. A full match runs about 40-45 minutes.
+and be the last one standing, alone or with friends on a game one of you hosts. A full match runs about 40-45 minutes.
 
 Open the project in Godot 4.7 and press Play, or export with the presets in `export_presets.cfg`.
 
@@ -26,7 +26,7 @@ Open the project in Godot 4.7 and press Play, or export with the presets in `exp
 | 4 / 5 / 6 | Bandage / medkit / energy drink |
 | G | Throw frag grenade |
 | M | Full map (frees the mouse: left click marks a spot, e.g. where to land; right click removes it) |
-| M then mouse wheel | Zoom the map |
+| M then mouse wheel | Zoom the map on the cursor |
 | Esc | Pause menu (sensitivity, volume) |
 
 In deep water you swim (gun lowered): Shift swims faster, C dives (watch the air bar), Space climbs
@@ -57,17 +57,16 @@ The main menu's **Loadout** screen picks a primary, a secondary and an optic. Wi
 this loadout" on, you land with them and a few boxes of their ammo (bots land armed too); turn it
 off to loot everything from scratch.
 
-## LAN multiplayer
+## Multiplayer
 
-Everyone must be on the same network (same Wi-Fi or router), or on a virtual LAN such as
-ZeroTier, Tailscale or Radmin VPN when playing over the internet. Up to 8 players. Everyone needs
-the same version of the game (an older build is refused with a message). Direct Connect accepts
-`address` or `address:port` (default port 24555, UDP).
+One player hosts from their own game; up to 8 players. It works on a local network and over the
+internet. Everyone needs the same version (another build is refused with a message).
 
-1. One player presses **HOST LAN** in the main menu. The lobby shows their address, with a
+1. One player presses **HOST GAME** in the main menu. The lobby shows their address, with a
    button to copy it.
-2. The others press **JOIN LAN**. Games on the network appear in the server list; click one, or
-   type the host's address under Direct Connect.
+2. The others press **JOIN GAME**. Games on the same network appear in the server list; click
+   one. For a game over the internet, type the host's address under Direct Connect (`address` or
+   `address:port`), and the password if the host set one.
 3. In the lobby:
    - Every player has a slot with their colour, ping and ready state. There is a chat (press
      Enter to type).
@@ -75,6 +74,33 @@ the same version of the game (an older build is refused with a message). Direct 
      everyone lands with their loadout.
 4. Everyone presses **READY**. The host presses **START MATCH** (or **FORCE START**), and a
    5-second countdown drops the whole lobby into the same plane.
+
+### Hosting over the internet
+
+- Press **OPEN TO THE INTERNET** in the lobby. The game asks your router to pass the port through
+  (UPnP) and then shows the address to share. If the router refuses, forward **UDP 24555** to your
+  PC by hand, or use a virtual LAN (ZeroTier, Tailscale, Radmin VPN).
+- Type a **PASSWORD** in the lobby to lock it. Joining players prove they know it against a
+  one-time challenge; the password itself is never sent.
+- **KICK** on a player's slot removes them; Shift + click bans their address (bans are kept in
+  `bans.json` in the game's user folder). In a match the host can type these in chat:
+  `/kick NAME`, `/ban NAME`, `/unban`, `/password [NEW]`, `/open`.
+- If Windows asks whether to allow the game through the firewall, allow it. Ports: UDP 24555
+  (game) and UDP 24556 (finding games on the local network).
+
+### How it is kept fair
+
+- The connection is encrypted (DTLS).
+- Players talk to the host only. Whatever a player's game reports (movement, shots, hits, loot,
+  jeeps, chat) goes through the host, which checks who sent it, how often, and whether it is
+  possible, before anyone else hears of it. Nobody can speak as another player or as the host.
+- The host runs the bots, the storm, loot and supply drops, and decides eliminations and the win.
+- The anti-cheat watches every player from the host and each player's own game: speed and
+  teleport hacks, impossible damage or range, shooting through solid ground, rapid fire, edited
+  health, ammo or weapons. Flooding the host gets a player kicked.
+- A player whose connection drops, or whose game crashes, gets their place and kit back when
+  they rejoin within two minutes. That takes the session token their game was given, so nobody
+  can take over another player's character by using their name.
 
 In a match:
 
@@ -90,17 +116,14 @@ In a match:
   name tags, on the compass and on the map. There is no friendly fire.
 - When the match ends, Space or Esc returns everyone to the lobby to ready up again.
 
-Joining players load the host's island automatically. The host runs the bots, the storm, loot
-and supply drops. If Windows asks whether to allow the game through the firewall, allow it on
-private networks. The game uses UDP ports 24555 (game) and 24556 (LAN discovery). Everyone must
-run the same build.
+Joining players load the host's island automatically.
 
 ## Jeeps
 
 Off-road jeeps are parked along the roads. Press **F** next to one to drive, or ride as a passenger
 (four seats). W/S drive and brake, A/D steer, Space is the handbrake, and the mouse looks around.
 Jeeps take bullet and crash damage and explode when wrecked. Running someone over at speed is
-lethal. In LAN games the driver's machine simulates the jeep and everyone sees the same thing.
+lethal. In multiplayer the driver's machine simulates the jeep and everyone sees the same thing.
 
 ## Graphics
 
@@ -113,7 +136,7 @@ Settings, then **GRAPHICS**, cycles four presets:
   soft shadows and further draw distance. Aim for an RTX 2060 / RX 6600 class GPU.
 
 Each match rolls its weather and time of day: clear noon, golden hour, misty morning, overcast or
-a thunderstorm (LAN games share the host's). In the storm the rain stops at roofs and trees, so it
+a thunderstorm (multiplayer games share the host's). In the storm the rain stops at roofs and trees, so it
 never rains indoors; the downpour goes muffled under a roof, and lightning flashes with the thunder
 rolling in a few seconds later.
 
@@ -162,6 +185,13 @@ The storm closes in eight phases. It starts slow and weak, so there is time to l
 then each circle gets tighter, faster and more painful. The next safe zone is shown on the map as
 soon as it is chosen. Supply drops land during the match. The plane flies at 520 m. Pull the
 chute early to glide over 1 km, or dive and pull late to land first.
+
+The map (M) and the minimap show the island as it is: hills with height lines, every tree,
+roads, and every building with its roof. The storm is the purple haze outside the current circle;
+the white ring is the next safe zone. While you are outside it, the minimap draws the way there
+and says how far it is. The minimap opens up when you drive or fall, squad mates and marks that
+are off it show on its rim, and the full map has a key, a scale bar and grid references (A-H,
+1-8, 300 m squares).
 
 ## Credits
 
