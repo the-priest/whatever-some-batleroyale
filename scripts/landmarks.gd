@@ -741,7 +741,7 @@ func _build_castle() -> void:
 		_mats["straw"] = straw
 	for k in 3:
 		var dp: Vector3 = L.call(9.0 + float(k) * 2.6, 0, 5.0)
-		box(dp + Vector3(0, 0.9, 0), Vector3(0.14, 1.8, 0.14), yaw, "wood", false)
+		box(dp + Vector3(0, 0.9, 0), Vector3(0.14, 1.8, 0.14), yaw, "wood")
 		box(dp + Vector3(0, 1.35, 0), Vector3(0.5, 0.8, 0.32), yaw + 0.2 * float(k), "straw")
 		box(dp + Vector3(0, 1.45, 0), Vector3(1.2, 0.1, 0.1), yaw + 0.2 * float(k), "wood", false)
 		box(dp + Vector3(0, 1.95, 0), Vector3(0.3, 0.32, 0.3), yaw + 0.2 * float(k), "straw", false)

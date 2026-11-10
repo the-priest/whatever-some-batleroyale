@@ -715,7 +715,7 @@ func flatten_circle(cx: float, cz: float, radius: float, shoulder: float = 22.0,
 		# to below the water it stands beside (that drowned a whole city), and
 		# keep it above the beach so it grows grass, not sand.
 		var dry := water_surface_at(cx, cz) + 2.9
-		if goal < dry:
+		if goal < dry - 1.6:
 			print("[terrain] terrace at (%.0f, %.0f) r=%.0f raised from %.2f to %.2f to stay dry" % [cx, cz, radius, goal, dry])
 			goal = dry
 

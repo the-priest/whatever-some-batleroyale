@@ -4683,7 +4683,25 @@ func _run_loose_audit() -> void:
 		var bb: AABB = gdata.bb
 		var c := bb.get_center()
 		print("[loose] FLOATING %.1f m up: %d part(s) of %s at (%.0f, %.1f, %.0f) size (%.1f, %.1f, %.1f) near %s" % [gdata.gap, gdata.n, gdata.owner, c.x, c.y, c.z, bb.size.x, bb.size.y, bb.size.z, _place_name(c)])
-	print("[loose] %s" % ("ALL GOOD" if floating.is_empty() else "%d FLOATING" % floating.size()))
+	# Houses whose corners hang over a slope (daylight under the wall), or
+	# that are sunk into the ground.
+	var hanging := 0
+	for h in world.villages.houses:
+		var hc: Vector2 = h.center
+		var worst := 0.0
+		var deepest := 0.0
+		for sx: float in [-0.5, 0.0, 0.5]:
+			for sz: float in [-0.5, 0.0, 0.5]:
+				var q := hc + Vector2(float(h.w) * sx, float(h.d) * sz).rotated(-float(h.yaw))
+				var gap := float(h.pad) - terrain.height_at(q.x, q.y)
+				worst = maxf(worst, gap)
+				deepest = minf(deepest, gap)
+		# (A stone footing goes 2.6 m down: only a deeper drop shows daylight.)
+		if worst > 2.5 or deepest < -0.3:
+			hanging += 1
+			print("[loose] HOUSE at (%.0f, %.0f) near %s: floor %.2f m above the ground at one corner, %.2f m below it at another" % [hc.x, hc.y, _place_name(Vector3(hc.x, 0, hc.y)), worst, -deepest])
+	print("[loose] %d of %d houses do not sit on their ground" % [hanging, world.villages.houses.size()])
+	print("[loose] %s" % ("ALL GOOD" if floating.is_empty() and hanging == 0 else "%d FLOATING, %d HOUSES OFF THE GROUND" % [floating.size(), hanging]))
 	get_tree().quit()
 
 

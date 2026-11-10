@@ -675,6 +675,15 @@ func _door_for(to_center: Vector2, yaw_house: float) -> int:
 	return 0 if local.y > 0.0 else 2
 
 
+## A stone footing under a building, down into the ground. Wherever the land
+## falls away from a corner you see masonry, never daylight under the wall.
+func _foundation(origin: Vector3, b: Basis, yaw: float, w: float, d: float) -> void:
+	var size := Vector3(w + 0.5, 2.6, d + 0.5)
+	var at := origin - Vector3(0, size.y * 0.5 + 0.03, 0)
+	_proc_box(Transform3D(b.scaled_local(size), at), "stone")
+	_add_box_collider(at, size, yaw)
+
+
 func _build_house(h: Dictionary) -> void:
 	var center: Vector2 = h.center
 	var yaw_house: float = h.yaw
@@ -684,6 +693,7 @@ func _build_house(h: Dictionary) -> void:
 	var style: String = h.style
 	var house_basis := Basis(Vector3.UP, yaw_house)
 	var origin := Vector3(center.x, pad, center.y)
+	_foundation(origin, house_basis, yaw_house, w, d)
 
 	# Floor tiles.
 	var floor_key := "Floor_Brick" if rng.randf() < 0.45 else "Floor_WoodDark"
@@ -1481,6 +1491,7 @@ func _build_tower(t: Dictionary) -> void:
 	var origin := Vector3(c.x, pad, c.y)
 	var half := 3.0
 	t["yaw"] = yaw
+	_foundation(origin, b, yaw, 6.0, 6.0)
 	var door_side := rng.randi_range(0, 3)
 	# Never put the door behind the stair (side 1 is +x, where the stair runs).
 	if door_side == 1:
