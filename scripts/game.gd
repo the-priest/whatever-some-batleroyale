@@ -3588,6 +3588,8 @@ func _shot_state(st: String) -> void:
 			for b in bots:
 				if is_instance_valid(b) and b.alive:
 					b.take_damage(9999.0, b.global_position, false, p)
+		"loading":
+			hud.show_loading("GROWING THE FORESTS", 0.6)
 		"pause":
 			hud.show_pause(true)
 		"settings":

@@ -1057,16 +1057,19 @@ func _build_pause() -> void:
 	var resume := _button("RESUME", true)
 	resume.pressed.connect(_on_resume_button)
 	resume.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	resume.custom_minimum_size.x = 0.0
 	brow.add_child(resume)
 	_pause_resume = resume
 	var quit := _button("LEAVE MATCH", false)
 	quit.pressed.connect(func(): quit_pressed.emit())
 	quit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	quit.custom_minimum_size.x = 0.0
 	brow.add_child(quit)
 	_pause_leave = quit
 	var exit := _button("QUIT GAME", false)
 	exit.pressed.connect(func(): get_tree().quit())
 	exit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	exit.custom_minimum_size.x = 0.0
 	brow.add_child(exit)
 
 
