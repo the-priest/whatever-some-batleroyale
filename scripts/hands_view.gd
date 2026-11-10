@@ -65,6 +65,8 @@ var g_ring: Node3D
 var g_spoon: Node3D
 
 var _drops: Array[MeshInstance3D] = []
+## Holding a gun (when no item is in use): {xf, grip, fore, scale, hand, pistol}.
+var _gun: Dictionary = {}
 var _debris: Dictionary = {}
 
 
@@ -168,7 +170,8 @@ func _arm(left: bool) -> Node3D:
 	var cuff_m := _mat("cuff", GLOVE.darkened(0.25), 0.6)
 	var fore := _node(root)
 	# Bare forearm with the sleeve rolled up past the middle.
-	_mi(fore, _cyl(0.041, 0.034, 0.2, 16), skin, Vector3(0, 0, 0.1), Vector3(PI * 0.5, 0, 0))
+	var bare := _mi(fore, _cyl(0.041, 0.034, 0.2, 16), skin, Vector3(0, 0, 0.1), Vector3(PI * 0.5, 0, 0))
+	root.set_meta("bare", bare)
 	var roll_up := TorusMesh.new()
 	roll_up.inner_radius = 0.036
 	roll_up.outer_radius = 0.056
@@ -394,13 +397,18 @@ func update(active: bool, p_item: String, t: float, delta: float) -> void:
 	var t_in: float = {"vault": 0.06, "grenade": 0.12, "swim": 0.3}.get(item, 0.2)
 	_show = move_toward(_show, 1.0 if active else 0.0, delta / (t_in if active else 0.17))
 	if _show <= 0.0:
-		visible = false
 		cam_pitch = lerpf(cam_pitch, 0.0, clampf(delta * 10.0, 0.0, 1.0))
 		item = ""
+		if not _gun.is_empty():
+			visible = true
+			_pose_gun()
+			return
+		visible = false
 		return
 	visible = true
 	arm_l.visible = true
 	arm_r.visible = true
+	_sleeves(false)
 	var e := _show * _show * (3.0 - 2.0 * _show)
 	position = Vector3(0.0, -(1.0 - e) * 0.32, (1.0 - e) * 0.06)
 	rotation = Vector3(-(1.0 - e) * 0.55, 0.0, 0.0)
@@ -468,7 +476,68 @@ func _aim_fore(arm: Node3D, elbow: Vector3) -> void:
 	var dir := (wrist - elbow).normalized()
 	var up := Vector3.UP if absf(dir.y) < 0.95 else Vector3.FORWARD
 	var g := Basis.looking_at(dir, up)
-	fore.basis = arm.basis.inverse() * g
+	fore.basis = arm.basis.orthonormalized().inverse() * g
+
+
+## The gun in hand (view space transform of the gun, its hand points in the
+## normalised model, the gun's view scale, the hands' scale). {} = no gun.
+func set_gun(d: Dictionary) -> void:
+	_gun = d
+
+
+## The gun moved this frame (recoil, bolt, sway): keep the hands on it.
+func refresh_gun(xf: Transform3D) -> void:
+	if _gun.is_empty() or item != "" or not visible:
+		return
+	_gun["xf"] = xf
+	_pose_gun()
+
+
+## Sleeves down (holding a gun) or rolled up (healing, swimming).
+func _sleeves(down: bool) -> void:
+	var m: Material = _mat("sleeve", SLEEVE, 0.95) if down else null
+	for a: Node3D in [arm_l, arm_r]:
+		var bare: MeshInstance3D = a.get_meta("bare")
+		bare.material_override = m
+		bare.scale = Vector3(1.22, 1.0, 1.22) if down else Vector3.ONE
+
+
+func _pose_gun() -> void:
+	_sleeves(true)
+	position = Vector3.ZERO
+	rotation = Vector3.ZERO
+	arm_l.visible = true
+	arm_r.visible = true
+	for n: Node3D in [roll, kit, syringe, can, grenade]:
+		n.visible = false
+	strip.visible = false
+	var gx: Transform3D = _gun.xf
+	var s: float = _gun.scale
+	var hs: float = _gun.hand
+	var sc := func(t: Transform3D) -> Transform3D:
+		return Transform3D(t.basis, t.origin * hs)
+	# Right hand round the pistol grip, which leans back at the bottom.
+	var grip_b := Basis(Vector3.RIGHT, -0.3)
+	var pr := gx * Transform3D(grip_b, (_gun.grip as Vector3) * s)
+	var wr: Transform3D = pr * sc.call(_grip_cyl(0.019, false))
+	arm_r.transform = Transform3D(wr.basis.scaled(Vector3.ONE * hs), wr.origin)
+	_aim_fore(arm_r, ELBOW_R)
+	_curl(arm_r, 1.12, 0.85)
+	if bool(_gun.pistol):
+		# Support hand wrapped round the shooting hand, a little lower.
+		var pl := gx * Transform3D(grip_b, (_gun.grip as Vector3) * s + Vector3(-0.004, -0.016, 0.006))
+		var wl: Transform3D = pl * sc.call(_grip_cyl(0.026, true))
+		arm_l.transform = Transform3D(wl.basis.scaled(Vector3.ONE * hs), wl.origin)
+		_aim_fore(arm_l, Vector3(-0.16, -0.6, -0.12))
+		_curl(arm_l, 1.05, 0.6)
+		return
+	# Left hand under the handguard, the barrel along its palm.
+	var fb := Basis(Vector3(1, 0, 0), Vector3(0, 0, -1), Vector3(0, 1, 0))
+	var pf := gx * Transform3D(fb, (_gun.fore as Vector3) * s + Vector3(0, -0.006, 0))
+	var wf: Transform3D = pf * sc.call(_grip_cyl(0.024, true))
+	arm_l.transform = Transform3D(wf.basis.scaled(Vector3.ONE * hs), wf.origin)
+	_aim_fore(arm_l, ELBOW_L)
+	_curl(arm_l, 0.9, 0.55)
 
 
 func _place(arm: Node3D, xf: Transform3D, elbow: Vector3) -> void:

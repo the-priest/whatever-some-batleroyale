@@ -35,6 +35,8 @@ var fullscreen := true
 var upscaling := 0
 var vsync := true
 var show_fps := true
+## Choice settings (HUD.OPTS): key -> index.
+var options: Dictionary = {}
 const HEAR_RANGE := 70.0
 const PING_RANGE := 160.0
 
@@ -183,6 +185,12 @@ func _ready() -> void:
 		music.set_volumes(a, b)
 		_save_settings())
 	hud.music_skip.connect(func(): music.skip())
+	hud.option_changed.connect(func(key, value):
+		options[key] = value
+		_apply_options()
+		if key in ["shadows", "lighting", "reflections", "ao", "fog", "bloom", "aa", "draw", "grass", "brightness"]:
+			_apply_graphics()
+		_save_settings())
 	hud.video_changed.connect(func(up, vs, fps):
 		upscaling = up
 		vsync = vs
@@ -380,6 +388,7 @@ func _create_player() -> void:
 	player.notice.connect(_on_notice)
 	player.inventory_changed.connect(_on_inventory_changed)
 	player.mouse_sens = 0.0022 * mouse_sens
+	_apply_options()
 	menu_cam.make_current()
 
 
@@ -403,6 +412,9 @@ func _load_settings() -> void:
 		upscaling = clampi(int(cfg.get_value("video", "upscaling", 0)), 0, 3)
 		vsync = bool(cfg.get_value("video", "vsync", true))
 		show_fps = bool(cfg.get_value("video", "show_fps", true))
+		for k in HUD.OPTS:
+			if cfg.has_section_key("options", k):
+				options[k] = int(cfg.get_value("options", k))
 	if not Weapons.DEFS.has(loadout_primary):
 		loadout_primary = "carbine"
 	if not Weapons.DEFS.has(loadout_secondary):
@@ -414,7 +426,10 @@ func _load_settings() -> void:
 	hud.set_music(music_menu, music_match)
 	hud.set_graphics(graphics_quality)
 	hud.set_video(upscaling, vsync, show_fps)
+	hud.set_options(options)
+	options = hud.opts.duplicate()
 	_apply_vsync()
+	_apply_options()
 	# Screenshots and tests keep the window they were given.
 	var scripted := false
 	for a in OS.get_cmdline_user_args():
@@ -471,6 +486,8 @@ func _save_settings() -> void:
 	cfg.set_value("video", "upscaling", upscaling)
 	cfg.set_value("video", "vsync", vsync)
 	cfg.set_value("video", "show_fps", show_fps)
+	for k in options:
+		cfg.set_value("options", k, options[k])
 	cfg.set_value("match", "players", match_size)
 	cfg.set_value("loadout", "primary", loadout_primary)
 	cfg.set_value("loadout", "secondary", loadout_secondary)
@@ -3611,6 +3628,9 @@ func _shot_state(st: String) -> void:
 			hud.show_loading("GROWING THE FORESTS", 0.6)
 		"pause":
 			hud.show_pause(true)
+			for a3 in OS.get_cmdline_user_args():
+				if a3.begins_with("--tab="):
+					hud._show_tab(int(a3.substr(6)))
 		"settings":
 			_quit_to_menu()
 			hud._open_settings()
@@ -6086,6 +6106,21 @@ func _run_drive_test() -> void:
 ## Apply the graphics preset to the world's lights, environment and foliage.
 ## Adaptive vsync: no tearing at full rate, no stutter below it (plain vsync
 ## halves the frame rate in steps whenever a frame runs a little late).
+## Player, frame-rate and interface options from Settings.
+func _apply_options() -> void:
+	var o := func(k: String) -> int: return int(options.get(k, HUD.OPTS[k][2]))
+	Engine.max_fps = [0, 30, 60, 90, 120, 144, 165, 240][clampi(o.call("fps_cap"), 0, 7)]
+	if DisplayServer.get_name() != "headless":
+		get_tree().root.content_scale_factor = [0.85, 1.0, 1.15, 1.3][clampi(o.call("ui_scale"), 0, 3)]
+	if player != null:
+		player.invert_y = o.call("invert_y") == 1
+		player.aim_toggle = o.call("aim_mode") == 1
+		player.crouch_toggle = o.call("crouch_mode") == 1
+		player.bob_scale = [1.0, 0.4, 0.0][clampi(o.call("head_bob"), 0, 2)]
+		player.shake_scale = [1.0, 0.45, 0.0][clampi(o.call("shake"), 0, 2)]
+		player.vm_offset = [Vector3.ZERO, Vector3(-0.085, 0.02, 0.0), Vector3(0.0, -0.045, 0.03)][clampi(o.call("viewmodel"), 0, 2)]
+
+
 func _apply_vsync() -> void:
 	if DisplayServer.get_name() == "headless":
 		return
@@ -6098,8 +6133,8 @@ func _apply_graphics() -> void:
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--quality="):
 			graphics_quality = clampi(int(arg.substr(10)), 0, 3)
-	Graphics.apply(graphics_quality, world.environment, world.sun, world.fill_light, get_viewport(), world.world_env, upscaling)
-	var k := Graphics.draw_scale(graphics_quality)
+	Graphics.apply(graphics_quality, world.environment, world.sun, world.fill_light, get_viewport(), world.world_env, upscaling, options)
+	var k := Graphics.draw_scale(graphics_quality, options)
 	for n in world.find_children("*", "MultiMeshInstance3D", true, false):
 		var mmi := n as MultiMeshInstance3D
 		if not mmi.has_meta("vr"):
@@ -6108,7 +6143,8 @@ func _apply_graphics() -> void:
 		if base > 0.0:
 			mmi.visibility_range_end = base * k
 	if world.grass != null and DisplayServer.get_name() != "headless":
-		world.grass.set_radius([0.0, 26.0, 36.0, 46.0][graphics_quality])
+		var gr := int(options.get("grass", 0))
+		world.grass.set_radius([0.0, 26.0, 36.0, 46.0][graphics_quality] if gr == 0 else [0.0, 0.0, 22.0, 36.0, 52.0][gr])
 	print("[gfx] renderer=%s quality=%s" % [RenderingServer.get_current_rendering_method(), Graphics.NAMES[graphics_quality]])
 
 

@@ -233,10 +233,27 @@ func _locked() -> bool:
 var test_hold: Dictionary = {}
 
 
+## Player options (Settings).
+var invert_y := false
+var aim_toggle := false
+var crouch_toggle := false
+var bob_scale := 1.0
+var shake_scale := 1.0
+var vm_offset := Vector3.ZERO
+var _aim_on := false
+var _crouch_on := false
+
+
 func _ap(action: String) -> bool:
 	if test_hold.has(action):
 		return true
-	return not _locked() and Input.is_action_pressed(action)
+	if _locked():
+		return false
+	if action == "aim" and aim_toggle:
+		return _aim_on
+	if action == "crouch" and crouch_toggle:
+		return _crouch_on
+	return Input.is_action_pressed(action)
 
 
 func _ajp(action: String) -> bool:
@@ -262,13 +279,23 @@ func _vec(a: String, b: String, c: String, d: String) -> Vector2:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if not alive:
+		_aim_on = false
+		_crouch_on = false
 		return
+	# Toggle aim / crouch (Settings, CONTROLS).
+	if aim_toggle and event.is_action_pressed("aim") and not _locked():
+		_aim_on = not _aim_on
+	if crouch_toggle and not _locked():
+		if event.is_action_pressed("crouch"):
+			_crouch_on = not _crouch_on
+		elif event.is_action_pressed("jump") and _crouch_on:
+			_crouch_on = false
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		var mm: InputEventMouseMotion = event
 		look_delta += mm.relative
 		var k := mouse_sens * _ads_sens_scale()
 		yaw -= mm.relative.x * k
-		pitch -= mm.relative.y * k
+		pitch -= mm.relative.y * k * (-1.0 if invert_y else 1.0)
 		pitch = clampf(pitch, deg_to_rad(-89.0), deg_to_rad(89.0))
 		sway += mm.relative * 0.00012
 		sway = sway.clamp(Vector2(-0.06, -0.06), Vector2(0.06, 0.06))
@@ -1005,15 +1032,15 @@ func _update_camera(delta: float) -> void:
 	if mode == Mode.GROUND:
 		var planar := Vector2(velocity.x, velocity.z).length()
 		var amt := clampf(planar / SPRINT, 0.0, 1.0) * lerpf(1.0, 0.25, aim_blend)
-		bob_y = sin(bob * 2.0) * 0.024 * amt
-		bob_x = cos(bob) * 0.020 * amt
+		bob_y = sin(bob * 2.0) * 0.024 * amt * bob_scale
+		bob_x = cos(bob) * 0.020 * amt * bob_scale
 	var lean_off := Basis(Vector3.UP, yaw) * Vector3(lean * 0.45, -absf(lean) * 0.06, 0.0)
 	_cam_local = _cam_local.lerp(Vector3(bob_x, cam_base.y + bob_y - land_dip * 0.12, 0.0) + lean_off, clampf(delta * 18.0, 0.0, 1.0))
 	_damage_flash = maxf(0.0, _damage_flash - delta)
 
 
 func add_trauma(amount: float) -> void:
-	trauma = clampf(trauma + amount, 0.0, 1.0)
+	trauma = clampf(trauma + amount * shake_scale, 0.0, 1.0)
 
 
 ## Current cone of fire in degrees, the same number the shot code uses.
@@ -1072,6 +1099,17 @@ func _update_hands(delta: float) -> void:
 		var period := 2.6 if planar < 0.8 else (0.87 if planar > SWIM_SPEED + 0.3 else 1.26)
 		_swim_phase = fmod(_swim_phase + delta / period, 1.0)
 		t = _swim_phase
+	# Hands on the gun whenever nothing else needs them.
+	if act == "" and has_gun() and gun_holder.visible and _gun_scale > 0.0:
+		var md := Weapons.model(current_id())
+		if md.has("grip"):
+			var gl := float(Weapons.def(current_id()).get("len", 0.8))
+			hands.set_gun({"xf": gun_holder.transform, "grip": md["grip"], "fore": md["fore"], "scale": _gun_scale,
+				"hand": clampf(_gun_scale / maxf(gl * 1.1, 0.2), 0.5, 0.95), "pistol": Weapons.cls(current_id()) == "pistol"})
+		else:
+			hands.set_gun({})
+	else:
+		hands.set_gun({})
 	hands.update(act != "", act, t, delta)
 	var busy := act in ["vault", "grenade"] or healing
 	heal_blend = move_toward(heal_blend, 1.0 if busy else 0.0, delta / (0.12 if busy else 0.2))
@@ -1181,6 +1219,9 @@ func _update_weapon(delta: float) -> void:
 
 	gun_holder.position = pos
 	gun_holder.rotation = rot
+	# Where the gun sits on screen (Settings); aimed, it is on the sights.
+	view.position = vm_offset * (1.0 - ads_e)
+	hands.refresh_gun(gun_holder.transform)
 
 	# Sniper scope: hide the gun and let the HUD draw the scope.
 	var scoped := cur_zoom() >= 1.9 and aim_blend > 0.92
@@ -1937,6 +1978,14 @@ func _rebuild_viewmodel() -> void:
 	aim_blend = 0.0
 	bolt_t = -1.0
 	bloom = 0.0
+	_no_view_shadows()
+
+
+## Nothing held in view throws a shadow into the world (it would be a
+## giant floating gun on the ground).
+func _no_view_shadows() -> void:
+	for n in view.find_children("*", "GeometryInstance3D", true, false):
+		(n as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 
 func _emit_health() -> void:

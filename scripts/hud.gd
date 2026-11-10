@@ -7,6 +7,7 @@ signal music_skip
 signal graphics_changed(quality: int)
 signal fullscreen_changed(on: bool)
 signal video_changed(upscaling: int, vsync: bool, show_fps: bool)
+signal option_changed(key: String, value: int)
 signal chat_sent(text: String)
 signal chat_closed
 signal map_clicked(world: Vector2, button: int)
@@ -116,6 +117,36 @@ var upscaling := 0
 var vsync_on := true
 var show_fps := true
 var lbl_fps: Label
+## Every setting that is a list of choices: key -> [label, choices, default].
+## Graphics ones start at AUTO (follow the preset).
+const OPTS := {
+	"invert_y": ["INVERT MOUSE Y", ["OFF", "ON"], 0],
+	"aim_mode": ["AIM DOWN SIGHTS", ["HOLD", "TOGGLE"], 0],
+	"crouch_mode": ["CROUCH", ["HOLD", "TOGGLE"], 0],
+	"fps_cap": ["FRAME RATE LIMIT", ["UNLIMITED", "30", "60", "90", "120", "144", "165", "240"], 0],
+	"ui_scale": ["INTERFACE SIZE", ["85%", "100%", "115%", "130%"], 1],
+	"brightness": ["BRIGHTNESS", ["80%", "90%", "100%", "110%", "120%", "130%"], 2],
+	"shadows": ["SHADOWS", ["AUTO", "OFF", "LOW", "MEDIUM", "HIGH"], 0],
+	"lighting": ["LIGHTING", ["AUTO", "BASIC", "SCREEN-SPACE GI", "RAY-MARCHED GI"], 0],
+	"reflections": ["REFLECTIONS", ["AUTO", "OFF", "ON"], 0],
+	"ao": ["AMBIENT OCCLUSION", ["AUTO", "OFF", "ON"], 0],
+	"fog": ["VOLUMETRIC FOG", ["AUTO", "OFF", "ON"], 0],
+	"bloom": ["BLOOM", ["AUTO", "OFF", "ON"], 0],
+	"aa": ["ANTI-ALIASING", ["AUTO", "OFF", "FXAA", "TAA"], 0],
+	"draw": ["DRAW DISTANCE", ["AUTO", "NEAR", "NORMAL", "FAR", "MAX"], 0],
+	"grass": ["GRASS", ["AUTO", "OFF", "SHORT", "MEDIUM", "FAR"], 0],
+	"crosshair": ["CROSSHAIR", ["CROSS", "CROSS + DOT", "DOT", "CIRCLE", "T"], 1],
+	"xhair_color": ["CROSSHAIR COLOUR", ["WHITE", "GREEN", "YELLOW", "CYAN", "PINK", "RED"], 0],
+	"head_bob": ["HEAD BOB", ["FULL", "REDUCED", "OFF"], 0],
+	"shake": ["CAMERA SHAKE", ["FULL", "REDUCED", "OFF"], 0],
+	"hitmarkers": ["HIT MARKERS", ["ON", "OFF"], 0],
+	"viewmodel": ["GUN POSITION", ["NORMAL", "CENTRED", "LOW"], 0],
+}
+const XHAIR_COLS := [Color(0.95, 0.96, 0.97), Color(0.45, 1.0, 0.45), Color(1.0, 0.92, 0.3), Color(0.35, 0.95, 1.0), Color(1.0, 0.45, 0.85), Color(1.0, 0.3, 0.25)]
+var opts: Dictionary = {}
+var _opt_buttons: Dictionary = {}
+var _tabs: Array = []
+var _tab_buttons: Array = []
 var _fps_t := 0.0
 var _fps_frames := 0
 var _fps_worst := 0.0
@@ -878,7 +909,7 @@ func _build_pause() -> void:
 	root.add_child(pause_panel)
 	var bg := ColorRect.new()
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	bg.color = Color(0.01, 0.012, 0.014, 0.7)
+	bg.color = Color(0.01, 0.012, 0.014, 0.84)
 	pause_panel.add_child(bg)
 	_pause_bg = bg
 
@@ -888,25 +919,28 @@ func _build_pause() -> void:
 	outer.set_anchors_preset(Control.PRESET_CENTER)
 	outer.offset_left = -320
 	outer.offset_right = 320
-	outer.offset_top = -270
-	outer.offset_bottom = 270
+	outer.offset_top = -300
+	outer.offset_bottom = 300
 	outer.alignment = BoxContainer.ALIGNMENT_CENTER
 	outer.add_theme_constant_override("separation", 10)
 	pause_panel.add_child(outer)
 	_pause_title = _lv("PAUSED", 44, WHITE)
 	outer.add_child(_pause_title)
 	outer.add_child(_spacer(4))
-	var cols := HBoxContainer.new()
-	cols.add_theme_constant_override("separation", 40)
-	outer.add_child(cols)
-	var col := VBoxContainer.new()
-	col.custom_minimum_size = Vector2(300, 0)
-	col.add_theme_constant_override("separation", 8)
-	cols.add_child(col)
-	var col2 := VBoxContainer.new()
-	col2.custom_minimum_size = Vector2(300, 0)
-	col2.add_theme_constant_override("separation", 8)
-	cols.add_child(col2)
+	# Tabs: CONTROLS, VIDEO, GRAPHICS, AUDIO, GAME.
+	var bar := HBoxContainer.new()
+	bar.add_theme_constant_override("separation", 6)
+	outer.add_child(bar)
+	var holder := VBoxContainer.new()
+	holder.custom_minimum_size = Vector2(640, 330)
+	outer.add_child(holder)
+	var t_controls := _tab("CONTROLS", holder, bar)
+	var t_video := _tab("VIDEO", holder, bar)
+	var t_gfx := _tab("GRAPHICS", holder, bar)
+	var t_audio := _tab("AUDIO", holder, bar)
+	var t_game := _tab("GAME", holder, bar)
+	var col: VBoxContainer = t_controls[0]
+	var col2: VBoxContainer = t_controls[1]
 
 	lbl_sens = _lv("MOUSE SENSITIVITY", 12, MUTED)
 	col.add_child(lbl_sens)
@@ -934,6 +968,10 @@ func _build_pause() -> void:
 		scope_sens_changed.emit(v))
 	col.add_child(scope_sens_slider)
 
+	_opt_row(col, "invert_y")
+	_opt_row(col, "aim_mode")
+	_opt_row(col2, "crouch_mode")
+	col = t_audio[0]
 	lbl_vol = _lv("VOLUME", 12, MUTED)
 	col.add_child(lbl_vol)
 	vol_slider = HSlider.new()
@@ -945,8 +983,8 @@ func _build_pause() -> void:
 	vol_slider.value_changed.connect(func(_v): _settings_changed())
 	col.add_child(vol_slider)
 
-	lbl_gfx = _lv("GRAPHICS", 12, MUTED)
-	col2.add_child(lbl_gfx)
+	lbl_gfx = _lv("PRESET   ·   THE ONES BELOW ON AUTO FOLLOW IT", 12, MUTED)
+	t_gfx[0].add_child(lbl_gfx)
 	gfx_button = _button("HIGH", false)
 	gfx_button.custom_minimum_size = Vector2(300, 36)
 	gfx_button.add_theme_font_size_override("font_size", 14)
@@ -955,7 +993,12 @@ func _build_pause() -> void:
 		gfx_quality = (gfx_quality + 1) % 4
 		_settings_labels()
 		graphics_changed.emit(gfx_quality))
-	col2.add_child(gfx_button)
+	t_gfx[0].add_child(gfx_button)
+	for k in ["shadows", "lighting", "reflections", "ao"]:
+		_opt_row(t_gfx[0], k)
+	for k in ["fog", "bloom", "aa", "draw", "grass"]:
+		_opt_row(t_gfx[1], k)
+	col2 = t_video[0]
 
 	col2.add_child(_lv("DISPLAY   ·   F11 OR ALT + ENTER", 12, MUTED))
 	display_button = _button("FULLSCREEN", false)
@@ -998,7 +1041,10 @@ func _build_pause() -> void:
 		video_changed.emit(upscaling, vsync_on, show_fps))
 	vrow.add_child(fps_button)
 	col2.add_child(vrow)
+	for k in ["fps_cap", "brightness", "ui_scale"]:
+		_opt_row(t_video[1], k)
 
+	col = t_audio[0]
 	lbl_music_menu = _lv("MENU MUSIC", 12, MUTED)
 	col.add_child(lbl_music_menu)
 	music_menu_slider = HSlider.new()
@@ -1029,6 +1075,7 @@ func _build_pause() -> void:
 	mrow.add_child(skipb)
 	col.add_child(mrow)
 
+	col2 = t_controls[1]
 	lbl_fov = _lv("FIELD OF VIEW", 12, MUTED)
 	col2.add_child(lbl_fov)
 	fov_slider = HSlider.new()
@@ -1040,6 +1087,7 @@ func _build_pause() -> void:
 	fov_slider.value_changed.connect(func(_v): _settings_changed())
 	col2.add_child(fov_slider)
 
+	col2 = t_game[0]
 	lbl_size = _lv("MATCH SIZE", 12, MUTED)
 	col2.add_child(lbl_size)
 	size_slider = HSlider.new()
@@ -1050,7 +1098,13 @@ func _build_pause() -> void:
 	size_slider.custom_minimum_size = Vector2(300, 22)
 	size_slider.value_changed.connect(func(_v): _settings_changed())
 	col2.add_child(size_slider)
-	outer.add_child(_spacer(10))
+	for k in ["crosshair", "xhair_color", "hitmarkers"]:
+		_opt_row(t_game[0], k)
+	for k in ["viewmodel", "head_bob", "shake"]:
+		_opt_row(t_game[1], k)
+	_show_tab(0)
+	_opt_labels()
+	outer.add_child(_spacer(6))
 	var brow := HBoxContainer.new()
 	brow.add_theme_constant_override("separation", 10)
 	outer.add_child(brow)
@@ -1132,6 +1186,89 @@ func set_fullscreen(on: bool, tell := false) -> void:
 			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_MAXIMIZED)
 	if tell:
 		fullscreen_changed.emit(on)
+
+
+func opt(key: String) -> int:
+	return int(opts.get(key, OPTS[key][2]))
+
+
+func set_options(d: Dictionary) -> void:
+	for k in OPTS:
+		opts[k] = clampi(int(d.get(k, OPTS[k][2])), 0, (OPTS[k][1] as Array).size() - 1)
+	_opt_labels()
+
+
+func _opt_labels() -> void:
+	for k in _opt_buttons:
+		(_opt_buttons[k] as Button).text = "◀   %s   ▶" % str(OPTS[k][1][opt(k)])
+
+
+## A setting with a label over a button that steps through its choices
+## (left click forward, right click back).
+func _opt_row(parent: Control, key: String) -> void:
+	parent.add_child(_lv(str(OPTS[key][0]), 12, MUTED))
+	var b := _button("", false)
+	b.custom_minimum_size = Vector2(300, 34)
+	b.add_theme_font_size_override("font_size", 13)
+	b.button_mask = MOUSE_BUTTON_MASK_LEFT | MOUSE_BUTTON_MASK_RIGHT
+	b.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventMouseButton and ev.pressed and (ev as InputEventMouseButton).button_index == MOUSE_BUTTON_RIGHT:
+			_step_opt(key, -1)
+			b.accept_event())
+	b.pressed.connect(func(): _step_opt(key, 1))
+	parent.add_child(b)
+	_opt_buttons[key] = b
+
+
+func _step_opt(key: String, d: int) -> void:
+	sfx_click()
+	var n := (OPTS[key][1] as Array).size()
+	opts[key] = (opt(key) + d + n) % n
+	_opt_labels()
+	if crosshair != null:
+		crosshair.queue_redraw()
+	option_changed.emit(key, opt(key))
+
+
+## A tab of the settings screen: two columns.
+func _tab(title: String, holder: Control, bar: HBoxContainer) -> Array:
+	var page := HBoxContainer.new()
+	page.add_theme_constant_override("separation", 40)
+	page.visible = _tabs.is_empty()
+	holder.add_child(page)
+	var c1 := VBoxContainer.new()
+	c1.custom_minimum_size = Vector2(300, 0)
+	c1.add_theme_constant_override("separation", 7)
+	page.add_child(c1)
+	var c2 := VBoxContainer.new()
+	c2.custom_minimum_size = Vector2(300, 0)
+	c2.add_theme_constant_override("separation", 7)
+	page.add_child(c2)
+	var idx := _tabs.size()
+	_tabs.append(page)
+	var tb := _button(title, false)
+	tb.custom_minimum_size = Vector2(0, 32)
+	tb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tb.add_theme_font_size_override("font_size", 12)
+	tb.pressed.connect(func(): sfx_click(); _show_tab(idx))
+	bar.add_child(tb)
+	_tab_buttons.append(tb)
+	return [c1, c2]
+
+
+func _show_tab(i: int) -> void:
+	for k in _tabs.size():
+		(_tabs[k] as Control).visible = k == i
+		var tb: Button = _tab_buttons[k]
+		var on := k == i
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(ACCENT.r, ACCENT.g, ACCENT.b, 0.22) if on else Color(1, 1, 1, 0.05)
+		sb.border_color = ACCENT if on else Color(1, 1, 1, 0.12)
+		sb.border_width_bottom = 2
+		sb.set_corner_radius_all(3)
+		for st in ["normal", "hover", "pressed", "focus"]:
+			tb.add_theme_stylebox_override(st, sb)
+		tb.add_theme_color_override("font_color", WHITE if on else MUTED)
 
 
 func set_video(up: int, vs: bool, fps: bool) -> void:
@@ -1238,7 +1375,7 @@ func set_graphics(q: int) -> void:
 
 func _settings_labels() -> void:
 	if gfx_button != null:
-		var hint: String = ["  ·  FAST", "  ·  BALANCED", "  ·  SSIL · REFLECTIONS · VOLUMETRICS", "  ·  SDFGI RAY-MARCHED GI · RTX 2060+"][gfx_quality]
+		var hint: String = ["  ·  FASTEST", "  ·  BALANCED", "  ·  RICH LIGHT", "  ·  BEST · RTX 3060+"][gfx_quality]
 		gfx_button.text = "◀   %s%s   ▶" % [Graphics.NAMES[gfx_quality], hint]
 	if lbl_music_menu != null:
 		lbl_music_menu.text = "MENU MUSIC   %s" % ("OFF" if music_menu_slider.value <= 0.001 else "%d%%" % int(music_menu_slider.value * 100.0))
@@ -1965,18 +2102,30 @@ func _draw_crosshair() -> void:
 		return
 	var gap := 4.0 + spread
 	var ln := 7.0
-	var col := Color(0.95, 0.96, 0.97, 0.85)
+	var base: Color = XHAIR_COLS[opt("xhair_color")]
+	var col := Color(base.r, base.g, base.b, 0.88)
 	var sh := Color(0, 0, 0, 0.55)
-	for d: Vector2 in [Vector2(1, 0), Vector2(-1, 0), Vector2(0, 1), Vector2(0, -1)]:
-		var a: Vector2 = c + d * gap
-		var b: Vector2 = c + d * (gap + ln)
-		crosshair.draw_line(a + Vector2(1, 1), b + Vector2(1, 1), sh, 2.0)
-		crosshair.draw_line(a, b, col, 1.6)
-	crosshair.draw_circle(c, 1.15, Color(0.95, 0.96, 0.97, 0.55))
+	var style := opt("crosshair")
+	if style == 3:
+		# A circle that opens up with the spread.
+		crosshair.draw_arc(c + Vector2(1, 1), gap + 3.0, 0, TAU, 40, sh, 2.0, true)
+		crosshair.draw_arc(c, gap + 3.0, 0, TAU, 40, col, 1.5, true)
+	elif style != 2:
+		var arms: Array[Vector2] = [Vector2(1, 0), Vector2(-1, 0), Vector2(0, 1), Vector2(0, -1)]
+		if style == 4:
+			arms = [Vector2(1, 0), Vector2(-1, 0), Vector2(0, 1)]
+		for d: Vector2 in arms:
+			var a: Vector2 = c + d * gap
+			var b: Vector2 = c + d * (gap + ln)
+			crosshair.draw_line(a + Vector2(1, 1), b + Vector2(1, 1), sh, 2.0)
+			crosshair.draw_line(a, b, col, 1.6)
+	if style == 1 or style == 2 or style == 3:
+		crosshair.draw_circle(c, 2.0, sh)
+		crosshair.draw_circle(c, 1.3, col)
 
 
 func _draw_hitmarker() -> void:
-	if hit_t <= 0.0:
+	if hit_t <= 0.0 or opt("hitmarkers") == 1:
 		return
 	var a := clampf(hit_t / 0.18, 0.0, 1.0)
 	var col := DANGER if hit_kill else Color(1, 1, 1, 0.95)

@@ -680,8 +680,39 @@ func _build_farms() -> void:
 		# Hay bales and a scarecrow inside the paddock.
 		lm._begin("FarmYard%d" % n)
 		var hp := c + Vector2(cos(float(v.axis) + 2.4), sin(float(v.axis) + 2.4)) * (vr - 5.0)
+		var taken: Array[Vector2] = []
 		if not villages.blocks_house(hp, 1.8):
 			_hay_stack(Vector3(hp.x, terrain.height_at(hp.x, hp.y), hp.y), float(v.axis))
+			taken.append(hp)
+		# The rest of the yard: a vegetable patch, a trough, a woodpile.
+		for item in ["patch", "trough", "woodpile"]:
+			var rad: float = {"patch": 2.2, "trough": 1.2, "woodpile": 1.3}[item]
+			for k in 16:
+				var ang := float(v.axis) + 0.9 + TAU * float(k) / 16.0
+				var yp := c + Vector2(cos(ang), sin(ang)) * (vr - 2.2 - rad)
+				var free := not villages.blocks_house(yp, rad + 0.6) and villages.road_distance(yp.x, yp.y) > rad + 2.0
+				for q in taken:
+					if q.distance_to(yp) < rad + 2.6:
+						free = false
+				if not free or terrain.roughness(yp.x, yp.y, rad) > 1.3:
+					continue
+				taken.append(yp)
+				# Facing along the fence, sat on its lowest corner (so no
+				# corner floats; the uphill side goes a little into the turf).
+				var yy := -ang
+				var low := INF
+				for ca in 8:
+					var cq := yp + Vector2(cos(TAU * float(ca) / 8.0), sin(TAU * float(ca) / 8.0)) * rad
+					low = minf(low, terrain.height_at(cq.x, cq.y))
+				var gp := Vector3(yp.x, low - 0.03, yp.y)
+				match item:
+					"patch":
+						_veg_patch(gp, yy)
+					"trough":
+						_trough(gp, yy)
+					"woodpile":
+						_woodpile(gp, yy)
+				break
 		lm._end(900.0)
 		n += 1
 		if placed:
@@ -752,6 +783,116 @@ func _wheat_field(fc: Vector2, ang: float, wheat: ArrayMesh, mat: ShaderMaterial
 	lm.clear_areas.append({"center": fc, "radius": 7.5})
 	if not poi.has("field"):
 		poi["field"] = [fc, fy]
+
+
+## Raised beds of dark soil with rows of cabbages and leeks.
+func _veg_patch(p: Vector3, yaw: float) -> void:
+	_farm_mats()
+	var b := Basis(Vector3.UP, yaw)
+	for row in 3:
+		var rz := -0.95 + float(row) * 0.95
+		lm.box_b(b, p + b * Vector3(0, 0.07, rz), Vector3(3.4, 0.2, 0.62), "soil", false)
+		# Plank edging round each bed.
+		for sz: float in [-1.0, 1.0]:
+			lm.box_b(b, p + b * Vector3(0, 0.1, rz + sz * 0.33), Vector3(3.5, 0.2, 0.05), "wood", false)
+		for k in 5:
+			var cp := p + b * Vector3(-1.3 + float(k) * 0.65, 0.17, rz)
+			if row == 1:
+				# Leeks: a few blades standing up.
+				for j in 3:
+					var lb := b * Basis(Vector3.UP, float(j) * 1.1) * Basis(Vector3.RIGHT, 0.25)
+					lm.box_b(lb, cp + Vector3(0, 0.2, 0), Vector3(0.05, 0.42, 0.015), "leafy", false)
+			else:
+				lathe(cp, [[0.0, 0.0], [0.19, 0.06], [0.22, 0.16], [0.15, 0.27], [0.0, 0.31]], 9, "leafy", false)
+
+
+## A plank water trough on two trestles.
+func _trough(p: Vector3, yaw: float) -> void:
+	_farm_mats()
+	var b := Basis(Vector3.UP, yaw)
+	for sx: float in [-0.7, 0.7]:
+		lm.box_b(b, p + b * Vector3(sx, 0.2, 0), Vector3(0.12, 0.4, 0.75), "wood_dark", false)
+	lm.box_b(b, p + b * Vector3(0, 0.44, 0), Vector3(1.9, 0.08, 0.66), "wood", false)
+	for sz: float in [-1.0, 1.0]:
+		lm.box_b(b, p + b * Vector3(0, 0.64, sz * 0.3), Vector3(1.9, 0.36, 0.06), "wood", false)
+	for sx: float in [-1.0, 1.0]:
+		lm.box_b(b, p + b * Vector3(sx * 0.92, 0.64, 0), Vector3(0.06, 0.36, 0.6), "wood", false)
+	lm.box_b(b, p + b * Vector3(0, 0.74, 0), Vector3(1.78, 0.02, 0.54), "trough_water", false)
+	_solid(p + Vector3(0, 0.42, 0), b, Vector3(1.9, 0.84, 0.7))
+
+
+## Split logs stacked between two posts: round, with their sawn ends out.
+func _woodpile(p: Vector3, yaw: float) -> void:
+	var b := Basis(Vector3.UP, yaw)
+	var length := 1.7
+	for sx: float in [-1.0, 1.0]:
+		lm.box_b(b, p + b * Vector3(0, 0.6, sx * 0.86), Vector3(0.12, 1.2, 0.12), "wood_dark", false)
+	var r := 0.12
+	var rows := [4, 3, 3, 2]
+	for layer in rows.size():
+		var cnt: int = rows[layer]
+		for k in cnt:
+			var off := (float(k) - float(cnt - 1) * 0.5) * (r * 2.05) + (0.06 if layer % 2 == 1 else 0.0)
+			var y := r + float(layer) * r * 1.8
+			var jitter := rng.randf_range(-0.08, 0.08)
+			var a := p + b * Vector3(-length * 0.5 + jitter, y, off)
+			var e := p + b * Vector3(length * 0.5 + jitter, y, off)
+			_log(a, e, r * rng.randf_range(0.85, 1.05))
+	# A plank roof against the rain.
+	lm.box_b(b * Basis(Vector3.RIGHT, 0.18), p + b * Vector3(0, 1.26, 0), Vector3(2.0, 0.05, 2.0), "wood_dark", false)
+	_solid(p + Vector3(0, 0.45, 0), b, Vector3(1.9, 0.9, 1.0))
+
+
+## A round log from `a` to `b`: grain along it, sawn rings on its ends.
+func _log(a: Vector3, e: Vector3, r: float) -> void:
+	var st := lm._surface("wood")
+	var axis := (e - a).normalized()
+	var u := axis.cross(Vector3.UP if absf(axis.y) < 0.9 else Vector3.RIGHT).normalized()
+	var w := axis.cross(u).normalized()
+	Wood.grain(st, axis, true)
+	var n := 9
+	for i in n:
+		var a0 := TAU * float(i) / float(n)
+		var a1 := TAU * float(i + 1) / float(n)
+		var d0 := u * cos(a0) + w * sin(a0)
+		var d1 := u * cos(a1) + w * sin(a1)
+		var nm := (d0 + d1).normalized()
+		lm._quad(st, a + d0 * r, e + d0 * r, e + d1 * r, a + d1 * r, nm)
+		lm._tri(st, e, e + d0 * r, e + d1 * r, axis)
+		lm._tri(st, a, a + d1 * r, a + d0 * r, -axis)
+	Wood.begin(st)
+
+
+func _solid(c: Vector3, b: Basis, size: Vector3) -> void:
+	var cs := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = size
+	cs.shape = shape
+	cs.transform = Transform3D(b, c)
+	lm._body.add_child(cs)
+	lm._stat.shapes += 1
+
+
+func _farm_mats() -> void:
+	if lm._mats.has("soil"):
+		return
+	var soil := StandardMaterial3D.new()
+	soil.albedo_texture = load("res://assets/textures/tex_dirt.png")
+	soil.albedo_color = Color(0.55, 0.42, 0.32)
+	soil.uv1_triplanar = true
+	soil.uv1_world_triplanar = true
+	soil.uv1_scale = Vector3.ONE * 0.6
+	soil.roughness = 1.0
+	lm._mats["soil"] = soil
+	var leafy := StandardMaterial3D.new()
+	leafy.albedo_color = Color(0.38, 0.62, 0.26)
+	leafy.roughness = 0.75
+	lm._mats["leafy"] = leafy
+	var tw := StandardMaterial3D.new()
+	tw.albedo_color = Color(0.2, 0.36, 0.42)
+	tw.metallic = 0.3
+	tw.roughness = 0.08
+	lm._mats["trough_water"] = tw
 
 
 func _hay_stack(p: Vector3, yaw: float) -> void:

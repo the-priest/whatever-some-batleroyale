@@ -568,7 +568,10 @@ static func model(id: String) -> Dictionary:
 						front_y = maxf(front_y, v[i + j].y)
 		_add_surface(body, bv, bn, t["mat"])
 		_add_surface(mag, mv, mn, t["mat"])
+	var hands := _hand_points(tris, low_cut, all_y_min, mag_mode, mag_center if has_mag else Vector3.INF)
 	var out := {
+		"grip": hands[0],
+		"fore": hands[1],
 		"body": body,
 		"mag": mag if has_mag and mag.get_surface_count() > 0 else null,
 		"mag_center": mag_center,
@@ -577,6 +580,74 @@ static func model(id: String) -> Dictionary:
 	}
 	_models[id] = out
 	return out
+
+
+## Where the hands go, in the normalised model (1 m long, muzzle at -Z):
+## [pistol grip, underside of the handguard]. Found from what hangs below
+## the receiver: the magazine, the grip, a pump.
+static func _hand_points(tris: Array, low_cut: float, y_min: float, mag_mode: String, mag_c: Vector3) -> Array:
+	var bins := {}
+	for t in tris:
+		for wv in (t["v"] as PackedVector3Array):
+			if wv.y < low_cut:
+				var k := int(floor(wv.z / 0.02))
+				bins[k] = minf(float(bins.get(k, 1e9)), wv.y)
+	var keys: Array = bins.keys()
+	keys.sort()
+	var groups: Array = []
+	for k in keys:
+		if groups.is_empty() or int(k) - int(groups[-1][-1]) > 2:
+			groups.append([k])
+		else:
+			groups[-1].append(k)
+	groups = groups.filter(func(g): return g.size() >= 2)
+	var gz := func(g: Array) -> float: return (float(g[0]) + float(g[-1]) + 1.0) * 0.01
+	var gl := func(g: Array) -> float:
+		var lo := 1e9
+		for k in g:
+			lo = minf(lo, float(bins[k]))
+		return lo
+	var grip_g: Array = []
+	match mag_mode:
+		"grip":
+			if not groups.is_empty():
+				grip_g = groups[-1]
+		"rear":
+			# Bullpup: the grip is the drop in front of the magazine.
+			for g in groups:
+				if gz.call(g) < mag_c.z - 0.06:
+					grip_g = g
+		"front":
+			for g in groups:
+				if mag_c != Vector3.INF and gz.call(g) > mag_c.z + 0.05 and gz.call(g) < 0.4:
+					grip_g = g
+					break
+		_:
+			var best := 1e9
+			for g in groups:
+				var z: float = gz.call(g)
+				if z > -0.08 and z < 0.4 and absf(z - 0.14) < best:
+					best = absf(z - 0.14)
+					grip_g = g
+	var grip := Vector3(0, low_cut - 0.06, 0.15)
+	if not grip_g.is_empty():
+		var bottom: float = gl.call(grip_g)
+		grip = Vector3(0, low_cut - (low_cut - bottom) * 0.42, gz.call(grip_g))
+	# Support hand: under the handguard, a hand's width ahead of the
+	# magazine (or of the grip), on its underside.
+	var fz := grip.z - 0.32
+	if mag_mode == "front" and mag_c != Vector3.INF:
+		fz = mag_c.z - 0.17
+	elif mag_mode == "none" and groups.size() > 1 and gz.call(groups[0]) < grip.z - 0.15:
+		# A pump or a fore-end hanging under the barrel.
+		fz = gz.call(groups[0])
+	fz = clampf(fz, -0.42, grip.z - 0.14)
+	var under := low_cut + 0.04
+	for t in tris:
+		for wv in (t["v"] as PackedVector3Array):
+			if absf(wv.z - fz) < 0.03 and wv.y < under:
+				under = minf(under, wv.y) if wv.y > low_cut - 0.08 else under
+	return [grip, Vector3(0, under, fz)]
 
 
 static func _add_surface(m: ArrayMesh, v: PackedVector3Array, n: PackedVector3Array, mat: Material) -> void:
@@ -595,35 +666,60 @@ static var _mat_cache: Dictionary = {}
 
 ## Takes the pack's flat colours and makes them read as gun materials:
 ## dark parts become satin gunmetal, warm colours stay matte (wood, polymer).
+## Finishes by part name in the gun kit: [colour, metallic, roughness].
+const GUN_FINISH := {
+	"wood": [Color(0.46, 0.25, 0.12), 0.0, 0.55],
+	"darkwood": [Color(0.31, 0.16, 0.08), 0.0, 0.6],
+	"black": [Color(0.075, 0.078, 0.085), 0.25, 0.55],
+	"grey": [Color(0.13, 0.135, 0.14), 0.1, 0.62],
+	"darkmetal": [Color(0.11, 0.115, 0.125), 0.7, 0.36],
+	"metal": [Color(0.17, 0.175, 0.185), 0.8, 0.3],
+	"lightmetal": [Color(0.3, 0.31, 0.32), 0.85, 0.26],
+	"main": [Color(0.5, 0.42, 0.3), 0.05, 0.62],
+	"mainlight": [Color(0.58, 0.5, 0.37), 0.05, 0.62],
+	"maindark": [Color(0.085, 0.09, 0.095), 0.2, 0.55],
+	"glass": [Color(0.04, 0.09, 0.16), 0.9, 0.05],
+}
+
+
 static func _gun_material(src: Material) -> Material:
 	var key := src.get_instance_id() if src != null else 0
 	if _mat_cache.has(key):
 		return _mat_cache[key]
 	var col := Color(0.2, 0.2, 0.22)
+	var name := ""
 	if src is BaseMaterial3D:
 		col = (src as BaseMaterial3D).albedo_color
+		name = src.resource_name.to_lower()
 	var m := StandardMaterial3D.new()
-	m.albedo_color = col
-	var lum := col.r * 0.3 + col.g * 0.59 + col.b * 0.11
-	var warm := col.r > col.b * 1.25
-	if lum < 0.25 and not warm:
-		# Gunmetal: lift the near-black so it does not vanish, satin sheen.
-		m.albedo_color = col.lerp(Color(0.2, 0.205, 0.21), 0.45)
-		m.metallic = 0.35
-		m.roughness = 0.38
-	elif warm:
-		m.roughness = 0.75
-		m.metallic = 0.0
+	if GUN_FINISH.has(name):
+		# A proper finish for each part: walnut, blued and parkerised steel,
+		# polymer, a tan furniture set, glass.
+		var f: Array = GUN_FINISH[name]
+		m.albedo_color = f[0]
+		m.metallic = f[1]
+		m.roughness = f[2]
+		m.metallic_specular = 0.6
 	else:
-		m.roughness = 0.55
-		m.metallic = 0.15
+		m.albedo_color = col
+		var lum := col.r * 0.3 + col.g * 0.59 + col.b * 0.11
+		var warm := col.r > col.b * 1.25
+		if lum < 0.25 and not warm:
+			m.albedo_color = col.lerp(Color(0.2, 0.205, 0.21), 0.45)
+			m.metallic = 0.35
+			m.roughness = 0.38
+		elif warm:
+			m.roughness = 0.75
+		else:
+			m.roughness = 0.55
+			m.metallic = 0.15
 	m.rim_enabled = true
-	m.rim = 0.25
-	m.rim_tint = 0.3
+	m.rim = 0.18
+	m.rim_tint = 0.4
 	# Keep the gun readable in deep shade (first person sits right in it).
 	m.emission_enabled = true
-	m.emission = m.albedo_color.lightened(0.3)
-	m.emission_energy_multiplier = 0.12
+	m.emission = m.albedo_color.lightened(0.25)
+	m.emission_energy_multiplier = 0.05
 	_mat_cache[key] = m
 	return m
 
