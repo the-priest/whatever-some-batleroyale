@@ -186,6 +186,10 @@ func _ready() -> void:
 
 	body = SoldierRig.new()
 	add_child(body)
+	# The body you see glides between the 60 Hz physics steps (see _process),
+	# so soldiers move smoothly on fast screens.
+	body.top_level = true
+	body.global_transform = global_transform
 	rig = body
 	anim = body.anim
 
@@ -280,6 +284,31 @@ func _physics_process(delta: float) -> void:
 		Prof.add("bots", Time.get_ticks_usec() - t0)
 	else:
 		_physics_process_body(delta)
+	_xf_prev = _xf_cur if _xf_set else global_transform
+	_xf_cur = global_transform
+	_xf_set = true
+	if _xf_prev.origin.distance_to(_xf_cur.origin) > 6.0:
+		_xf_prev = _xf_cur
+
+
+var _xf_prev := Transform3D.IDENTITY
+var _xf_cur := Transform3D.IDENTITY
+var _xf_set := false
+
+
+func _process(_delta: float) -> void:
+	if body == null:
+		return
+	if not _xf_set or not is_physics_processing():
+		body.global_transform = global_transform
+		return
+	var xf := _xf_prev.interpolate_with(_xf_cur, clampf(Engine.get_physics_interpolation_fraction(), 0.0, 1.0))
+	# Moved outside the physics step (a teleport, a seat): follow at once.
+	if xf.origin.distance_to(global_position) > 6.0:
+		xf = global_transform
+		_xf_prev = xf
+		_xf_cur = xf
+	body.global_transform = xf
 
 
 func _physics_process_body(delta: float) -> void:

@@ -205,15 +205,39 @@ func _push_view() -> void:
 		m.set_shader_parameter("view_origin", origin)
 		m.set_shader_parameter("view_span", sp)
 		m.set_shader_parameter("px_per_m", ppm)
-	_vec.queue_redraw()
+	# Roads and buildings are drawn once round the view and then only slid
+	# and scaled as the view moves; redrawn when it leaves that area or the
+	# zoom changes a lot (redrawing them every frame cost frame time).
+	var view := Rect2(origin, sp)
+	var ratio := _drawn_span / span if _drawn_span > 0.0 else 0.0
+	if ratio < 0.85 or ratio > 1.18 or not _drawn_rect.encloses(view) or _drawn_size != sz:
+		_drawn_origin = origin
+		_drawn_span = span
+		_drawn_size = sz
+		_drawn_rect = view.grow(span * 0.5)
+		_vec.scale = Vector2.ONE
+		_vec.position = Vector2.ZERO
+		_vec.queue_redraw()
+	else:
+		var k := sz.x / span
+		_vec.scale = Vector2.ONE * ratio
+		_vec.position = (_drawn_origin - origin) * k
+
+
+## What the vector layer was last drawn for.
+var _drawn_origin := Vector2.ZERO
+var _drawn_span := 0.0
+var _drawn_size := Vector2.ZERO
+var _drawn_rect := Rect2()
 
 
 # -------------------------------------------------------------- vectors --
 func _draw_vectors() -> void:
 	if not _has_world:
 		return
-	var k := size.x / span
-	var view := Rect2(origin, Vector2(span, span * size.y / maxf(size.x, 1.0)))
+	var dorg := _drawn_origin
+	var k := size.x / _drawn_span
+	var view := _drawn_rect
 	var roads: PackedInt32Array
 	var houses: PackedInt32Array
 	var blocks: PackedInt32Array
@@ -249,8 +273,8 @@ func _draw_vectors() -> void:
 				continue
 			var bridge: bool = r[3]
 			var w := maxf(float(r[2]) * 1.5 * k, 1.25)
-			var pa := (a - origin) * k
-			var pb := (b - origin) * k
+			var pa := (a - dorg) * k
+			var pb := (b - dorg) * k
 			if pass_i == 0:
 				var edge := BRIDGE_EDGE if bridge else ROAD_EDGE
 				var we := w + (2.6 if bridge else 1.8)
@@ -269,14 +293,14 @@ func _draw_vectors() -> void:
 	for id in houses:
 		var h: Array = _houses[id]
 		var cw: PackedVector2Array = h[0]
-		var p := PackedVector2Array([(cw[0] - origin) * k, (cw[1] - origin) * k, (cw[2] - origin) * k, (cw[3] - origin) * k])
+		var p := PackedVector2Array([(cw[0] - dorg) * k, (cw[1] - dorg) * k, (cw[2] - dorg) * k, (cw[3] - dorg) * k])
 		var slate: bool = h[3]
 		var size_px := p[0].distance_to(p[2])
 		if size_px < 5.0:
 			_vec.draw_colored_polygon(p, SLATE_SHADE if slate else ROOF_SHADE)
 			continue
-		var ra := ((h[1] as Vector2) - origin) * k
-		var rb := ((h[2] as Vector2) - origin) * k
+		var ra := ((h[1] as Vector2) - dorg) * k
+		var rb := ((h[2] as Vector2) - dorg) * k
 		_vec.draw_colored_polygon(PackedVector2Array([p[0], p[1], rb, ra]), SLATE_LIT if slate else ROOF_LIT)
 		_vec.draw_colored_polygon(PackedVector2Array([ra, rb, p[2], p[3]]), SLATE_SHADE if slate else ROOF_SHADE)
 		var lw := clampf(size_px * 0.07, 1.0, 1.8)
@@ -287,7 +311,7 @@ func _draw_vectors() -> void:
 	# Towers, ruins and the big landmarks.
 	for id in blocks:
 		var bl: Array = _blocks[id]
-		var c := ((bl[1] as Vector2) - origin) * k
+		var c := ((bl[1] as Vector2) - dorg) * k
 		var half: Vector2 = (bl[2] as Vector2) * k
 		match str(bl[0]):
 			"tower":

@@ -51,9 +51,21 @@ var stats := {
 }
 
 
+## While the island is built: what is being done, and how far along (0..1).
+signal progress(what: String, frac: float)
+
+
+## Lets a frame through between the big steps, so the window keeps drawing
+## (the loading screen moves) instead of hanging until the island is done.
+func _step(what: String, frac: float) -> void:
+	progress.emit(what, frac)
+	await get_tree().process_frame
+
+
 func build(p_seed: int) -> void:
 	var started := Time.get_ticks_msec()
 	rng.seed = p_seed
+	await _step("RAISING THE ISLAND", 0.02)
 	terrain = Terrain.new(p_seed)
 	print("[world] terrain generated in %d ms" % (Time.get_ticks_msec() - started))
 
@@ -61,6 +73,7 @@ func build(p_seed: int) -> void:
 	var tick := func(label: String) -> void:
 		marks.append("%s %d" % [label, Time.get_ticks_msec() - started])
 	_build_lighting()
+	await _step("BUILDING THE TOWNS", 0.2)
 	villages = Villages.new()
 	villages.name = "Villages"
 	add_child(villages)
@@ -68,24 +81,29 @@ func build(p_seed: int) -> void:
 	loot_points.append_array(villages.loot_points)
 	stats.houses = villages._stat.houses
 	tick.call("villages")
+	await _step("SHAPING THE LAND", 0.45)
 	_build_grids()
 	_build_terrain()
 	tick.call("terrain")
 	_build_water()
 	_build_inland_water()
+	await _step("GROWING THE FORESTS", 0.6)
 	_scatter_trees()
 	tick.call("trees")
+	await _step("PLANTING THE MEADOWS", 0.74)
 	_scatter_ground_cover()
 	tick.call("cover")
 	_fill_gaps()
 	tick.call("gaps")
 	_scatter_rocks()
 	tick.call("rocks")
+	await _step("HIDING THE LOOT", 0.84)
 	_build_wild_loot()
 	_build_spawn_points()
 	_build_vehicle_spawns()
 	_build_distant_islands()
 	_build_clouds()
+	await _step("DRAWING THE MAP", 0.9)
 	_build_minimap()
 	_build_water_audio()
 	grass = GrassField.new()

@@ -31,6 +31,10 @@ const GEAR_TABLE := [
 const SETTINGS_PATH := "user://settings.cfg"
 ## Start in fullscreen (F11 / Alt + Enter or Settings switch it).
 var fullscreen := true
+## Upscaling: 0 native, 1 FSR quality, 2 FSR balanced, 3 FSR performance.
+var upscaling := 0
+var vsync := true
+var show_fps := true
 const HEAR_RANGE := 70.0
 const PING_RANGE := 160.0
 
@@ -179,6 +183,13 @@ func _ready() -> void:
 		music.set_volumes(a, b)
 		_save_settings())
 	hud.music_skip.connect(func(): music.skip())
+	hud.video_changed.connect(func(up, vs, fps):
+		upscaling = up
+		vsync = vs
+		show_fps = fps
+		_apply_vsync()
+		_apply_graphics()
+		_save_settings())
 	hud.fullscreen_changed.connect(func(on):
 		fullscreen = on
 		_save_settings())
@@ -227,7 +238,7 @@ func _ready() -> void:
 	menu_cam.make_current()
 
 	await get_tree().process_frame
-	_build_world()
+	await _build_world()
 	_create_player()
 	lobby_ready = true
 	phase = "menu"
@@ -338,14 +349,18 @@ func _build_world() -> void:
 	world = WorldBuilder.new()
 	world.name = "World"
 	add_child(world)
-	world.build(seed_value)
+	world.progress.connect(hud.show_loading)
+	await world.build(seed_value)
 	terrain = world.terrain
 	_apply_graphics()
 	print("[game] world seed %d built in %d ms, loot=%d" % [seed_value, Time.get_ticks_msec() - t0, world.loot_points.size()])
 	# The bots' walking grid, while the loading screen is still up.
 	var tn := Time.get_ticks_msec()
+	hud.show_loading("MAPPING THE PATHS", 0.96)
+	await get_tree().process_frame
 	terrain.build_nav()
 	print("[game] bot walking grid in %d ms, %d of %d cells too steep" % [Time.get_ticks_msec() - tn, terrain.nav_blocked, Terrain.RES * Terrain.RES])
+	hud.hide_loading()
 
 
 func _create_player() -> void:
@@ -383,6 +398,9 @@ func _load_settings() -> void:
 		music_match = float(cfg.get_value("audio", "music_match", music_match))
 		graphics_quality = clampi(int(cfg.get_value("video", "quality", graphics_quality)), 0, 3)
 		fullscreen = bool(cfg.get_value("video", "fullscreen", true))
+		upscaling = clampi(int(cfg.get_value("video", "upscaling", 0)), 0, 3)
+		vsync = bool(cfg.get_value("video", "vsync", true))
+		show_fps = bool(cfg.get_value("video", "show_fps", true))
 	if not Weapons.DEFS.has(loadout_primary):
 		loadout_primary = "carbine"
 	if not Weapons.DEFS.has(loadout_secondary):
@@ -393,6 +411,8 @@ func _load_settings() -> void:
 	hud.scope_sens_slider.set_value_no_signal(scope_sens)
 	hud.set_music(music_menu, music_match)
 	hud.set_graphics(graphics_quality)
+	hud.set_video(upscaling, vsync, show_fps)
+	_apply_vsync()
 	# Screenshots and tests keep the window they were given.
 	var scripted := false
 	for a in OS.get_cmdline_user_args():
@@ -446,6 +466,9 @@ func _save_settings() -> void:
 	cfg.set_value("video", "fov", fov)
 	cfg.set_value("video", "quality", graphics_quality)
 	cfg.set_value("video", "fullscreen", fullscreen)
+	cfg.set_value("video", "upscaling", upscaling)
+	cfg.set_value("video", "vsync", vsync)
+	cfg.set_value("video", "show_fps", show_fps)
 	cfg.set_value("match", "players", match_size)
 	cfg.set_value("loadout", "primary", loadout_primary)
 	cfg.set_value("loadout", "secondary", loadout_secondary)
@@ -3665,7 +3688,7 @@ func _rebuild_world(seed_v: int) -> void:
 	world = null
 	await get_tree().process_frame
 	await get_tree().process_frame
-	_build_world()
+	await _build_world()
 	_refresh_places()
 	lobby_ready = true
 	_show_menu()
@@ -6004,13 +6027,21 @@ func _run_drive_test() -> void:
 
 
 ## Apply the graphics preset to the world's lights, environment and foliage.
+## Adaptive vsync: no tearing at full rate, no stutter below it (plain vsync
+## halves the frame rate in steps whenever a frame runs a little late).
+func _apply_vsync() -> void:
+	if DisplayServer.get_name() == "headless":
+		return
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ADAPTIVE if vsync else DisplayServer.VSYNC_DISABLED)
+
+
 func _apply_graphics() -> void:
 	if world == null:
 		return
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--quality="):
 			graphics_quality = clampi(int(arg.substr(10)), 0, 3)
-	Graphics.apply(graphics_quality, world.environment, world.sun, world.fill_light, get_viewport(), world.world_env)
+	Graphics.apply(graphics_quality, world.environment, world.sun, world.fill_light, get_viewport(), world.world_env, upscaling)
 	var k := Graphics.draw_scale(graphics_quality)
 	for n in world.find_children("*", "MultiMeshInstance3D", true, false):
 		var mmi := n as MultiMeshInstance3D
@@ -6020,7 +6051,7 @@ func _apply_graphics() -> void:
 		if base > 0.0:
 			mmi.visibility_range_end = base * k
 	if world.grass != null and DisplayServer.get_name() != "headless":
-		world.grass.set_radius([0.0, 26.0, 38.0, 52.0][graphics_quality])
+		world.grass.set_radius([0.0, 26.0, 36.0, 46.0][graphics_quality])
 	print("[gfx] renderer=%s quality=%s" % [RenderingServer.get_current_rendering_method(), Graphics.NAMES[graphics_quality]])
 
 

@@ -161,6 +161,12 @@ func _ready() -> void:
 	camera.position = cam_base
 	camera.cull_mask = 0xFFFFF
 	add_child(camera)
+	# The camera moves every rendered frame, not only on physics ticks: mouse
+	# look is applied at once, and its position glides between the body's
+	# 60 Hz steps (see _process), so a 144 Hz screen gets 144 smooth frames.
+	camera.top_level = true
+	camera.global_position = global_position + cam_base
+	_cam_local = cam_base
 	camera.make_current()
 
 	view = Node3D.new()
@@ -274,6 +280,13 @@ func _ads_sens_scale() -> float:
 	return clampf(0.8 / cur_zoom(), 0.1, 0.75) * scope_sens
 
 
+## Where the body was at the last two physics ticks (the camera glides
+## between them), and the camera's offset from the body.
+var _phys_prev := Vector3.INF
+var _phys_cur := Vector3.INF
+var _cam_local := Vector3.ZERO
+
+
 func _physics_process(delta: float) -> void:
 	if Prof.on:
 		var t0 := Time.get_ticks_usec()
@@ -281,6 +294,27 @@ func _physics_process(delta: float) -> void:
 		Prof.add("player", Time.get_ticks_usec() - t0)
 	else:
 		_physics_process_body(delta)
+	_phys_prev = _phys_cur if _phys_cur != Vector3.INF else global_position
+	_phys_cur = global_position
+	# A jump of metres in one tick is a teleport (spawn, seat, respawn): no
+	# gliding across the map.
+	if _phys_prev.distance_to(_phys_cur) > 6.0:
+		_phys_prev = _phys_cur
+
+
+func _process(delta: float) -> void:
+	if not alive or camera == null:
+		return
+	_update_camera(delta)
+	var body := global_position
+	if _phys_cur != Vector3.INF:
+		body = _phys_prev.lerp(_phys_cur, clampf(Engine.get_physics_interpolation_fraction(), 0.0, 1.0))
+		# Something moved the body since the last tick (a teleport): follow it.
+		if body.distance_to(global_position) > 6.0:
+			body = global_position
+			_phys_prev = global_position
+			_phys_cur = global_position
+	camera.global_position = body + _cam_local
 
 
 func _physics_process_body(delta: float) -> void:
@@ -307,7 +341,7 @@ func _physics_process_body(delta: float) -> void:
 			_update_weapon(delta)
 			return
 
-	_update_camera(delta)
+	_update_crouch_box()
 	_update_weapon(delta)
 	_update_casings(delta)
 
@@ -960,7 +994,6 @@ func _update_camera(delta: float) -> void:
 		camera.fov = lerpf(camera.fov, target_fov, clampf(delta * 14.0, 0.0, 1.0))
 
 	# Smooth crouch + land dip + foot bob.
-	_update_crouch_box()
 	var crouching := (_ap("crouch") or _crouch_box) and mode == Mode.GROUND
 	var target_y := CROUCH_EYE if (crouching or vaulting_window()) else EYE
 	if mode == Mode.FREEFALL or mode == Mode.CHUTE:
@@ -975,7 +1008,7 @@ func _update_camera(delta: float) -> void:
 		bob_y = sin(bob * 2.0) * 0.024 * amt
 		bob_x = cos(bob) * 0.020 * amt
 	var lean_off := Basis(Vector3.UP, yaw) * Vector3(lean * 0.45, -absf(lean) * 0.06, 0.0)
-	camera.position = camera.position.lerp(Vector3(bob_x, cam_base.y + bob_y - land_dip * 0.12, 0.0) + lean_off, clampf(delta * 18.0, 0.0, 1.0))
+	_cam_local = _cam_local.lerp(Vector3(bob_x, cam_base.y + bob_y - land_dip * 0.12, 0.0) + lean_off, clampf(delta * 18.0, 0.0, 1.0))
 	_damage_flash = maxf(0.0, _damage_flash - delta)
 
 

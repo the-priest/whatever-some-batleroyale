@@ -6,6 +6,7 @@ signal music_changed(menu_volume: float, match_volume: float)
 signal music_skip
 signal graphics_changed(quality: int)
 signal fullscreen_changed(on: bool)
+signal video_changed(upscaling: int, vsync: bool, show_fps: bool)
 signal chat_sent(text: String)
 signal chat_closed
 signal map_clicked(world: Vector2, button: int)
@@ -108,6 +109,19 @@ var lbl_gfx: Label
 var gfx_button: Button
 var display_button: Button
 var fullscreen := true
+var upscale_button: Button
+var vsync_button: Button
+var fps_button: Button
+var upscaling := 0
+var vsync_on := true
+var show_fps := true
+var lbl_fps: Label
+var _fps_t := 0.0
+var _fps_frames := 0
+var _fps_worst := 0.0
+var loading: Control
+var _load_label: Label
+var _load_fill: ColorRect
 var gfx_quality := 2
 var music_match_slider: HSlider
 var lbl_music_menu: Label
@@ -171,6 +185,8 @@ func _ready() -> void:
 	_build_menu()
 	_build_end()
 	_build_pause()
+	_build_loading()
+	_build_fps()
 	update_health(100, 0)
 	update_weapon("", 0, 0)
 	set_zone(0.0, 0.0, 0, false)
@@ -951,6 +967,38 @@ func _build_pause() -> void:
 		set_fullscreen(not fullscreen, true))
 	col2.add_child(display_button)
 
+	col2.add_child(_lv("UPSCALING   ·   MORE FPS, SLIGHTLY SOFTER", 12, MUTED))
+	upscale_button = _button("NATIVE", false)
+	upscale_button.custom_minimum_size = Vector2(300, 36)
+	upscale_button.add_theme_font_size_override("font_size", 14)
+	upscale_button.pressed.connect(func():
+		sfx_click()
+		upscaling = (upscaling + 1) % 4
+		_video_labels()
+		video_changed.emit(upscaling, vsync_on, show_fps))
+	col2.add_child(upscale_button)
+	var vrow := HBoxContainer.new()
+	vrow.add_theme_constant_override("separation", 8)
+	vsync_button = _button("VSYNC ON", false)
+	vsync_button.custom_minimum_size = Vector2(146, 36)
+	vsync_button.add_theme_font_size_override("font_size", 13)
+	vsync_button.pressed.connect(func():
+		sfx_click()
+		vsync_on = not vsync_on
+		_video_labels()
+		video_changed.emit(upscaling, vsync_on, show_fps))
+	vrow.add_child(vsync_button)
+	fps_button = _button("FPS ON", false)
+	fps_button.custom_minimum_size = Vector2(146, 36)
+	fps_button.add_theme_font_size_override("font_size", 13)
+	fps_button.pressed.connect(func():
+		sfx_click()
+		show_fps = not show_fps
+		_video_labels()
+		video_changed.emit(upscaling, vsync_on, show_fps))
+	vrow.add_child(fps_button)
+	col2.add_child(vrow)
+
 	lbl_music_menu = _lv("MENU MUSIC", 12, MUTED)
 	col.add_child(lbl_music_menu)
 	music_menu_slider = HSlider.new()
@@ -1081,6 +1129,103 @@ func set_fullscreen(on: bool, tell := false) -> void:
 			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_MAXIMIZED)
 	if tell:
 		fullscreen_changed.emit(on)
+
+
+func set_video(up: int, vs: bool, fps: bool) -> void:
+	upscaling = up
+	vsync_on = vs
+	show_fps = fps
+	_video_labels()
+
+
+func _video_labels() -> void:
+	if upscale_button != null:
+		upscale_button.text = "◀   %s   ▶" % Graphics.UPSCALE_NAMES[upscaling]
+		vsync_button.text = "VSYNC  %s" % ("ON" if vsync_on else "OFF")
+		fps_button.text = "SHOW FPS  %s" % ("ON" if show_fps else "OFF")
+	if lbl_fps != null:
+		lbl_fps.visible = show_fps
+
+
+# ---------------------------------------------------------------- loading --
+func _build_loading() -> void:
+	loading = Control.new()
+	loading.set_anchors_preset(Control.PRESET_FULL_RECT)
+	loading.mouse_filter = Control.MOUSE_FILTER_STOP
+	loading.z_index = 60
+	loading.visible = false
+	root.add_child(loading)
+	var bg := ColorRect.new()
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bg.color = Color(0.03, 0.035, 0.045)
+	loading.add_child(bg)
+	var title := _lv("BLOCK ROYALE", 64, WHITE)
+	title.set_anchors_preset(Control.PRESET_CENTER)
+	title.offset_left = -400
+	title.offset_right = 400
+	title.offset_top = -110
+	title.offset_bottom = -30
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	loading.add_child(title)
+	var track := ColorRect.new()
+	track.set_anchors_preset(Control.PRESET_CENTER)
+	track.offset_left = -260
+	track.offset_right = 260
+	track.offset_top = 10
+	track.offset_bottom = 16
+	track.color = Color(1, 1, 1, 0.08)
+	loading.add_child(track)
+	_load_fill = ColorRect.new()
+	_load_fill.position = Vector2.ZERO
+	_load_fill.size = Vector2(0, 6)
+	_load_fill.color = ACCENT
+	track.add_child(_load_fill)
+	_load_label = _lv("", 13, MUTED)
+	_load_label.set_anchors_preset(Control.PRESET_CENTER)
+	_load_label.offset_left = -260
+	_load_label.offset_right = 260
+	_load_label.offset_top = 28
+	_load_label.offset_bottom = 50
+	_load_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	loading.add_child(_load_label)
+
+
+func show_loading(what: String, frac: float) -> void:
+	if loading == null:
+		return
+	loading.visible = true
+	_load_label.text = what
+	_load_fill.size.x = 520.0 * clampf(frac, 0.0, 1.0)
+
+
+func hide_loading() -> void:
+	if loading != null:
+		loading.visible = false
+
+
+# ------------------------------------------------------------ fps counter --
+func _build_fps() -> void:
+	lbl_fps = _lv("", 11, MUTED)
+	lbl_fps.add_theme_font_override("font", font_mono)
+	lbl_fps.position = Vector2(28, 4)
+	lbl_fps.z_index = 70
+	root.add_child(lbl_fps)
+
+
+func _tick_fps(delta: float) -> void:
+	if lbl_fps == null or not show_fps:
+		return
+	_fps_frames += 1
+	_fps_t += delta
+	_fps_worst = maxf(_fps_worst, delta)
+	if _fps_t >= 0.5:
+		var fps := float(_fps_frames) / _fps_t
+		lbl_fps.text = "%d FPS   %.1f MS   LOW %d" % [int(round(fps)), 1000.0 / maxf(fps, 0.001), int(1.0 / maxf(_fps_worst, 0.0001))]
+		var col := Color(0.55, 0.92, 0.6) if fps >= 90.0 else (WHITE if fps >= 55.0 else (ACCENT if fps >= 35.0 else DANGER))
+		lbl_fps.add_theme_color_override("font_color", col)
+		_fps_t = 0.0
+		_fps_frames = 0
+		_fps_worst = 0.0
 
 
 func set_graphics(q: int) -> void:
@@ -1601,6 +1746,7 @@ func _process(delta: float) -> void:
 
 
 func _process_body(delta: float) -> void:
+	_tick_fps(delta)
 	if hit_t > 0.0:
 		hit_t = maxf(0.0, hit_t - delta)
 		hitmarker.queue_redraw()
