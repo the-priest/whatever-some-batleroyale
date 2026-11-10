@@ -37,6 +37,10 @@ var _ping_lbl: Label
 
 # Browser.
 var _name_edit: LineEdit
+var _pw_edit: LineEdit
+var _pw_host: LineEdit
+var _pw_host_label: Label
+var _open_btn: Button
 var _rows: VBoxContainer
 var _scan_box: Control
 var _ip_edit: LineEdit
@@ -145,7 +149,7 @@ func _build_browser() -> void:
 	var title := _lbl("FIND A GAME", 46, W)
 	title.position = Vector2(80, 122)
 	_browser.add_child(title)
-	var sub := _lbl("GAMES HOSTED ON YOUR NETWORK SHOW UP HERE AUTOMATICALLY", 13, MUTED, false)
+	var sub := _lbl("GAMES ON YOUR NETWORK SHOW UP HERE AUTOMATICALLY   ·   FOR A GAME OVER THE INTERNET, TYPE THE HOST'S ADDRESS", 13, MUTED, false)
 	sub.position = Vector2(82, 180)
 	_browser.add_child(sub)
 
@@ -157,7 +161,7 @@ func _build_browser() -> void:
 	_name_edit.position = Vector2(1200, 146)
 	_name_edit.size = Vector2(320, 44)
 	_name_edit.max_length = 14
-	_name_edit.text_changed.connect(func(t): net.my_name = t.strip_edges().to_upper())
+	_name_edit.text_changed.connect(func(t): net.my_name = Net._clean_name(t))
 	_browser.add_child(_name_edit)
 
 	# Server table.
@@ -192,14 +196,14 @@ func _build_browser() -> void:
 	scan.size = Vector2(1080, 24)
 	scan.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_scan_box.add_child(scan)
-	var tip := _lbl("THE HOST PRESSES  HOST LAN  ·  EVERYONE ON THE SAME WI-FI OR ROUTER", 12, MUTED, false)
+	var tip := _lbl("THE HOST PRESSES  HOST GAME  ·  SAME WI-FI OR ROUTER, OR TYPE THEIR ADDRESS", 12, MUTED, false)
 	tip.position = Vector2(0, 92)
 	tip.size = Vector2(1080, 20)
 	tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_scan_box.add_child(tip)
 
 	# Direct connect card.
-	var dc := _card(Vector2(1200, 220), Vector2(320, 250))
+	var dc := _card(Vector2(1200, 220), Vector2(320, 338))
 	_browser.add_child(dc)
 	var dl := _lbl("DIRECT CONNECT", 13, ACCENT)
 	dl.position = Vector2(22, 20)
@@ -212,14 +216,25 @@ func _build_browser() -> void:
 	_ip_edit.size = Vector2(276, 46)
 	_ip_edit.text_submitted.connect(func(t): _do_join(t))
 	dc.add_child(_ip_edit)
+	var pl2 := _lbl("PASSWORD   ·   ONLY IF THE HOST SET ONE", 11, DIM)
+	pl2.position = Vector2(22, 160)
+	dc.add_child(pl2)
+	_pw_edit = _edit("")
+	_pw_edit.position = Vector2(22, 180)
+	_pw_edit.size = Vector2(276, 46)
+	_pw_edit.secret = true
+	_pw_edit.max_length = 32
+	_pw_edit.placeholder_text = "NONE"
+	_pw_edit.text_submitted.connect(func(_t): _do_join(_ip_edit.text))
+	dc.add_child(_pw_edit)
 	var cb := _btn("CONNECT", true)
-	cb.position = Vector2(22, 162)
+	cb.position = Vector2(22, 250)
 	cb.size = Vector2(276, 52)
 	cb.pressed.connect(func(): _do_join(_ip_edit.text))
 	dc.add_child(cb)
 
 	_browser_status = _lbl("", 12, BAD, false)
-	_browser_status.position = Vector2(1200, 486)
+	_browser_status.position = Vector2(1200, 574)
 	_browser_status.size = Vector2(320, 80)
 	_browser_status.autowrap_mode = TextServer.AUTOWRAP_WORD
 	_browser.add_child(_browser_status)
@@ -245,10 +260,33 @@ func _build_lobby() -> void:
 	copy.size = Vector2(70, 28)
 	copy.pressed.connect(func():
 		_click()
-		DisplayServer.clipboard_set(net.local_addresses()[0])
+		DisplayServer.clipboard_set(net.public_address if net.public_address != "" else net.local_addresses()[0])
 		_on_chat(0, "", "ADDRESS COPIED TO CLIPBOARD", true))
 	copy.name = "Copy"
 	_lobby.add_child(copy)
+	# Host only: lock the lobby with a password, open it to the internet.
+	_pw_host_label = _lbl("PASSWORD", 11, DIM)
+	_pw_host_label.position = Vector2(540, 115)
+	_lobby.add_child(_pw_host_label)
+	_pw_host = _edit("")
+	_pw_host.position = Vector2(616, 104)
+	_pw_host.size = Vector2(190, 34)
+	_pw_host.max_length = 32
+	_pw_host.placeholder_text = "NONE  ·  OPEN"
+	_pw_host.add_theme_font_size_override("font_size", 13)
+	_pw_host.text_changed.connect(func(t):
+		net.password = t.strip_edges()
+		_pw_host_label.add_theme_color_override("font_color", ACCENT if net.password != "" else DIM))
+	_lobby.add_child(_pw_host)
+	_open_btn = _btn("OPEN TO THE INTERNET", false, 11)
+	_open_btn.position = Vector2(820, 104)
+	_open_btn.size = Vector2(190, 34)
+	_open_btn.pressed.connect(func():
+		_click()
+		_open_btn.disabled = true
+		_open_btn.text = "ASKING THE ROUTER ..."
+		net.open_port())
+	_lobby.add_child(_open_btn)
 
 	# Squad slots.
 	_squad_count = _lbl("PLAYERS", 13, ACCENT)
@@ -518,8 +556,13 @@ func show_lobby() -> void:
 	_connecting.visible = false
 	_crumb.text = "/   LOBBY"
 	_known_ids = []
+	for c: Control in [_pw_host, _pw_host_label, _open_btn]:
+		c.visible = net.hosting
 	if net.hosting:
-		_addr_label.text = "YOUR ADDRESS   %s     ·     FRIENDS PRESS  JOIN LAN" % "  /  ".join(net.local_addresses())
+		_addr_label.text = "YOUR ADDRESS   %s" % net.local_addresses()[0]
+		_pw_host.text = net.password
+		_open_btn.disabled = false
+		_open_btn.text = "OPEN TO THE INTERNET"
 	else:
 		_addr_label.text = "CONNECTED TO THE HOST     ·     PRESS  READY  WHEN YOU ARE SET"
 	_lobby.get_node("Copy").visible = net.hosting
@@ -554,9 +597,8 @@ func _do_join(address: String) -> void:
 		_browser_status.text = "ENTER THE FULL ADDRESS, FOR EXAMPLE 192.168.1.20"
 		return
 	_click()
-	net.my_name = _name_edit.text.strip_edges().to_upper()
-	if net.my_name == "":
-		net.my_name = "PLAYER"
+	net.my_name = Net._clean_name(_name_edit.text)
+	net.join_password = _pw_edit.text
 	_browser_status.text = ""
 	_conn_label.text = "CONNECTING TO  %s" % a
 	_connecting.visible = true
@@ -650,7 +692,8 @@ func _game_row(g: Dictionary) -> Control:
 	var pl := _lbl("%d / %d" % [players, cap], 15, W)
 	pl.position = Vector2(608, 17)
 	row.add_child(pl)
-	var st := _lbl("IN MATCH" if running else ("FULL" if full else "IN LOBBY"), 12, BAD if full else (ACCENT if running else GOOD))
+	var locked := bool(g.get("locked", false))
+	var st := _lbl(("IN MATCH" if running else ("FULL" if full else "IN LOBBY")) + ("   ·   PASSWORD" if locked else ""), 12, BAD if full else (ACCENT if running else GOOD))
 	st.position = Vector2(768, 19)
 	row.add_child(st)
 	var jl := _lbl("JOIN  ›", 15, ACCENT)
@@ -668,6 +711,12 @@ func _game_row(g: Dictionary) -> Control:
 func _refresh_roster() -> void:
 	if _view != "lobby" or _slots.is_empty():
 		return
+	if net.hosting and _open_btn != null and _open_btn.disabled:
+		if net.public_address != "":
+			_addr_label.text = "INTERNET   %s     ·     LAN   %s" % [net.public_address, net.local_addresses()[0]]
+			_open_btn.text = "OPEN  ·  SHARE THE ADDRESS"
+		elif net._upnp_thread != null and not net._upnp_thread.is_alive():
+			_open_btn.text = "ROUTER SAID NO  ·  FORWARD UDP %d" % Net.PORT
 	var ids := net.roster.keys()
 	ids.sort()
 	for i in _slots.size():
@@ -833,6 +882,8 @@ class Slot extends Panel:
 	var _ping_txt: Label
 	var _empty: Label
 	var _sb: StyleBoxFlat
+	var _kick: Button
+	var _id := 0
 
 	func _ready() -> void:
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -874,9 +925,21 @@ class Slot extends Panel:
 		_empty = lobby._lbl("OPEN SLOT", 13, Color(1, 1, 1, 0.18))
 		_empty.position = Vector2(22, 15)
 		add_child(_empty)
+		# Host only: show a player the door (hold Shift to ban their address).
+		_kick = lobby._btn("KICK", false, 10)
+		_kick.position = Vector2(256, 12)
+		_kick.size = Vector2(52, 26)
+		_kick.tooltip_text = "REMOVE THIS PLAYER  ·  SHIFT + CLICK TO BAN"
+		_kick.visible = false
+		_kick.pressed.connect(func():
+			lobby._click()
+			lobby.net.kick(_id, "BANNED BY THE HOST" if Input.is_key_pressed(KEY_SHIFT) else "KICKED BY THE HOST", Input.is_key_pressed(KEY_SHIFT)))
+		add_child(_kick)
 
 	func fill(id: int, pname: String, col: Color, is_ready: bool, ping: int, host: bool, me: bool) -> void:
 		modulate.a = 1.0
+		_id = id
+		_kick.visible = lobby.net.hosting and not host
 		_sb.bg_color = LobbyUI.CARD_HI if me else LobbyUI.CARD
 		_sb.border_color = Color(col.r, col.g, col.b, 0.35) if me else Color(1, 1, 1, 0.06)
 		_strip.visible = true
@@ -936,6 +999,7 @@ class Slot extends Panel:
 		_ping.visible = false
 		_ping_txt.visible = false
 		_empty.visible = true
+		_kick.visible = false
 
 	func pop_in(delay: float) -> void:
 		modulate.a = 0.0

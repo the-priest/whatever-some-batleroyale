@@ -204,8 +204,20 @@ func _roots() -> void:
 		var p0 := o + dir * 10.5 + Vector3.UP * 4.0
 		var reach := rng.randf_range(20.0, 26.0)
 		var p1 := Vector3(o.x, 0, o.z) + dir * reach
-		p1.y = terrain.height_at(p1.x, p1.z) - 0.6
-		_limb(p0, p1, 2.6, 0.9, true)
+		# The root thins to a point as it slips under the turf.
+		p1.y = terrain.height_at(p1.x, p1.z) - 0.5
+		# A root arches out of the trunk and dives into the ground: three
+		# tapering lengths along a curve, each overlapping the next.
+		var bend := p0.lerp(p1, 0.42) + Vector3.UP * rng.randf_range(2.2, 3.6) + Vector3(-dir.z, 0, dir.x) * rng.randf_range(-1.6, 1.6)
+		var r_root := rng.randf_range(2.3, 3.0)
+		var prev := p0
+		for k in 3:
+			var t := float(k + 1) / 3.0
+			var q := p0.lerp(bend, t).lerp(bend.lerp(p1, t), t)
+			var ra := lerpf(r_root, 0.28, pow(float(k) / 3.0, 0.8))
+			var rb := lerpf(r_root, 0.28, pow(t, 0.8))
+			_limb(prev - (q - prev).normalized() * 0.5, q, ra, rb, true, 12)
+			prev = q
 
 
 func _stair() -> void:
@@ -295,10 +307,20 @@ func _deck(idx: int) -> void:
 		# Inner lane: open wherever the stair is within head height of the
 		# deck, so it climbs through. The deck top is the stair surface there.
 		var ys := _stair_y_near(am, y)
-		var clash := ys > y - 4.4 and ys < y + 2.4
+		# (Where the stair has already climbed above the deck the boards run
+		# on underneath it: no hole to drop through.)
+		var clash := ys > y - 4.4 and ys < y + 0.3
 		if not clash:
 			_ring_piece(y, inner, lane, am, a1 - a0)
+		elif ys < y - 1.2:
+			# Stairwell: a rail on the walkway side, up to where you step off.
+			var w0 := Vector3(cos(a0), 0, sin(a0)) * (lane + 0.07)
+			var w1 := Vector3(cos(a1), 0, sin(a1)) * (lane + 0.07)
+			lm.box(o + (w0 + w1) * 0.5 + Vector3(0, y + 0.5, 0), Vector3(0.12, 1.0, w0.distance_to(w1) + 0.04), atan2(w1.x - w0.x, w1.z - w0.z), "wood")
+			lm.box(o + (w0 + w1) * 0.5 + Vector3(0, y + 1.04, 0), Vector3(0.22, 0.08, w0.distance_to(w1) + 0.06), atan2(w1.x - w0.x, w1.z - w0.z), "wood_dark", false)
 		_ring_piece(y, lane, outer, am, a1 - a0)
+		# A fascia board round the rim hides the sawn ends of the decking.
+		lm.box(o + Vector3(cos(am) * (outer + 0.05), y - 0.27, sin(am) * (outer + 0.05)), Vector3(0.1, 0.62, 2.0 * (outer + 0.1) * sin((a1 - a0) * 0.5) + 0.04), -am, "wood_dark", false)
 		# Brackets under the outer edge, back to the trunk.
 		if i % 8 == 0:
 			var b0 := o + Vector3(cos(am) * (tr + 0.2), y - 6.0, sin(am) * (tr + 0.2))
@@ -320,7 +342,12 @@ func _deck(idx: int) -> void:
 		var q0 := Vector3(cos(a0), 0, sin(a0)) * (outer - 0.12)
 		var q1 := Vector3(cos(a1), 0, sin(a1)) * (outer - 0.12)
 		var m := o + (q0 + q1) * 0.5 + Vector3(0, y + 0.55, 0)
-		lm.box(m, Vector3(0.14, 1.1, q0.distance_to(q1) + 0.05), atan2(q1.x - q0.x, q1.z - q0.z), "wood")
+		var ryaw := atan2(q1.x - q0.x, q1.z - q0.z)
+		lm.box(m, Vector3(0.14, 1.1, q0.distance_to(q1) + 0.05), ryaw, "wood")
+		# A cap rail along the top and a post every few boards.
+		lm.box(m + Vector3(0, 0.59, 0), Vector3(0.26, 0.08, q0.distance_to(q1) + 0.07), ryaw, "wood_dark", false)
+		if i % 4 == 0:
+			lm.box(o + q0 + Vector3(0, y + 0.62, 0), Vector3(0.24, 1.34, 0.24), -a0, "wood_dark", false)
 	# Huts round the outer part, doors facing the trunk, none over the stair.
 	var hut_r := (lane + outer) * 0.5 + 0.2
 	for k in huts:
@@ -391,13 +418,15 @@ func _hut(p: Vector3, a: float, size: float, level: int) -> void:
 	var mat := "plaster" if level % 2 == 0 else "wood"
 	for wl in walls:
 		lm.wall(p, yaw, wl[0], wl[1], 0.0, h, 0.22, mat, wl[2])
+		_hut_trim(p, yaw, wl[0], wl[1], h, wl[2][0])
 	# Corner posts.
 	for sx in [-1.0, 1.0]:
 		for sz in [-1.0, 1.0]:
-			lm.box(p + bs * Vector3(sx * w * 0.5, h * 0.5, sz * d * 0.5), Vector3(0.3, h, 0.3), yaw, "wood", false)
-	# Gable roof: two slabs meeting at a ridge over the long side.
+			lm.box(p + bs * Vector3(sx * w * 0.5, h * 0.5, sz * d * 0.5), Vector3(0.34, h, 0.34), yaw, "wood_dark", false)
+	# Gable roof: two slabs meeting at a ridge, boarded round the edges so no
+	# raw slab end shows.
 	var rise := 1.5
-	for side in [-1.0, 1.0]:
+	for side: float in [-1.0, 1.0]:
 		var e0 := p + bs * Vector3(side * (w * 0.5 + 0.45), h - 0.15, 0)
 		var e1 := p + bs * Vector3(0, h + rise, 0)
 		var across := (e1 - e0)
@@ -406,10 +435,26 @@ func _hut(p: Vector3, a: float, size: float, level: int) -> void:
 		var by := bx.cross(fwd).normalized()
 		if by.y < 0.0:
 			by = -by
-		lm.box_b(Basis(bx, by, fwd), (e0 + e1) * 0.5, Vector3(across.length() + 0.15, 0.2, d + 0.9), "roof")
-	# Gable ends.
-	for sz in [-1.0, 1.0]:
-		lm.box(p + bs * Vector3(0, h + rise * 0.35, sz * d * 0.5), Vector3(w * 0.55, rise * 0.7, 0.2), yaw, mat)
+		var rb := Basis(bx, by, fwd)
+		lm.box_b(rb, (e0 + e1) * 0.5, Vector3(across.length() + 0.15, 0.2, d + 0.9), "roof")
+		# Fascia along the eave, bargeboards up both gable edges.
+		lm.box_b(rb, e0 - bx * 0.09 - by * 0.03, Vector3(0.07, 0.30, d + 1.0), "wood_dark", false)
+		for sz: float in [-1.0, 1.0]:
+			lm.box_b(rb, (e0 + e1) * 0.5 + fwd * sz * (d * 0.5 + 0.47) - by * 0.03, Vector3(across.length() + 0.2, 0.30, 0.07), "wood_dark", false)
+		# Rafter ends under the eave.
+		var nr := maxi(2, int(d / 0.9))
+		for k in nr + 1:
+			var rz := -d * 0.5 + d * float(k) / float(nr)
+			lm.box_b(rb, e0 + bx * 0.42 - by * 0.17 + fwd * rz, Vector3(0.9, 0.14, 0.12), "wood_dark", false)
+	lm.box(p + bs * Vector3(0, h + rise + 0.1, 0), Vector3(0.30, 0.16, d + 1.04), yaw, "wood_dark", false)
+	# Gable ends: the whole triangle, right up under the roof.
+	var slope := (rise + 0.15) / (w * 0.5 + 0.45)
+	var eave_y := h - 0.25 + 0.45 * slope
+	for sz: float in [-1.0, 1.0]:
+		_gable(p, bs, sz * d * 0.5, w, h - 0.02, eave_y, h + rise - 0.1, mat)
+		# A tie beam across its foot and a king post up the middle.
+		lm.box(p + bs * Vector3(0, h + 0.02, sz * (d * 0.5 + 0.02)), Vector3(w + 0.1, 0.2, 0.3), yaw, "wood_dark", false)
+		lm.box(p + bs * Vector3(0, h + (rise - 0.1) * 0.5, sz * (d * 0.5 + 0.02)), Vector3(0.18, rise - 0.2, 0.28), yaw, "wood_dark", false)
 	lm._loot(p + bs * Vector3(-w * 0.2, 0.25, d * 0.15), "weapon" if (level + int(a * 10.0)) % 2 == 0 else "gear", level >= 2)
 	lm._loot(p + bs * Vector3(w * 0.22, 0.25, d * 0.2), "gear" if level == 0 else "weapon", level >= 2)
 
@@ -444,10 +489,11 @@ func _lookouts() -> void:
 			if acos(clampf(mid.normalized().dot(-dir), -1.0, 1.0)) < 1.0 / pr:
 				continue
 			lm.box(center + mid + Vector3.UP * 0.55, Vector3(0.14, 1.1, q0.distance_to(q1) + 0.05), atan2(q1.x - q0.x, q1.z - q0.z), "wood")
+			lm.box(center + mid + Vector3.UP * 1.14, Vector3(0.26, 0.08, q0.distance_to(q1) + 0.07), atan2(q1.x - q0.x, q1.z - q0.z), "wood_dark", false)
 		# A little roof on posts: shade, and something to see from far off.
 		for k in 4:
 			var pa := a + PI * 0.25 + TAU * float(k) / 4.0
-			lm.box(center + Vector3(cos(pa), 0, sin(pa)) * (pr - 0.8) + Vector3.UP * 1.4, Vector3(0.25, 2.8, 0.25), 0.0, "wood", false)
+			lm.box(center + Vector3(cos(pa), 0, sin(pa)) * (pr - 0.8) + Vector3.UP * 1.4, Vector3(0.25, 2.8, 0.25), -pa, "wood_dark", true)
 		lm.cyl(center + Vector3.UP * 2.8, pr + 0.4, 0.0, 2.2, "roof", 12, true)
 		# Rope bridge: planks and two rope rails from the nest edge across.
 		var s0 := o + dir * (outer - 0.3) + Vector3.UP * NEST_Y
@@ -486,7 +532,8 @@ func _limb(a: Vector3, b: Vector3, r0: float, r1: float, collide := false, sides
 		var d0 := u * cos(a0) + v * sin(a0)
 		var d1 := u * cos(a1) + v * sin(a1)
 		var n := (u * cos((a0 + a1) * 0.5) + v * sin((a0 + a1) * 0.5)).normalized()
-		lm._quad(st, a + d0 * r0, a + d1 * r0, b + d1 * r1, b + d0 * r1, n)
+		_tri_n(st, [a + d0 * r0, a + d1 * r0, b + d1 * r1], [d0, d1, d1], n)
+		_tri_n(st, [a + d0 * r0, b + d1 * r1, b + d0 * r1], [d0, d1, d0], n)
 		pts.append(a + d0 * r0)
 		pts.append(b + d0 * r1)
 	# Cap the thin end so a limb seen end-on is not hollow.
@@ -501,6 +548,16 @@ func _limb(a: Vector3, b: Vector3, r0: float, r1: float, collide := false, sides
 		cs.shape = shape
 		lm._body.add_child(cs)
 		lm._stat.shapes += 1
+
+
+## A triangle with a normal per corner (round things), wound to face `face`.
+func _tri_n(st: SurfaceTool, p: Array, n: Array, face: Vector3) -> void:
+	var order := [0, 1, 2]
+	if ((p[1] as Vector3) - (p[0] as Vector3)).cross((p[2] as Vector3) - (p[0] as Vector3)).dot(face) > 0.0:
+		order = [0, 2, 1]
+	for i: int in order:
+		st.set_normal(n[i])
+		st.add_vertex(p[i])
 
 
 ## Just the leaves of a kit tree, centred on themselves: a foliage cluster.
@@ -571,3 +628,77 @@ func _crowns() -> void:
 			_limb(start, at - Vector3.UP * 4.0, 2.2 if flat.length() < 30.0 else 1.6, 0.5)
 	# The trunk carries on up into the crown.
 	_limb(o + Vector3.UP * 87.0, o + Vector3.UP * 100.0, 4.4, 2.2)
+
+
+## Timber round one wall of a hut: a sole beam and a top plate, a frame round
+## its door or window, and shutters on the windows.
+func _hut_trim(p: Vector3, yaw: float, a: Vector2, b: Vector2, h: float, opening: Array) -> void:
+	var bs := Basis(Vector3.UP, yaw)
+	var len := a.distance_to(b)
+	var dir := (b - a) / maxf(0.001, len)
+	var wyaw := yaw + atan2(dir.x, dir.y)
+	var at := func(along: float, y: float, out := 0.0) -> Vector3:
+		var q := a + dir * along
+		# Outside is to the right of a wall drawn clockwise round the hut.
+		var n := Vector2(dir.y, -dir.x)
+		if n.dot(q) < 0.0:
+			n = -n
+		q += n * out
+		return p + bs * Vector3(q.x, y, q.y)
+	var oc := float(opening[0])
+	var ow := float(opening[1])
+	var sill := float(opening[2])
+	var top := float(opening[3])
+	# Top plate all the way; sole beam either side of a door.
+	lm.box(at.call(len * 0.5, h - 0.11), Vector3(0.30, 0.22, len + 0.3), wyaw, "wood_dark", false)
+	if sill > 0.0:
+		lm.box(at.call(len * 0.5, 0.11), Vector3(0.30, 0.22, len + 0.3), wyaw, "wood_dark", false)
+	else:
+		var l0 := oc - ow * 0.5
+		var l1 := len - (oc + ow * 0.5)
+		lm.box(at.call(l0 * 0.5, 0.11), Vector3(0.30, 0.22, l0 + 0.15), wyaw, "wood_dark", false)
+		lm.box(at.call(len - l1 * 0.5, 0.11), Vector3(0.30, 0.22, l1 + 0.15), wyaw, "wood_dark", false)
+	# Frame.
+	for sd: float in [-1.0, 1.0]:
+		lm.box(at.call(oc + sd * (ow * 0.5 + 0.06), (sill + top) * 0.5), Vector3(0.30, top - sill + 0.24, 0.12), wyaw, "wood_dark", false)
+	lm.box(at.call(oc, top + 0.06), Vector3(0.32, 0.12, ow + 0.36), wyaw, "wood_dark", false)
+	if sill > 0.0:
+		lm.box(at.call(oc, sill - 0.06), Vector3(0.38, 0.12, ow + 0.36), wyaw, "wood_dark", false)
+		# Shutters folded back against the wall outside.
+		var sw := ow * 0.5
+		for sd: float in [-1.0, 1.0]:
+			var sc: Vector3 = at.call(oc + sd * (ow * 0.5 + 0.14 + sw * 0.5), (sill + top) * 0.5, 0.14)
+			lm.box(sc, Vector3(0.05, top - sill, sw), wyaw, "wood", false)
+			for by: float in [sill + 0.14, top - 0.14]:
+				lm.box(at.call(oc + sd * (ow * 0.5 + 0.14 + sw * 0.5), by, 0.175), Vector3(0.03, 0.08, sw - 0.04), wyaw, "wood_dark", false)
+
+
+## A solid gable: the five-sided end wall under a pitched roof.
+func _gable(p: Vector3, bs: Basis, z: float, w: float, y0: float, y_eave: float, y_top: float, mat: String) -> void:
+	var st := lm._surface(mat)
+	var t := 0.11
+	var outline := [Vector2(-w * 0.5, y0), Vector2(w * 0.5, y0), Vector2(w * 0.5, y_eave), Vector2(0, y_top), Vector2(-w * 0.5, y_eave)]
+	var front: Array[Vector3] = []
+	var back: Array[Vector3] = []
+	var pts := PackedVector3Array()
+	for q: Vector2 in outline:
+		front.append(p + bs * Vector3(q.x, q.y, z + t))
+		back.append(p + bs * Vector3(q.x, q.y, z - t))
+		pts.append(front[front.size() - 1])
+		pts.append(back[back.size() - 1])
+	for k in [1, 2, 3]:
+		lm._tri(st, front[0], front[k], front[k + 1], bs.z)
+		lm._tri(st, back[0], back[k], back[k + 1], -bs.z)
+	for k in 5:
+		var j := (k + 1) % 5
+		var edge := front[j] - front[k]
+		var n := edge.cross(bs.z).normalized()
+		if n.dot(front[k] - (p + bs * Vector3(0, (y0 + y_top) * 0.5, z))) < 0.0:
+			n = -n
+		lm._quad(st, front[k], front[j], back[j], back[k], n)
+	var cs := CollisionShape3D.new()
+	var shape := ConvexPolygonShape3D.new()
+	shape.points = pts
+	cs.shape = shape
+	lm._body.add_child(cs)
+	lm._stat.shapes += 1

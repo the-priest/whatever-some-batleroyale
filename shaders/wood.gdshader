@@ -75,9 +75,14 @@ vec4 board(float u, float vb, float bw, float seed, float seams, vec2 du, vec2 d
 	float bh = min(bw / atlas_m, slice * 0.8);
 	vec2 auv = vec2(u / atlas_m + h1 * 3.0, band_lo + (slice - bh) * h2 + fb * bh);
 	vec3 col = textureGrad(atlas, auv, vec2(du.x / atlas_m, dv.x * bh), vec2(du.y / atlas_m, dv.y * bh)).rgb;
+	// Boards per pixel: from far off the seams and the board-to-board
+	// differences are finer than a pixel and would only shimmer.
+	float fine = max(length(dv), 0.0001);
+	float near = clamp(1.0 - (fine - 0.10) / 0.30, 0.0, 1.0);
+	float near2 = clamp(1.0 - (fine - 0.30) / 0.70, 0.0, 1.0);
 	// No two boards quite the same.
-	col *= mix(0.84, 1.10, h3);
-	col = mix(col, col * vec3(1.05, 0.98, 0.90), h1 * 0.6);
+	col *= mix(0.97, mix(0.84, 1.10, h3), near2);
+	col = mix(col, col * vec3(1.05, 0.98, 0.90), h1 * 0.6 * near2);
 	float hgt = dot(col, vec3(0.33)) * 0.5;
 	if (seams > 0.5) {
 		// Gap between boards.
@@ -93,11 +98,13 @@ vec4 board(float u, float vb, float bw, float seed, float seams, vec2 du, vec2 d
 		// Two nails either side of it.
 		vec2 np = vec2(abs(dj - 0.045), min(abs(fb - 0.24), abs(fb - 0.76)) * bw);
 		float nail = (1.0 - smoothstep(0.006, 0.011, length(np))) * has_joint * step(0.10, bw);
-		float dark = max(gap, joint);
+		float dark = max(gap, joint) * near;
 		col *= 1.0 - dark * 0.72;
-		col *= 1.0 - bevel * 0.14;
-		col = mix(col, vec3(0.10, 0.09, 0.09), nail * 0.85);
-		hgt -= dark * 0.9 + bevel * 0.12 - nail * 0.25;
+		col *= 1.0 - bevel * 0.14 * near;
+		// (All those gaps still darken the deck a little from afar.)
+		col *= 1.0 - (1.0 - near) * 0.06;
+		col = mix(col, vec3(0.10, 0.09, 0.09), nail * 0.85 * near);
+		hgt -= (dark * 0.9 + bevel * 0.12 - nail * 0.25) * near;
 	}
 	return vec4(col, hgt);
 }

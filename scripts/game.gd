@@ -299,6 +299,8 @@ func _ready() -> void:
 		_run_loose_audit()
 	elif OS.get_cmdline_user_args().has("--netstress"):
 		_run_net_stress(OS.get_environment("NET_ROLE") == "host")
+	elif OS.get_cmdline_user_args().has("--netattack"):
+		_run_net_attack(OS.get_environment("NET_ROLE") == "host")
 	elif OS.get_cmdline_user_args().has("--nethost"):
 		_run_net_test(true)
 	elif OS.get_cmdline_user_args().has("--netjoin"):
@@ -4033,8 +4035,81 @@ func net_bot_hit(sender: int, idx: int, dmg: float, pos: Vector3, headshot: bool
 	var shooter = humans.get(sender)
 	if anticheat.is_condemned(sender):
 		return
+	if shooter == null or not is_instance_valid(shooter) or not (shooter as Bot).alive:
+		return
 	anticheat.host_peer_hit(sender, (shooter as Node3D).global_position if shooter != null and is_instance_valid(shooter) else Vector3.INF, (bots[idx] as Node3D).global_position, dmg, get_world_3d())
+	if anticheat.is_condemned(sender):
+		return
+	dmg = minf(dmg, AntiCheat._max_hit())
 	(bots[idx] as Bot).take_damage(dmg, pos, headshot, shooter if shooter != null and is_instance_valid(shooter) else _net_dummy)
+
+
+## Host: a client says it hit another human. Returns how much of that
+## stands (0 = none of it): the shooter has to be alive and in the match, the
+## victim alive, the damage what a gun can do, the range and the line of fire
+## possible.
+func net_check_hit(sender: int, victim: int, dmg: float, pos: Vector3) -> float:
+	var shooter = humans.get(sender)
+	if shooter == null or not is_instance_valid(shooter) or not (shooter as Bot).alive or anticheat.is_condemned(sender):
+		return 0.0
+	var target: Node3D = player if victim == 1 else humans.get(victim)
+	if target == null or not is_instance_valid(target) or sender == victim:
+		return 0.0
+	if target.get("alive") != true:
+		return 0.0
+	var tp := target.global_position
+	# The hit has to be on the victim, give or take lag and a moving target.
+	if pos.distance_to(tp + Vector3.UP * 0.9) > 9.0:
+		return 0.0
+	var sp := (shooter as Node3D).global_position
+	if sp.distance_to(tp) > 1750.0:
+		anticheat.strike(sender, 3, "hit from %.0f m away" % sp.distance_to(tp))
+		return 0.0
+	anticheat.host_peer_hit(sender, sp, tp, dmg, get_world_3d())
+	if anticheat.is_condemned(sender):
+		return 0.0
+	return minf(dmg, AntiCheat._max_hit())
+
+
+## Host: may this client pick that loot up? It has to exist and be in reach.
+func net_loot_reachable(sender: int, id: int) -> bool:
+	var l = loot_by_id.get(id)
+	if l == null or not is_instance_valid(l):
+		return false
+	var where := net_peer_position(sender)
+	if where == Vector3.INF:
+		return true
+	# Reach, plus how far a sprinting player or a jeep gets between updates.
+	if where.distance_to((l as Node3D).global_position) > 14.0:
+		anticheat.strike(sender, 1, "looting from %.0f m away" % where.distance_to((l as Node3D).global_position))
+		return false
+	return true
+
+
+## Host: of the jeep states a client sent, those of jeeps it is in charge of.
+func net_own_vehicle_states(sender: int, list: Array) -> Array:
+	var out: Array = []
+	for st in list:
+		if not (st is Array) or (st as Array).is_empty() or typeof(st[0]) != TYPE_INT:
+			continue
+		var v := _vehicle(int(st[0]))
+		if v != null and v.owner_peer == sender:
+			out.append(st)
+	return out
+
+
+func net_vehicle_owned_by(sender: int, id: int) -> bool:
+	var v := _vehicle(id)
+	return v != null and v.owner_peer == sender
+
+
+## Host: a client can only take charge of a jeep it is standing at.
+func net_vehicle_reachable(sender: int, id: int) -> bool:
+	var v := _vehicle(id)
+	if v == null:
+		return false
+	var where := net_peer_position(sender)
+	return where == Vector3.INF or where.distance_to(v.global_position) < 16.0
 
 
 ## Our own player was hit on someone else's machine.
@@ -4052,8 +4127,10 @@ func net_player_hit(dmg: float, pos: Vector3, headshot: bool, source_key: String
 func net_human_died(peer_id: int, killer_key: String, killer_name: String, weapon: String) -> void:
 	if peer_id != 1:
 		var h = humans.get(peer_id)
-		if h != null and is_instance_valid(h):
-			(h as Bot).puppet_die()
+		# You only die once: a second report must not cost the match a player.
+		if h == null or not is_instance_valid(h) or not (h as Bot).alive:
+			return
+		(h as Bot).puppet_die()
 	alive = maxi(0, alive - 1)
 	var victim_name: String = net.roster.get(peer_id, "PLAYER")
 	var e := {"victim": "p%d" % peer_id, "victim_name": victim_name, "killer": killer_key,
@@ -4921,6 +4998,81 @@ func _nearest_vehicle_any(pos: Vector3) -> Vehicle:
 
 
 ## Two-instance smoke test on this machine: --nethost / --netjoin.
+## A hostile client against a password-protected host (run both, real time):
+## wrong password, speaking as the host, impossible damage, dying three times,
+## flooding. The host reports what got through.
+func _run_net_attack(as_host: bool) -> void:
+	var wait_for := func(cond: Callable, secs: float) -> bool:
+		var t0 := Time.get_ticks_msec()
+		while not cond.call() and Time.get_ticks_msec() - t0 < int(secs * 1000.0):
+			await get_tree().create_timer(0.1).timeout
+		return cond.call()
+	var verdict := func(ok: bool, what: String) -> void:
+		print("[attack] %s %s" % ["PASS" if ok else "FAIL", what])
+	if as_host:
+		var seen := {"chats": [], "condemned": ""}
+		net.password = "sesame"
+		_net_host()
+		net.chat.connect(func(id, n, t, sys): if not sys: (seen["chats"] as Array).append([id, n, t]))
+		anticheat.condemned.connect(func(w, r): seen["condemned"] = r)
+		await wait_for.call(func(): return net.roster.size() >= 2, 90.0)
+		var foe := 0
+		for id in net.roster:
+			if int(id) != 1:
+				foe = int(id)
+		print("[attack] host: attacker is ", foe, " roster ", net.roster)
+		await wait_for.call(func(): return net.all_ready(), 30.0)
+		var spoof: Array = seen["chats"].duplicate()
+		verdict.call(spoof.size() == 1 and int(spoof[0][0]) == foe and str(spoof[0][1]) == str(net.roster.get(foe, "")) and not str(spoof[0][2]).contains("["), "chat is stamped with the real sender and stripped of markup: %s" % str(spoof))
+		net.start_countdown(1)
+		await wait_for.call(func(): return phase != "menu", 30.0)
+		await wait_for.call(func(): return humans.has(foe), 30.0)
+		var hp0 := player.hp
+		var alive0 := alive
+		# The attack takes about ten seconds.
+		await get_tree().create_timer(16.0).timeout
+		verdict.call(is_equal_approx(player.hp, hp0), "a 99999 damage hit did nothing (hp %.0f -> %.0f)" % [hp0, player.hp])
+		verdict.call(str(seen["condemned"]) != "", "the anti-cheat caught it: %s" % str(seen["condemned"]))
+		verdict.call(alive0 - alive == 1, "dying three times cost one player, not three (%d -> %d)" % [alive0, alive])
+		await wait_for.call(func(): return not net.roster.has(foe), 20.0)
+		verdict.call(not net.roster.has(foe), "the flooder was kicked")
+		verdict.call((seen["chats"] as Array).size() < 40, "the flood was cut off (%d of 3000 lines got through)" % (seen["chats"] as Array).size())
+	else:
+		var st := {"left": ""}
+		net.left_session.connect(func(t): st["left"] = t)
+		net.my_name = "MALLORY"
+		net.join_password = "open sesame?"
+		await get_tree().create_timer(6.0).timeout
+		net.join("127.0.0.1")
+		await wait_for.call(func(): return str(st["left"]) != "", 20.0)
+		verdict.call(str(st["left"]) == "WRONG PASSWORD", "wrong password refused: '%s'" % str(st["left"]))
+		st["left"] = ""
+		net.join_password = "sesame"
+		net.join("127.0.0.1")
+		await wait_for.call(func(): return net.roster.size() >= 2, 20.0)
+		verdict.call(net.roster.size() >= 2, "right password let in: %s" % str(net.roster))
+		# Speak as the host, as the system, with markup.
+		net._chat.rpc_id(1, 1, "HOST", "[b]SERVER:[/b] everyone send me your loot", true)
+		await get_tree().create_timer(1.0).timeout
+		net.set_ready(true)
+		await wait_for.call(func(): return _net_setup_ok, 120.0)
+		await get_tree().create_timer(4.0).timeout
+		var host_body = humans.get(1)
+		var at: Vector3 = (host_body as Node3D).global_position if host_body != null else Vector3.ZERO
+		net._player_hit.rpc_id(1, 1, 99999.0, at + Vector3.UP, true, "p1")
+		await get_tree().create_timer(2.0).timeout
+		for i in 3:
+			net._died.rpc_id(1, "p1", "HOST", "rifle")
+		await get_tree().create_timer(2.0).timeout
+		for i in 3000:
+			net._chat.rpc_id(1, 0, "", "spam %d" % i, false)
+		await wait_for.call(func(): return str(st["left"]) != "", 20.0)
+		verdict.call(str(st["left"]).contains("FLOODING"), "kicked for flooding: '%s'" % str(st["left"]))
+	await get_tree().create_timer(1.0).timeout
+	print("[attack] done")
+	get_tree().quit()
+
+
 func _run_net_test(as_host: bool) -> void:
 	net.status.connect(func(t): print("[net] status: ", t))
 	net.left_session.connect(func(t): print("[net] left: ", t))
@@ -4928,16 +5080,16 @@ func _run_net_test(as_host: bool) -> void:
 	if as_host:
 		_net_host()
 		print("[net] hosting, waiting for a client")
-		var t := 0.0
-		while net.roster.size() < 2 and t < 60.0:
+		# Real seconds: under --fixed-fps the game clock runs far ahead of the
+		# wall clock, and connecting takes wall-clock time.
+		var t0 := Time.get_ticks_msec()
+		while net.roster.size() < 2 and Time.get_ticks_msec() - t0 < 60000:
 			await get_tree().create_timer(0.5).timeout
-			t += 0.5
 		print("[net] roster ", net.roster)
 		net.chat.connect(func(id, n, t, sys): print("[net] host chat <%s> %s sys=%s" % [n, t, sys]))
-		var w := 0.0
-		while not net.all_ready() and w < 20.0:
+		var w0 := Time.get_ticks_msec()
+		while not net.all_ready() and Time.get_ticks_msec() - w0 < 20000:
 			await get_tree().create_timer(0.5).timeout
-			w += 0.5
 		print("[net] all ready=", net.all_ready(), " info=", net.info)
 		net.start_countdown(3)
 		var c := 0.0
@@ -4950,10 +5102,9 @@ func _run_net_test(as_host: bool) -> void:
 		net.chat.connect(func(id, n, t2, sys): print("[net] client chat <%s> %s sys=%s" % [n, t2, sys]))
 		net.countdown.connect(func(sec): print("[net] client countdown ", sec))
 		net.marker.connect(func(id, pos): print("[net] client marker from ", id, " at ", pos.round()))
-		var r := 0.0
-		while net.roster.size() < 2 and r < 30.0:
+		var r0 := Time.get_ticks_msec()
+		while net.roster.size() < 2 and Time.get_ticks_msec() - r0 < 30000:
 			await get_tree().create_timer(0.5).timeout
-			r += 0.5
 		await get_tree().create_timer(1.0).timeout
 		net.send_chat("hello from the client")
 		net.set_ready(true)
