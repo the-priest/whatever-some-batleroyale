@@ -127,13 +127,23 @@ lethal. In multiplayer the driver's machine simulates the jeep and everyone sees
 
 ## Graphics
 
+The game starts fullscreen; **F11** or **Alt + Enter** switches to a window and back.
+
 Settings, then **GRAPHICS**, cycles four presets:
 
 - **LOW / MEDIUM:** fast.
 - **HIGH:** screen-space indirect light and ambient occlusion, reflections, volumetric fog and eye
   adaptation.
-- **ULTRA:** adds SDFGI ray-marched global illumination, so sunlight bounces into rooms, plus long
-  soft shadows and further draw distance. Aim for an RTX 2060 / RX 6600 class GPU.
+- **ULTRA:** adds SDFGI global illumination (sunlight bounces into rooms), softer and longer
+  shadows and further draw distance. Made for an RTX 3060 / RX 6600 class GPU.
+
+Also in Settings:
+
+- **UPSCALING:** native, or FSR 2 quality, balanced or performance. Renders the 3D scene at a lower
+  resolution and rebuilds it sharply; the quickest way to more frames per second.
+- **VSYNC:** on by default (adaptive: no tearing, and no stutter when a frame runs late).
+- **SHOW FPS:** the counter in the top left corner (frames per second, frame time, and the
+  slowest frame of the last half second).
 
 Each match rolls its weather and time of day: clear noon, golden hour, misty morning, overcast or
 a thunderstorm (multiplayer games share the host's). In the storm the rain stops at roofs and trees, so it

@@ -34,7 +34,9 @@ static func apply(q: int, env: Environment, sun: DirectionalLight3D, fill: Direc
 		sun.directional_shadow_split_1 = 0.07 if q >= 2 else 0.10
 		sun.directional_shadow_split_2 = 0.18 if q >= 2 else 0.22
 		sun.directional_shadow_split_3 = 0.42 if q >= 2 else 0.48
-		sun.light_angular_distance = 0.6 if q >= 2 and fp else 0.0
+		# (A light size turns on contact-hardening shadows: costly, and the
+		# blur already gives soft edges.)
+		sun.light_angular_distance = 0.0
 	# (An 8192 map cost a lot of GPU time for little gain over 4096.)
 	RenderingServer.directional_shadow_atlas_set_size([2048, 2048, 4096, 4096][q], true)
 	RenderingServer.directional_soft_shadow_filter_set_quality([RenderingServer.SHADOW_QUALITY_SOFT_VERY_LOW,

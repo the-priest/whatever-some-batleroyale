@@ -163,7 +163,7 @@ func _ready() -> void:
 	hud = HUD.new()
 	hud.name = "HUD"
 	add_child(hud)
-	hud.play_pressed.connect(_start_match)
+	hud.play_pressed.connect(_start_match_ui)
 	hud.resume_pressed.connect(_resume)
 	hud.quit_pressed.connect(_quit_to_menu)
 	hud.settings_changed.connect(_on_settings_changed)
@@ -309,6 +309,8 @@ func _ready() -> void:
 		_run_cheat_test()
 	elif OS.get_cmdline_user_args().has("--windows"):
 		_run_window_test()
+	elif OS.get_cmdline_user_args().has("--gpubench"):
+		_run_gpu_bench()
 	elif OS.get_cmdline_user_args().has("--lootaudit"):
 		_run_loot_audit()
 	elif OS.get_cmdline_user_args().has("--loose"):
@@ -527,6 +529,23 @@ func _quit_to_menu() -> void:
 
 
 # -------------------------------------------------------------------- match --
+var _starting := false
+
+
+## Starting a match takes a moment (loot, 60-odd soldiers): show it rather
+## than freeze on the menu.
+func _start_match_ui() -> void:
+	if _starting:
+		return
+	_starting = true
+	hud.show_loading("PREPARING THE DROP", 0.5)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	_start_match()
+	hud.hide_loading()
+	_starting = false
+
+
 func _start_match() -> void:
 	if not lobby_ready:
 		return
@@ -1632,7 +1651,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		if phase == "menu":
 			# Not while the armory, settings or a LAN screen are open.
 			if not hud.loadout_screen.visible and not hud.pause_panel.visible and not lobby.visible:
-				_start_match()
+				_start_match_ui()
 			return
 		if phase == "plane" and player != null and player.mode == Player.Mode.PLANE:
 			_player_jump(false)
@@ -1641,7 +1660,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				# Back to the lobby to ready up for the next one.
 				_quit_to_menu()
 			else:
-				_start_match()
+				_start_match_ui()
 		return
 	if phase == "end" and event.is_action_pressed("pause"):
 		_quit_to_menu()
@@ -4762,6 +4781,42 @@ func _place_name(p: Vector3) -> String:
 			best_d = d
 			best = str(l[0])
 	return "%s (%d m)" % [best, int(best_d)]
+
+
+## Rendered frame times in a busy spot (a town street, then a forest), at
+## the quality given with --quality=N. Run with a real renderer.
+func _run_gpu_bench() -> void:
+	_start_match()
+	_player_jump(true)
+	var spots: Array = []
+	for v in world.villages.village_pads:
+		if v.type == "city":
+			spots.append(Vector3(v.center.x, 0, v.center.y))
+			break
+	spots.append(_random_ground_point(150.0))
+	for sp: Vector3 in spots:
+		player.global_position = ground_at(Vector3(sp.x, terrain.height_at(sp.x, sp.z) + 2.0, sp.z)) + Vector3.UP * 0.2
+		player.velocity = Vector3.ZERO
+		player.mode = Player.Mode.GROUND
+		player.spawn_protect = 9999.0
+		var warm := int(OS.get_environment("GB_WARM")) if OS.get_environment("GB_WARM") != "" else 40
+		var count := int(OS.get_environment("GB_FRAMES")) if OS.get_environment("GB_FRAMES") != "" else 120
+		for i in warm:
+			await get_tree().process_frame
+		var times: Array[float] = []
+		var last := Time.get_ticks_usec()
+		for i in count:
+			player.yaw += 0.02
+			await get_tree().process_frame
+			var now := Time.get_ticks_usec()
+			times.append(float(now - last) / 1000.0)
+			last = now
+		times.sort()
+		var sum := 0.0
+		for t in times:
+			sum += t
+		print("[gpubench] quality %s at %s: avg %.1f ms, median %.1f ms, 95%% %.1f ms, worst %.1f ms, draws=%d prims=%dk" % [Graphics.NAMES[graphics_quality], str(sp.round()), sum / times.size(), times[times.size() / 2], times[int(times.size() * 0.95)], times[times.size() - 1], int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)), int(Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)) / 1000])
+	get_tree().quit()
 
 
 func _run_loot_audit() -> void:
