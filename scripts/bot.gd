@@ -432,7 +432,8 @@ func _ground(delta: float) -> void:
 	var sees := armed and enemy != null and is_instance_valid(enemy) and enemy_visible()
 	# A fight does not end the moment they duck out of sight: the bot keeps
 	# working the last place it saw them for a while.
-	var fighting := sees or (armed and enemy != null and is_instance_valid(enemy) and bool(enemy.get("alive")) and _last_seen_t < 14.0)
+	var memory := 26.0 if _tactic in ["push", "flank"] else 14.0
+	var fighting := sees or (armed and enemy != null and is_instance_valid(enemy) and bool(enemy.get("alive")) and _last_seen_t < memory)
 	if not fighting:
 		if loot_target == null or not is_instance_valid(loot_target) or loot_target.taken:
 			loot_target = null
@@ -664,6 +665,7 @@ var _hurt_t := 99.0
 var _hit_them_t := 99.0
 var _flank := Vector3.INF
 var _foe_id := 0
+var _push_side := 0.0
 var grenades := 0
 var _nade_cd := 4.0
 
@@ -686,7 +688,23 @@ func on_bullet_hit(_shot_id: int, _pos: Vector3, _dmg: float, _headshot: bool, _
 	_hit_them_t = 0.0
 
 
+## Forget the current fight (cover, tactic, where the enemy was).
+func reset_combat() -> void:
+	enemy = null
+	_foe_id = 0
+	_cover = Vector3.INF
+	_peek = Vector3.INF
+	_flank = Vector3.INF
+	_last_seen = Vector3.INF
+	_last_seen_t = 99.0
+	_hidden_t = 0.0
+	_engage_t = 0.0
+	_set_tactic("", 0.0)
+
+
 func _set_tactic(t: String, dur: float) -> void:
+	if t == "push" and _tactic != "push":
+		_push_side = 0.0
 	_tactic = t
 	_tactic_t = dur
 
@@ -718,6 +736,12 @@ func _combat(delta: float, sees: bool) -> Array:
 	var d := to_e.length()
 	to_e = to_e / maxf(d, 0.01)
 	var hold := _hold_range()
+	# Cover we have ended up far from is no use to us now.
+	if _cover != Vector3.INF and _flat_d(here, _cover) > 20.0:
+		_cover = Vector3.INF
+		_peek = Vector3.INF
+		if _tactic in ["dash", "hide", "peek"]:
+			_set_tactic("", 0.0)
 	# The enemy moved round our cover: it is not cover any more.
 	if _cover != Vector3.INF and _cover_eval <= 0.0:
 		_cover_eval = 1.2
@@ -784,6 +808,9 @@ func _combat(delta: float, sees: bool) -> Array:
 		"push":
 			fight_moving = not sees or d > hold + 10.0
 			_set_crouch(false)
+			# Soften them up before going in.
+			if _wants_grenade(d, sees):
+				_throw_nade(ep)
 			if sees and d < hold + 10.0:
 				# Caught them: fight it out from here.
 				_set_tactic("", 0.0)
@@ -795,7 +822,17 @@ func _combat(delta: float, sees: bool) -> Array:
 				_last_seen_t = 99.0
 				_set_tactic("", 0.0)
 			else:
-				var leg := _terrain_leg(Vector2(ep.x, ep.z))
+				# Not at the spot itself (they are behind something there):
+				# round it on one side, closing in as we go.
+				if _push_side == 0.0:
+					_push_side = 1.0 if randf() < 0.5 else -1.0
+				var side := Vector3(-to_e.z, 0, to_e.x) * _push_side
+				var aim := ep + side * clampf(d * 0.3, 0.0, 7.0)
+				if d < 15.0:
+					# Close and still nothing: work round them at a few
+					# metres until we can see past whatever they are behind.
+					aim = ep + (-to_e).rotated(Vector3.UP, _push_side * deg_to_rad(70.0)) * 7.0
+				var leg := _terrain_leg(Vector2(aim.x, aim.z))
 				return [Vector3(leg.x, here.y, leg.y), 0.0, d > 18.0]
 		"flank":
 			if _flank == Vector3.INF:
@@ -998,6 +1035,10 @@ func _unstick() -> void:
 		away = Vector3.FORWARD.rotated(Vector3.UP, randf() * TAU)
 	_escape_dir = away.normalized().rotated(Vector3.UP, randf_range(-0.6, 0.6))
 	_escape_t = 0.8 + 0.4 * float(mini(_stuck_n, 4))
+	if enemy != null:
+		# Mid-fight a short step back is enough; a long run hands them the
+		# initiative.
+		_escape_t = minf(_escape_t, 0.6)
 	_avoid_side = -_avoid_side
 	if _stuck_n >= 4:
 		_nudge_free()
@@ -1700,9 +1741,9 @@ func _shoot_logic(delta: float) -> void:
 	var max_range: float = minf(float(d["range"]), sight)
 	if dist > max_range:
 		return
-	var aim_h := 1.15
+	var aim_h := aim_height(enemy)
 	if randf() < shoot_skill * 0.18:
-		aim_h = 1.55
+		aim_h = aim_height(enemy, true)
 	var aim := (enemy.global_position + Vector3(0, aim_h, 0)) - _shot_origin()
 	if fight_moving:
 		# Running between positions: no shooting, and the next stop needs a
@@ -1732,10 +1773,13 @@ func _shoot_logic(delta: float) -> void:
 	var tvel := Vector3.ZERO
 	if enemy is CharacterBody3D:
 		tvel = (enemy as CharacterBody3D).velocity
-	var spread_deg := 1.2 + (1.0 - shoot_skill) * 3.8
-	spread_deg += dist * 0.010
-	spread_deg += Vector2(tvel.x, tvel.z).length() * 0.20
-	spread_deg += maxf(0.0, 3.0 - float(_burst)) * 0.55
+	# A trained shooter: an average bot puts about one round in five on
+	# someone standing still at 55 m; worse on the move, further out and for
+	# the first rounds before the gun settles.
+	var spread_deg := 0.35 + (1.0 - shoot_skill) * 1.3
+	spread_deg += dist * 0.005
+	spread_deg += Vector2(tvel.x, tvel.z).length() * 0.12
+	spread_deg += maxf(0.0, 3.0 - float(_burst)) * 0.35
 	spread_deg *= float(d["spread"]) / 1.35 * 0.5 + 0.5
 	_burst += 1
 	var spread := deg_to_rad(spread_deg)
@@ -1812,9 +1856,22 @@ func _find_enemy() -> Node3D:
 	return null
 
 
+## Height above the feet to look and aim at: chest, or head; lower when the
+## target is crouched (their body is shorter then).
+static func aim_height(target: Node3D, head := false) -> float:
+	var low := false
+	if target is Player:
+		low = (target as Player).crouching()
+	elif target is Bot:
+		low = (target as Bot).crouched
+	if head:
+		return 1.0 if low else 1.55
+	return 0.78 if low else 1.15
+
+
 func _can_see(target: Node3D) -> bool:
 	var from := _shot_origin()
-	var to := target.global_position + Vector3(0, 1.2, 0)
+	var to := target.global_position + Vector3(0, aim_height(target), 0)
 	var q := PhysicsRayQueryParameters3D.create(from, to, 1 | 2 | 4)
 	q.exclude = [get_rid()]
 	var hit := get_world_3d().direct_space_state.intersect_ray(q)
@@ -1831,7 +1888,7 @@ func enemy_visible() -> bool:
 	if _see_cache.get("id", -1) == key and now - int(_see_cache.get("f", -99)) < 6:
 		return bool(_see_cache.get("v", false))
 	var from := _shot_origin()
-	var to := (enemy as Node3D).global_position + Vector3(0, 1.2, 0)
+	var to := (enemy as Node3D).global_position + Vector3(0, aim_height(enemy as Node3D), 0)
 	var q := PhysicsRayQueryParameters3D.create(from, to, 1 | 2 | 4)
 	q.exclude = [get_rid()]
 	var hit := get_world_3d().direct_space_state.intersect_ray(q)

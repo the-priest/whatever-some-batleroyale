@@ -271,6 +271,10 @@ func _ready() -> void:
 		_run_gun_audio_test()
 	elif OS.get_cmdline_user_args().has("--bottree"):
 		_run_bot_tree_test()
+	elif OS.get_cmdline_user_args().has("--treeshoot"):
+		_run_tree_shoot_test()
+	elif OS.get_cmdline_user_args().has("--botvsyou"):
+		_run_bot_vs_player_test()
 	elif OS.get_cmdline_user_args().has("--botfight"):
 		_run_botfight_test()
 	elif OS.get_cmdline_user_args().has("--corpse"):
@@ -291,6 +295,8 @@ func _ready() -> void:
 		_run_window_test()
 	elif OS.get_cmdline_user_args().has("--lootaudit"):
 		_run_loot_audit()
+	elif OS.get_cmdline_user_args().has("--loose"):
+		_run_loose_audit()
 	elif OS.get_cmdline_user_args().has("--netstress"):
 		_run_net_stress(OS.get_environment("NET_ROLE") == "host")
 	elif OS.get_cmdline_user_args().has("--nethost"):
@@ -300,7 +306,7 @@ func _ready() -> void:
 
 
 func _refresh_places() -> void:
-	hud.set_minimap(world.minimap_texture)
+	hud.set_world_map(world)
 	var places: Array = []
 	for v in world.villages.village_pads:
 		if str(v.name) != "":
@@ -2363,6 +2369,28 @@ func _sweep(spec: String) -> void:
 			int(Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)) / 1000])
 
 
+## Ground-level centre of a named place: a fantasy site, a landmark or a town.
+func _poi_centre(nm: String) -> Vector3:
+	var t := terrain
+	var key := nm.to_lower()
+	var fz: Fantasy = world.villages.landmarks.fantasy
+	if fz != null and fz.poi.has(key):
+		var e: Array = fz.poi[key]
+		return Vector3((e[0] as Vector2).x, float(e[1]), (e[0] as Vector2).y)
+	var marks := {"castle": [t.castle_c, t.castle_h], "henge": [t.henge_c, t.henge_h], "lighthouse": [t.lighthouse_c, t.lighthouse_h], "temple": [t.temple_c, t.temple_h], "oak": [t.oak_c, t.oak_h]}
+	if marks.has(key):
+		var m: Array = marks[key]
+		return Vector3((m[0] as Vector2).x, float(m[1]), (m[0] as Vector2).y)
+	for v in world.villages.village_pads:
+		if str(v.name).to_lower().replace(" ", "") == key:
+			return Vector3(v.center.x, t.height_at(v.center.x, v.center.y), v.center.y)
+	for l in world.villages.landmarks.labels:
+		if str(l[0]).to_lower().replace(" ", "").replace("'", "") == key:
+			var lc: Vector2 = l[1]
+			return Vector3(lc.x, t.height_at(lc.x, lc.y), lc.y)
+	return Vector3.INF
+
+
 func _landmark_pose(name: String) -> Array:
 	var t := terrain
 	var at := func(c: Vector2, h: float, back: Vector2, dist: float, up: float) -> Array:
@@ -2394,6 +2422,15 @@ func _landmark_pose(name: String) -> Array:
 			return at.call(t.temple_c, t.temple_h + 8.0, Vector2(-1.0, 0.3), 70.0, 16.0)
 		"oak":
 			return at.call(t.oak_c, t.oak_h + 12.0, Vector2(1.0, 0.6), 60.0, 22.0)
+		"oakfoot":
+			var os: Array = world.villages.landmarks.oak_stair
+			if not os.is_empty():
+				var oo: Vector3 = os[0]
+				var sa: float = os[2]
+				var foot := oo + Vector3(cos(sa), 0, sin(sa)) * float(os[1])
+				var cam := oo + Vector3(cos(sa - 0.7), 0, sin(sa - 0.7)) * (float(os[1]) + 6.0)
+				cam.y = t.height_at(cam.x, cam.z) + 2.2
+				return [cam, foot + Vector3.UP * 0.6]
 		"gorge":
 			var g := t.gorge_bridge
 			var fl := t.gorge_bridge_dir.orthogonal()
@@ -2410,7 +2447,8 @@ func _landmark_pose(name: String) -> Array:
 		var fh: float = e[1]
 		var spec: Array = {"spire": [16.0, Vector2(1.0, 0.5), 70.0, 30.0], "spiretop": [27.0, Vector2(0.4, 1.0), 13.0, 30.0], "crystals": [3.0, Vector2(1.0, 0.4), 32.0, 6.0], "crystals2": [3.0, Vector2(-0.6, 1.0), 32.0, 6.0],
 			"dragon": [3.0, Vector2(0.7, 1.0), 40.0, 9.0], "field": [1.0, Vector2(1.0, 0.7), 16.0, 3.5], "grove": [5.0, Vector2(1.0, 0.3), 28.0, 4.0],
-			"treetown": [45.0, Vector2(1.0, 0.35), 165.0, 20.0], "treetown2": [20.0, Vector2(-0.4, 1.0), 42.0, 22.0], "treetown3": [60.0, Vector2(0.8, -0.6), 30.0, 62.0]}.get(name, [4.0, Vector2(1, 0), 40.0, 8.0])
+			"treetown": [45.0, Vector2(1.0, 0.35), 165.0, 20.0], "treetown2": [20.0, Vector2(-0.4, 1.0), 42.0, 22.0], "treetown3": [60.0, Vector2(0.8, -0.6), 30.0, 62.0],
+			"treetown4": [19.9, Vector2(0.3, 1.0), 20.0, 18.6], "treetown5": [76.0, Vector2(1.0, 0.2), 14.5, 74.6], "treetown6": [39.8, Vector2(-1.0, 0.25), 18.0, 38.4]}.get(name, [4.0, Vector2(1, 0), 40.0, 8.0])
 		return at.call(fc, fh + float(spec[0]), spec[1], float(spec[2]), float(spec[3]))
 	return [Vector3(0, 300, 600), Vector3.ZERO]
 
@@ -2437,8 +2475,23 @@ func _run_shot() -> void:
 	var cam_look := Vector3.ZERO
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--cam="):
+			# --cam=x,y,z[,lx,ly,lz]: explicit camera (and look-at point).
 			var c := a.substr(6).split(",")
 			cam_pos = Vector3(float(c[0]), float(c[1]), float(c[2]))
+			if c.size() >= 6:
+				cam_look = Vector3(float(c[3]), float(c[4]), float(c[5]))
+		elif a.begins_with("--poi="):
+			# --poi=name,r,angle,h,look_r,look_angle,look_h: camera on a circle
+			# round a named place (town, landmark or fantasy site), heights
+			# above its ground; angles in degrees.
+			var f := a.substr(6).split(",")
+			var pc := _poi_centre(f[0])
+			if pc != Vector3.INF:
+				var a0 := deg_to_rad(float(f[2]))
+				var a1 := deg_to_rad(float(f[5]))
+				cam_pos = pc + Vector3(cos(a0) * float(f[1]), float(f[3]), sin(a0) * float(f[1]))
+				cam_look = pc + Vector3(cos(a1) * float(f[4]), float(f[6]), sin(a1) * float(f[4]))
+				print("[shot] poi %s at %s" % [f[0], pc])
 		elif a.begins_with("--look="):
 			var c := a.substr(7).split(",")
 			cam_look = Vector3(float(c[0]), float(c[1]), float(c[2]))
@@ -2530,6 +2583,9 @@ func _run_shot() -> void:
 		get_tree().quit()
 		return
 	print("[shot] starting match")
+	if OS.get_cmdline_user_args().has("--no3d"):
+		# HUD and map pictures: skip the 3D world so they render in seconds.
+		get_viewport().disable_3d = true
 	_start_match()
 	if OS.get_cmdline_user_args().has("--plane"):
 		for a in OS.get_cmdline_user_args():
@@ -2687,8 +2743,26 @@ func _run_shot() -> void:
 		hud.set_crosshair_visible(true)
 	else:
 		hud.root.visible = false
+	for a in args:
+		# --zone=cx,cz,r,ncx,ncz,nr[,phase]: put the storm somewhere for a picture.
+		if a.begins_with("--zone="):
+			var zv := a.substr(7).split_floats(",")
+			if zv.size() >= 6:
+				zone.set_process(false)
+				zone.center = Vector2(zv[0], zv[1])
+				zone.radius = zv[2]
+				zone.target_center = Vector2(zv[3], zv[4])
+				zone.target_radius = zv[5]
+				zone.phase = int(zv[6]) if zv.size() > 6 else 2
+				zone.state = "shrink"
+				zone._apply_wall()
 	if args.has("--map"):
 		hud.toggle_map()
+	for a in args:
+		# --mapzoom=N: the full map zoomed in on the player.
+		if a.begins_with("--mapzoom="):
+			hud.map_zoom = float(a.substr(10))
+			hud._bm_focus = Vector2(p.global_position.x, p.global_position.z)
 	if args.has("--aim"):
 		p.aim_blend = 1.0
 		Input.action_press("aim")
@@ -2922,6 +2996,14 @@ func _run_shot() -> void:
 	get_tree().quit()
 
 
+## The shape node a physics hit landed on (null for tree trunks: their
+## shapes live on the physics server alone).
+func _shape_node(body: CollisionObject3D, shape_idx: int) -> Node:
+	if body == null or str(body.name) == "TreeCollision" or shape_idx < 0:
+		return null
+	return body.shape_owner_get_owner(body.shape_find_owner(shape_idx))
+
+
 # --------------------------------------------------------------- smoke test --
 func _run_smoke() -> void:
 	print("[smoke] lobby ready, world loot=", world.loot_points.size())
@@ -2932,11 +3014,11 @@ func _run_smoke() -> void:
 		var tsp := get_world_3d().direct_space_state
 		var th := 0
 		var tn := 0
-		for c in tcol.get_children():
+		for rec in world.tree_records:
 			if tn >= 200:
 				break
 			tn += 1
-			var tp: Vector3 = (c as Node3D).global_position + Vector3.UP * 1.2
+			var tp: Vector3 = Vector3(rec.pos) + Vector3.UP * 1.45
 			var tq := PhysicsRayQueryParameters3D.create(tp + Vector3(3, 0, 0), tp - Vector3(3, 0, 0), 1)
 			var thit := tsp.intersect_ray(tq)
 			if not thit.is_empty() and str((thit["collider"] as Node).name) == "TreeCollision":
@@ -3074,7 +3156,7 @@ func _run_smoke() -> void:
 		print("[smoke] sample state=", sample.state, " pos=", sample.global_position, " armed=", sample.armed, " loot_scan=", sample._loot_scan, " vel=", sample.velocity, " nearest=", _nearest_weapon(sample))
 	await get_tree().create_timer(12.0).timeout
 	print("[smoke] after 24s alive=", alive, " armed_bots=", _count_armed_bots(), " kills=", player_kills, " bot_fights_ok=", alive < 19)
-	print("[smoke] minimap=", world.minimap_texture)
+	print("[smoke] map data=", world.map_data_texture, " canopy=", world.map_canopy_texture)
 	print("[smoke] OK")
 	get_tree().quit()
 
@@ -3470,6 +3552,22 @@ func _shot_state(st: String) -> void:
 		"settings":
 			_quit_to_menu()
 			hud._open_settings()
+		"firefight":
+			# Bursts crossing the view at 40, 120 and 300 m, caught mid-flight.
+			var ffwd := Basis(Vector3.UP, p.yaw) * Vector3(0, 0, -1)
+			var fright := ffwd.cross(Vector3.UP)
+			var shooter: Node = bots[0] if not bots.is_empty() else p
+			var seq := 9000
+			for i in 8:
+				for d in [15.0, 40.0, 120.0, 300.0]:
+					var from: Vector3 = p.global_position + ffwd * float(d) - fright * 45.0 + Vector3.UP * (1.6 + 0.04 * i)
+					from.y = maxf(from.y, terrain.height_at(from.x, from.z) + 1.6) + (0.0 if d < 20.0 else 4.0 + float(d) * 0.04)
+					seq += 1
+					ballistics.fire(shooter, from, (fright + ffwd * randf_range(-0.01, 0.01)).normalized(), "rifle", from, seq, 0.2)
+				await get_tree().physics_frame
+			await get_tree().physics_frame
+			await get_tree().physics_frame
+			return
 		"airdrop":
 			var c := Vector2(p.global_position.x, p.global_position.z) + Vector2(cos(p.yaw + PI * 0.5), -sin(p.yaw + PI * 0.5)) * 0.0
 			var fwd := Basis(Vector3.UP, p.yaw) * Vector3(0, 0, -14)
@@ -4393,6 +4491,143 @@ func net_player_left(id: int) -> void:
 ## Spawn a match's loot and check every item: resting on a floor (not
 ## floating, not sunk), not inside a wall or prop, and not piled up with
 ## others. Prints totals and the worst offenders.
+## Loose pieces: every solid part of every building and landmark has to be
+## joined, directly or through other parts, to something that stands on the
+## ground. Reports whatever hangs in the air on its own, and lone bits.
+func _run_loose_audit() -> void:
+	for i in 3:
+		await get_tree().physics_frame
+	var boxes: Array[AABB] = []
+	var owners: Array[String] = []
+	var stack: Array[Node] = [world]
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		for c in n.get_children():
+			stack.append(c)
+		if not (n is CollisionShape3D):
+			continue
+		var cs := n as CollisionShape3D
+		var body := cs.get_parent()
+		if not (body is StaticBody3D) or cs.shape == null:
+			continue
+		if str(body.name) in ["TerrainCollision", "TreeCollision"] or cs.shape is HeightMapShape3D:
+			continue
+		var xf := cs.global_transform
+		var pts := PackedVector3Array()
+		if cs.shape is BoxShape3D:
+			var h := (cs.shape as BoxShape3D).size * 0.5
+			for sx: float in [-1.0, 1.0]:
+				for sy: float in [-1.0, 1.0]:
+					for sz: float in [-1.0, 1.0]:
+						pts.append(xf * Vector3(h.x * sx, h.y * sy, h.z * sz))
+		elif cs.shape is ConvexPolygonShape3D:
+			for p in (cs.shape as ConvexPolygonShape3D).points:
+				pts.append(xf * p)
+		elif cs.shape is ConcavePolygonShape3D:
+			for p in (cs.shape as ConcavePolygonShape3D).get_faces():
+				pts.append(xf * p)
+		elif cs.shape is CylinderShape3D:
+			var cyl := cs.shape as CylinderShape3D
+			for sx: float in [-1.0, 1.0]:
+				for sy: float in [-1.0, 1.0]:
+					for sz: float in [-1.0, 1.0]:
+						pts.append(xf * Vector3(cyl.radius * sx, cyl.height * 0.5 * sy, cyl.radius * sz))
+		elif cs.shape is SphereShape3D:
+			var r := (cs.shape as SphereShape3D).radius
+			pts.append(xf.origin - Vector3.ONE * r)
+			pts.append(xf.origin + Vector3.ONE * r)
+		if pts.is_empty():
+			continue
+		var bb := AABB(pts[0], Vector3.ZERO)
+		for p in pts:
+			bb = bb.expand(p)
+		boxes.append(bb)
+		owners.append("%s/%s" % [body.get_parent().name if body.get_parent() != null else "?", body.name])
+	print("[loose] %d solid parts" % boxes.size())
+	# Join parts that touch.
+	var parent := PackedInt32Array()
+	parent.resize(boxes.size())
+	for i in boxes.size():
+		parent[i] = i
+	var find := func(i: int) -> int:
+		while parent[i] != i:
+			parent[i] = parent[parent[i]]
+			i = parent[i]
+		return i
+	const CELL := 6.0
+	var grid: Dictionary = {}
+	for i in boxes.size():
+		var g := boxes[i].grow(0.15)
+		for cx in range(int(floor(g.position.x / CELL)), int(floor(g.end.x / CELL)) + 1):
+			for cz in range(int(floor(g.position.z / CELL)), int(floor(g.end.z / CELL)) + 1):
+				var key := Vector2i(cx, cz)
+				if not grid.has(key):
+					grid[key] = []
+				for j: int in grid[key]:
+					if g.intersects(boxes[j]):
+						var a: int = find.call(i)
+						var b: int = find.call(j)
+						if a != b:
+							parent[a] = b
+				(grid[key] as Array).append(i)
+	# Which groups reach the ground?
+	var groups: Dictionary = {}
+	for i in boxes.size():
+		var root: int = find.call(i)
+		if not groups.has(root):
+			groups[root] = {"n": 0, "bb": boxes[i], "gap": INF, "owner": owners[i]}
+		var gdata: Dictionary = groups[root]
+		gdata.n += 1
+		gdata.bb = (gdata.bb as AABB).merge(boxes[i])
+		var bb := boxes[i]
+		var ground := -INF
+		for fx: float in [0.0, 0.5, 1.0]:
+			for fz: float in [0.0, 0.5, 1.0]:
+				var gx := bb.position.x + bb.size.x * fx
+				var gz := bb.position.z + bb.size.z * fz
+				ground = maxf(ground, maxf(terrain.height_at(gx, gz), terrain.water_surface_at(gx, gz) - 3.0))
+		gdata.gap = minf(float(gdata.gap), bb.position.y - ground)
+	var floating: Array = []
+	var lone := 0
+	for root in groups:
+		var gdata: Dictionary = groups[root]
+		if float(gdata.gap) > 0.45:
+			floating.append(gdata)
+		elif int(gdata.n) == 1:
+			lone += 1
+			# A slab standing by itself: a wall nobody built a house round?
+			var lb: AABB = gdata.bb
+			if lb.size.y > 2.0 and maxf(lb.size.x, lb.size.z) > 1.6 and (OS.get_cmdline_user_args().has("--verbose-loose")):
+				var lc := lb.get_center()
+				print("[loose] lone slab of %s at (%.0f, %.1f, %.0f) size (%.1f, %.1f, %.1f) near %s" % [gdata.owner, lc.x, lc.y, lc.z, lb.size.x, lb.size.y, lb.size.z, _place_name(lc)])
+	floating.sort_custom(func(a, b): return float(a.gap) > float(b.gap))
+	print("[loose] %d groups, %d of them a single part on the ground, %d hang in the air" % [groups.size(), lone, floating.size()])
+	for gdata in floating:
+		var bb: AABB = gdata.bb
+		var c := bb.get_center()
+		print("[loose] FLOATING %.1f m up: %d part(s) of %s at (%.0f, %.1f, %.0f) size (%.1f, %.1f, %.1f) near %s" % [gdata.gap, gdata.n, gdata.owner, c.x, c.y, c.z, bb.size.x, bb.size.y, bb.size.z, _place_name(c)])
+	print("[loose] %s" % ("ALL GOOD" if floating.is_empty() else "%d FLOATING" % floating.size()))
+	get_tree().quit()
+
+
+## The named town or landmark nearest to a spot (for test reports).
+func _place_name(p: Vector3) -> String:
+	var best := "?"
+	var best_d := INF
+	var here := Vector2(p.x, p.z)
+	for v in world.villages.village_pads:
+		var d := here.distance_to(v.center)
+		if str(v.name) != "" and d < best_d:
+			best_d = d
+			best = str(v.name)
+	for l in world.villages.landmarks.labels:
+		var d := here.distance_to(l[1])
+		if d < best_d:
+			best_d = d
+			best = str(l[0])
+	return "%s (%d m)" % [best, int(best_d)]
+
+
 func _run_loot_audit() -> void:
 	_start_match()
 	for i in 3:
@@ -5195,7 +5430,9 @@ func _exit_spot(v: Vehicle, seat: int) -> Vector3:
 	var sq := PhysicsShapeQueryParameters3D.new()
 	sq.shape = cap
 	sq.collision_mask = 1 | 4
-	sq.exclude = [v.get_rid(), player.get_rid()]
+	# The jeep's own body counts: on its side it reaches out over the spots
+	# beside the doors.
+	sq.exclude = [player.get_rid()]
 	for o in tries:
 		var p: Vector3 = flat * (o as Vector3)
 		var down := PhysicsRayQueryParameters3D.create(p + Vector3.UP * 3.0, p + Vector3.DOWN * 6.0, 1)
@@ -5420,10 +5657,10 @@ func _run_carexit_test() -> void:
 			v._last_vel = Vector3.ZERO
 			v._crash_cd = 2.0
 			# A tipped jeep rights itself after a few seconds: let it settle.
-			for i in (240 if bool(pl[3]) else 50):
+			for i in (420 if bool(pl[3]) else 50):
 				await get_tree().physics_frame
 				if bool(pl[3]) and i % 30 == 0:
-					print("[carexit]   settle %d up=%.2f hp=%.0f vel=%.1f grounded=%d" % [i, v.global_basis.y.y, v.hp, v.linear_velocity.length(), v._grounded])
+					print("[carexit]   settle %d up=%.2f hp=%.0f vel=%.1f grounded=%d flip_t=%.1f asleep=%s frozen=%s driver=%s" % [i, v.global_basis.y.y, v.hp, v.linear_velocity.length(), v._grounded, v._flip_t, v._asleep, v.freeze, v.seats[0] != null])
 			while v.linear_velocity.length() > 0.3:
 				await get_tree().physics_frame
 			v.hp = Vehicle.MAX_HP
@@ -5520,7 +5757,7 @@ func _run_drive_test() -> void:
 		qs.exclude = [v.get_rid()]
 		for r in get_world_3d().direct_space_state.intersect_shape(qs, 8):
 			var body := r["collider"] as CollisionObject3D
-			var sn: Node = body.shape_owner_get_owner(body.shape_find_owner(int(r["shape"]))) if body != null else null
+			var sn: Node = _shape_node(body, int(r["shape"]))
 			print("[drive]   blocked by ", body.name if body else "?", " ", (sn as Node3D).global_position if sn is Node3D else "", " ", ((sn as CollisionShape3D).shape as BoxShape3D).size if sn is CollisionShape3D and (sn as CollisionShape3D).shape is BoxShape3D else "")
 	var yaw0 := v.global_basis.get_euler().y
 	t = 0.0
@@ -5999,7 +6236,8 @@ func _run_fantasy_test() -> void:
 			var rel := player.global_position - o
 			var ang := atan2(rel.z, rel.x)
 			# Unwrap to the stair's own turn count using height.
-			var frac := clampf((player.global_position.y - o.y) / deck, 0.0, 1.0)
+			var y0: float = float(sp[5]) if sp.size() > 5 else 0.0
+			var frac := clampf((player.global_position.y - o.y - y0) / (deck - y0), 0.0, 1.0)
 			var target_a := a0 + (TAU * float(hx[2])) * frac + 0.22
 			var tgt := o + Vector3(cos(target_a) * hr, 0, sin(target_a) * hr)
 			if player.global_position.y > o.y + deck - 0.3:
@@ -6014,7 +6252,7 @@ func _run_fantasy_test() -> void:
 				for k in player.get_slide_collision_count():
 					var col := player.get_slide_collision(k)
 					var cob := col.get_collider() as CollisionObject3D
-					var sn2 = cob.shape_owner_get_owner(cob.shape_find_owner(col.get_collider_shape_index())) if cob else null
+					var sn2 = _shape_node(cob, col.get_collider_shape_index())
 					hs.append("%s %s n=%s" % [cob.name if cob else "?", (sn2 as Node3D).global_position.round() - o.round() if sn2 is Node3D else "", col.get_normal().snapped(Vector3.ONE * 0.1)])
 				print("[dbg] t=%.0f rel=%s ang=%.2f tgt_a=%.2f hits=%s" % [t, (player.global_position - o).snapped(Vector3.ONE * 0.1), ang, target_a, str(hs)])
 			if player.global_position.y > o.y + deck - 0.2 and Vector2(rel.x, rel.z).length() < float(hx[3]):
@@ -6132,6 +6370,7 @@ func _run_shoot_through_test() -> void:
 	var blocked_open := 0
 	var leaking_solid := 0
 	var reports: Array = []
+	var leak_reports: Array = []
 	var blockers := {}
 	for e in vil.opening_walls:
 		var key: String = e[0]
@@ -6180,7 +6419,7 @@ func _run_shoot_through_test() -> void:
 					hits_both += 1
 					if not solid:
 						var body := r["collider"] as CollisionObject3D
-						var sn: Node = body.shape_owner_get_owner(body.shape_find_owner(int(r["shape"]))) if body != null else null
+						var sn: Node = _shape_node(body, int(r["shape"]))
 						var desc := "%s %s" % [body.name if body else "?", str(((sn as CollisionShape3D).shape as BoxShape3D).size.snapped(Vector3.ONE * 0.01)) if sn is CollisionShape3D and (sn as CollisionShape3D).shape is BoxShape3D else (sn as CollisionShape3D).shape.get_class() if sn is CollisionShape3D else ""]
 						blockers[desc] = int(blockers.get(desc, 0)) + 1
 						if reports.size() < 25:
@@ -6189,12 +6428,16 @@ func _run_shoot_through_test() -> void:
 				cells_solid += 1
 				if hits_both < 2:
 					leaking_solid += 1
+					if leak_reports.size() < 20:
+						leak_reports.append("%s at %s cell (%.2f, %.2f) hits %d" % [key, str(xf.origin.round()), c.x, c.y, hits_both])
 			else:
 				cells_open += 1
 				if hits_both > 0:
 					blocked_open += 1
 	print("[shootthru] %d opening walls, %d open cells, %d solid cells" % [walls, cells_open, cells_solid])
 	print("[shootthru] visibly open but blocked: %d   visibly solid but shot passes: %d" % [blocked_open, leaking_solid])
+	for lr in leak_reports:
+		print("[shootthru] LEAK ", lr)
 	for k in blockers:
 		print("[shootthru] blocker ", k, " x", blockers[k])
 	for r2 in reports:
@@ -6352,6 +6595,329 @@ func _run_bot_tree_test() -> void:
 	var bp := b.global_position
 	print("[bottree] came back down=%s in %.0fs (ended y %.1f a %.2f r %.1f route %d tactic '%s' enemy %s)" % [down, t2, bp.y - tt.o.y, tt.angle_of(bp), Vector2(bp.x - tt.o.x, bp.z - tt.o.z).length(), b._route.size(), b._tactic, b.enemy != null])
 	print("[bottree] ", "ALL GOOD" if ok == 3 and down else "FAILED")
+	get_tree().quit()
+
+
+## Do trees stop exactly the bullets their wood would? Each sampled tree gets
+## its real bark as a reference shape, and its trunk alone as another (on
+## layers nothing else uses); rays across the trunk at heights up to 10 m
+## compare what they hit: the tree collider with no wood there is an invisible
+## wall, a trunk with no collider lets shots through (limbs are allowed to).
+func _run_tree_shoot_test() -> void:
+	await get_tree().physics_frame
+	var ref := StaticBody3D.new()
+	ref.collision_layer = 1 << 9
+	ref.collision_mask = 0
+	add_child(ref)
+	var ref_trunk := StaticBody3D.new()
+	ref_trunk.collision_layer = 1 << 10
+	ref_trunk.collision_mask = 0
+	add_child(ref_trunk)
+	var per_species := {}
+	var trees: Array = []
+	var trunk_shapes := {}
+	# Neighbours get reference wood too: their trunks can stand on a ray.
+	var cells := {}
+	for i in world.tree_records.size():
+		var rp: Vector3 = world.tree_records[i].pos
+		var ck := Vector2i(floori(rp.x / 10.0), floori(rp.z / 10.0))
+		if not cells.has(ck):
+			cells[ck] = []
+		(cells[ck] as Array).append(i)
+	var added := {}
+	var closest := INF
+	for i in world.tree_records.size():
+		var rec: Dictionary = world.tree_records[i]
+		var species := str(rec.name)
+		var n := int(per_species.get(species, 0))
+		if n >= 40 or randf() > 0.08:
+			continue
+		var others: Array = []
+		trees.append([species, Transform3D(Basis(Vector3.UP, float(rec.rot)).scaled(Vector3.ONE * float(rec.scale)), rec.pos), others])
+		per_species[species] = n + 1
+		var ck := Vector2i(floori(rec.pos.x / 10.0), floori(rec.pos.z / 10.0))
+		for dx in range(-1, 2):
+			for dz in range(-1, 2):
+				for j: int in cells.get(ck + Vector2i(dx, dz), []):
+					var other: Dictionary = world.tree_records[j]
+					var dist := Vector2(other.pos.x - rec.pos.x, other.pos.z - rec.pos.z).length()
+					if j != i:
+						var ofoot := float(world.TRUNK_FOOT[str(other.name)]) * float(other.scale)
+						closest = minf(closest, dist - (ofoot + float(world.TRUNK_FOOT[species]) * float(rec.scale)))
+						others.append(Vector3(other.pos.x, ofoot + 0.3, other.pos.z))
+					if added.has(j) or dist > 9.5:
+						continue
+					added[j] = true
+					var osp := str(other.name)
+					var xf := Transform3D(Basis(Vector3.UP, float(other.rot)).scaled(Vector3.ONE * float(other.scale)), other.pos)
+					var cs := CollisionShape3D.new()
+					var refshape := world._mesh_shape(osp, "Bark").duplicate() as ConcavePolygonShape3D
+					# Either side of a face counts: the kit's bark is not wound
+					# consistently, and a miss on a back face is not a gap in the wood.
+					refshape.backface_collision = true
+					cs.shape = refshape
+					cs.transform = xf
+					ref.add_child(cs)
+					if not trunk_shapes.has(osp):
+						trunk_shapes[osp] = world._trunk_shape(osp)
+					var ts := CollisionShape3D.new()
+					ts.shape = trunk_shapes[osp]
+					ts.transform = xf
+					ref_trunk.add_child(ts)
+	print("[treeshoot] %d trees sampled; the tightest gap between roots near them is %.2f m" % [trees.size(), closest])
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	var space := get_world_3d().direct_space_state
+	var heights := [0.5, 1.2, 2.0, 3.0, 4.5, 6.0, 8.0, 10.0]
+	var stats := {}
+	var bad := 0
+	for tr in trees:
+		var species: String = tr[0]
+		var xf: Transform3D = tr[1]
+		var sc := xf.basis.get_scale().x
+		var st: Dictionary = stats.get(species, {"rays": 0, "wall": 0, "through": 0, "limb": 0, "wall_h": {}, "through_h": {}, "all_h": {}, "ok": 0})
+		for h in heights:
+			for di in 6:
+				var a := TAU * float(di) / 6.0
+				var d := Vector3(cos(a), 0, sin(a))
+				var side := Vector3(-d.z, 0, d.x)
+				for off in [-0.6, -0.3, 0.0, 0.3, 0.6]:
+					var c: Vector3 = xf.origin + Vector3.UP * (float(h) + 0.25) + side * float(off) * sc * 0.5
+					# Short enough that a neighbouring tree (7.6 m or more away)
+					# is never on the ray: only this tree's wood and collider.
+					var from: Vector3 = c - d * 3.0
+					var to: Vector3 = c + d * 3.0
+					# Not from inside a neighbour's trunk: a solid has no inside
+					# face to hit, the bark reference does.
+					var inside := false
+					for o: Vector3 in tr[2]:
+						if Vector2(from.x - o.x, from.z - o.z).length() < o.y or Vector2(to.x - o.x, to.z - o.z).length() < o.y:
+							inside = true
+							break
+					if inside:
+						continue
+					var vis := space.intersect_ray(PhysicsRayQueryParameters3D.create(from, to, 1 << 9))
+					var trk := space.intersect_ray(PhysicsRayQueryParameters3D.create(from, to, 1 << 10))
+					var phy := space.intersect_ray(PhysicsRayQueryParameters3D.create(from, to, 1))
+					var phy_tree: bool = not phy.is_empty() and str((phy["collider"] as Node).name) == "TreeCollision"
+					if phy.is_empty() and vis.is_empty():
+						continue
+					st["rays"] = int(st["rays"]) + 1
+					var dv: float = from.distance_to(vis["position"]) if not vis.is_empty() else INF
+					var dt: float = from.distance_to(trk["position"]) if not trk.is_empty() else INF
+					var dp: float = from.distance_to(phy["position"]) if not phy.is_empty() else INF
+					if phy_tree and dp + 0.25 < dv:
+						st["wall"] = int(st["wall"]) + 1
+						var gap := dv - dp
+						var gk := "<0.5m" if gap < 0.5 else ("0.5-1m" if gap < 1.0 else ("1-3m" if gap < 3.0 else "no wood on the ray"))
+						st[gk] = int(st.get(gk, 0)) + 1
+						var wh: Dictionary = st["wall_h"]
+						wh[h] = int(wh.get(h, 0)) + 1
+						# How far outside the wood did it stop the shot? Slide
+						# the ray sideways until bark is where the collider was.
+						var pp: Vector3 = phy["position"]
+						var lat := 99.0
+						for k in range(1, 26):
+							for sg in [-1.0, 1.0]:
+								var sh: Vector3 = side * float(sg) * 0.02 * float(k)
+								var v2 := space.intersect_ray(PhysicsRayQueryParameters3D.create(from + sh, to + sh, 1 << 9))
+								if not v2.is_empty() and (v2["position"] as Vector3).distance_to(pp + sh) < 0.3:
+									lat = minf(lat, 0.02 * float(k))
+							if lat < 99.0:
+								break
+						var lk := "lat<=4cm" if lat <= 0.041 else ("lat<=8cm" if lat <= 0.081 else ("lat<=14cm" if lat <= 0.141 else ("lat<=30cm" if lat <= 0.301 else "lat>30cm")))
+						st[lk] = int(st.get(lk, 0)) + 1
+						if lat > 0.141 and OS.get_cmdline_user_args().has("--verbose-walls") and int(st.get("lat>30cm", 0)) <= 6:
+							var lp: Vector3 = xf.affine_inverse() * pp
+							var near := INF
+							for rec2 in world.tree_records:
+								var d2 := Vector2(rec2.pos.x - pp.x, rec2.pos.z - pp.z).length()
+								if d2 > 0.01 and (Vector3(rec2.pos) - xf.origin).length() > 0.05:
+									near = minf(near, d2)
+							print("[treeshoot]   wall %s sc %.2f h %.1f off %.1f dir %d: hit local %s r %.2f shape %d, nearest other tree %.2f m from the hit" % [species, sc, float(h), float(off), di, str(lp.snapped(Vector3.ONE * 0.01)), Vector2(lp.x, lp.z).length(), int(phy["shape"]), near])
+						if lat > 0.081:
+							var bh: Dictionary = st.get("big_h", {})
+							bh[h] = int(bh.get(h, 0)) + 1
+							st["big_h"] = bh
+					elif dt < INF and dp > dt + 0.25:
+						st["through"] = int(st["through"]) + 1
+						var th: Dictionary = st["through_h"]
+						th[h] = int(th.get(h, 0)) + 1
+					elif dv < INF and dp > dv + 0.25:
+						st["limb"] = int(st["limb"]) + 1
+					else:
+						st["ok"] = int(st["ok"]) + 1
+					var ah: Dictionary = st["all_h"]
+					ah[h] = int(ah.get(h, 0)) + 1
+		stats[species] = st
+	for sp in stats:
+		var st: Dictionary = stats[sp]
+		print("[treeshoot] %s: trunk in %d slabs" % [sp, (world._hull_cache.get(sp, []) as Array).size()])
+		print("[treeshoot] %s: %d rays near wood, invisible wall %d (%.1f%%), shot through the trunk %d (%.1f%%), through a limb %d  wall gaps: <0.5m %d, 0.5-1m %d, 1-3m %d, nothing there %d" % [sp, st.rays, st.wall, 100.0 * st.wall / maxf(1, st.rays), st.through, 100.0 * st.through / maxf(1, st.rays), st.limb, int(st.get("<0.5m", 0)), int(st.get("0.5-1m", 0)), int(st.get("1-3m", 0)), int(st.get("no wood on the ray", 0))])
+		# By height: a trunk that lets shots through at head height is no cover.
+		var line := ""
+		for h in heights:
+			var n_all := int((st["all_h"] as Dictionary).get(h, 0))
+			var w := int((st["wall_h"] as Dictionary).get(h, 0))
+			var t := int((st["through_h"] as Dictionary).get(h, 0))
+			line += "  %.1fm %d/%d/%d" % [h, w, t, n_all]
+			# Up to head height the trunk has to be the cover it looks like.
+			# (A collider within 8 cm of the bark is the bark, to the eye.)
+			var big := int((st.get("big_h", {}) as Dictionary).get(h, 0))
+			if float(h) <= 3.0 and n_all > 0 and (float(t) > 0.01 * n_all or float(big) > 0.01 * n_all):
+				bad += 1
+		print("[treeshoot]    height wall/through/rays:", line)
+		print("[treeshoot]    walls stand off the wood by: <=4cm %d, <=8cm %d, <=14cm %d, <=30cm %d, more %d   (over 8 cm by height: %s)" % [int(st.get("lat<=4cm", 0)), int(st.get("lat<=8cm", 0)), int(st.get("lat<=14cm", 0)), int(st.get("lat<=30cm", 0)), int(st.get("lat>30cm", 0)), str(st.get("big_h", {}))])
+	if closest < 1.0:
+		bad += 1
+	print("[treeshoot] ", "ALL GOOD" if bad == 0 and not stats.is_empty() else "FAILED: %d species-heights leak or wall (or trees crowd)" % bad)
+	get_tree().quit()
+
+
+## A bot against you (standing still, kept alive): how soon and how hard it
+## hits you in the open, and what it does when you hide behind a trunk.
+func _run_bot_vs_player_test() -> void:
+	_start_match()
+	await get_tree().physics_frame
+	_land_player_now()
+	for bt in bots:
+		if is_instance_valid(bt):
+			bt.set_physics_process(false)
+	if zone != null:
+		zone.set_process(false)
+	var tcol := world.get_node_or_null("TreeCollision")
+	var rr := RandomNumberGenerator.new()
+	rr.seed = 5
+	for scen in ["open", "open", "behind tree", "behind tree"]:
+		# Somewhere grassy; for cover, right behind a trunk. The bot goes 45 m
+		# away where it can see you (in the tree case: see you beside the
+		# trunk, with the same low ray it aims along, but not once you step
+		# behind it).
+		var space := get_world_3d().direct_space_state
+		var pp := Vector3.ZERO
+		var side_pos := Vector3.ZERO
+		var bdir := Vector3.ZERO
+		for attempt in 60:
+			var c := Vector3.ZERO
+			var hide_dir := Vector3.ZERO
+			for tries in 2000:
+				var x := rr.randf_range(-900.0, 900.0)
+				var z := rr.randf_range(-900.0, 900.0)
+				if terrain.height_at(x, z) < Terrain.WATER_LEVEL + 2.0 or terrain.slope_at(x, z) > 0.2:
+					continue
+				if scen == "open":
+					if terrain.forest_density(x, z) < 0.35:
+						c = Vector3(x, 0, z)
+						break
+				elif tcol != null:
+					var rec: Dictionary = world.tree_records[rr.randi() % world.tree_records.size()]
+					var tp: Vector3 = rec.pos
+					if terrain.slope_at(tp.x, tp.z) < 0.2 and terrain.height_at(tp.x, tp.z) > Terrain.WATER_LEVEL + 2.0:
+						var rad := 0.42 * float(rec.scale)
+						var ha := rr.randf() * TAU
+						hide_dir = Vector3(cos(ha), 0, sin(ha))
+						c = Vector3(tp.x, 0, tp.z) + hide_dir * (rad + 0.5)
+						break
+			pp = ground_at(Vector3(c.x, terrain.height_at(c.x, c.z) + 2.0, c.z))
+			side_pos = pp
+			if scen != "open":
+				var sp := pp + Vector3(-hide_dir.z, 0, hide_dir.x) * 2.2
+				side_pos = ground_at(Vector3(sp.x, terrain.height_at(sp.x, sp.z) + 2.0, sp.z))
+			bdir = Vector3.ZERO
+			for k in 36:
+				var a := rr.randf() * TAU
+				var dtry := Vector3(cos(a), 0, sin(a))
+				if scen != "open":
+					dtry = (-hide_dir).rotated(Vector3.UP, rr.randf_range(-0.35, 0.35))
+				var bq := pp + dtry * 45.0
+				var btry := ground_at(Vector3(bq.x, terrain.height_at(bq.x, bq.z) + 3.0, bq.z))
+				if btry.y < Terrain.WATER_LEVEL + 1.0:
+					continue
+				var eye := btry + Vector3.UP * 1.3
+				var see_side := space.intersect_ray(PhysicsRayQueryParameters3D.create(eye, side_pos + Vector3.UP * 1.2, 1)).is_empty() \
+					and space.intersect_ray(PhysicsRayQueryParameters3D.create(eye, side_pos + Vector3.UP * 0.7, 1)).is_empty()
+				var see_hide := space.intersect_ray(PhysicsRayQueryParameters3D.create(eye, pp + Vector3.UP * 0.9, 1)).is_empty()
+				if see_side and (scen == "open" or not see_hide):
+					bdir = dtry
+					break
+			if bdir != Vector3.ZERO:
+				break
+		if bdir == Vector3.ZERO:
+			print("[botvsyou] %s: no spot with a clear view, skipped" % scen)
+			continue
+		player.global_position = pp + Vector3.UP * 0.1
+		player.velocity = Vector3.ZERO
+		player.spawn_protect = 0.0
+		player.alive = true
+		player.hp = 100.0
+		player.vest_level = 0
+		player.helmet_level = 0
+		player.test_input = Vector2.ZERO
+		player.test_hold = {"crouch": true} if scen != "open" else {}
+		if scen != "open":
+			player.global_position = side_pos + Vector3.UP * 0.1
+		var b: Bot = bots[0]
+		var bq2 := pp + bdir * 45.0
+		var bp := ground_at(Vector3(bq2.x, terrain.height_at(bq2.x, bq2.z) + 3.0, bq2.z))
+		b.global_position = bp + Vector3.UP * 0.1
+		b.state = Bot.State.GROUND
+		b.velocity = Vector3.ZERO
+		b.arm_weapon("rifle")
+		b.mag = 30
+		b.grenades = 2
+		b.hp = 100.0
+		b.alive = true
+		b.calm_t = 0.0
+		b.aggression = 0.6
+		b.shoot_skill = 0.5
+		b.reset_combat()
+		b._loot_scan = 1.0e9
+		b.loot_target = null
+		b.test_hold_roam = true
+		b.roam_point = Vector2(bp.x, bp.z)
+		var to := pp - bp
+		b.rotation.y = atan2(-to.x, -to.z)
+		b.set_physics_process(true)
+		var t := 0.0
+		var dmg := 0.0
+		var hits := 0
+		var first := -1.0
+		var seen := {}
+		var nades0 := b.grenades
+		var shots := 0
+		var last_mag := b.mag
+		var vis_n := 0
+		var n := 0
+		while t < 45.0:
+			await get_tree().physics_frame
+			t += get_physics_process_delta_time()
+			if scen != "open" and t > 2.0 and t - get_physics_process_delta_time() <= 2.0:
+				# Seen: now duck behind the trunk.
+				player.global_position = pp + Vector3.UP * 0.1
+			if b.mag < last_mag:
+				shots += last_mag - b.mag
+			last_mag = b.mag
+			if OS.has_environment("DBG_BVY") and int(t * 60.0) % 180 == 0:
+				print("[bvydbg] %s t=%.0f bot->you %.1f m  tactic=%s last_seen=%s (%.1f m from you) hidden_t=%.1f route=%d stuck=%d" % [scen, t, b.global_position.distance_to(player.global_position), b._tactic, str(b._last_seen.round()) if b._last_seen != Vector3.INF else "-", b._last_seen.distance_to(player.global_position) if b._last_seen != Vector3.INF else -1.0, b._hidden_t, b._route.size(), b._stuck_n])
+			n += 1
+			if b.enemy == player and b.enemy_visible():
+				vis_n += 1
+			if player.hp < 100.0:
+				dmg += 100.0 - player.hp
+				hits += 1
+				if first < 0.0:
+					first = t
+				player.hp = 100.0
+			if not player.alive:
+				player.alive = true
+				player.hp = 100.0
+			if int(t * 60.0) % 15 == 0:
+				var tac: String = b._tactic if b._tactic != "" else ("open" if b.enemy != null else "idle")
+				seen[tac] = int(seen.get(tac, 0)) + 1
+		print("[botvsyou] %s: first hit after %s, %d hits / %d shots, %.0f damage/min, sees you %d%% of the time, range %.0f m, grenades thrown %d, tactics %s" % [scen, ("%.1fs" % first) if first >= 0.0 else "never", hits, shots, dmg / t * 60.0, int(100.0 * vis_n / maxf(1.0, n)), b.global_position.distance_to(player.global_position), nades0 - b.grenades, str(seen)])
+		b.set_physics_process(false)
+		b.global_position = Vector3(0, -500, 0)
+	player.test_hold = {}
 	get_tree().quit()
 
 
@@ -6567,7 +7133,7 @@ func _run_bot_stairs_test() -> void:
 				var cob := c.get_collider() as CollisionObject3D
 				if cob == null:
 					continue
-				var sn = cob.shape_owner_get_owner(cob.shape_find_owner(c.get_collider_shape_index()))
+				var sn = _shape_node(cob, c.get_collider_shape_index())
 				var hb := Basis(Vector3.UP, float(h.yaw)).inverse()
 				hits.append("%s@%s" % [cob.name, str((hb * ((sn as Node3D).global_position - Vector3(hc.x, float(h.pad), hc.y))).snapped(Vector3.ONE * 0.01)) if sn is Node3D else "?"])
 			fails.append("%dx%d door %d at %s: up=%s (%.0fs) out=%s, bot local %s vel %s route=%d hits %s" % [int(h.w), int(h.d), int(h.door_side), str(Vector3(hc.x, float(h.pad), hc.y).round()), got, t, out_ok, str(local.snapped(Vector3.ONE * 0.1)), str(bot.velocity.snapped(Vector3.ONE * 0.1)), bot._route.size(), str(hits)])
@@ -6666,8 +7232,7 @@ func _run_house_walk_test() -> void:
 			var body := r["collider"] as CollisionObject3D
 			if body == null:
 				continue
-			var own := body.shape_find_owner(int(r["shape"]))
-			var sn := body.shape_owner_get_owner(own) as CollisionShape3D
+			var sn := _shape_node(body, int(r["shape"])) as CollisionShape3D
 			if sn != null:
 				hits_h.append("Q:%s@%s %s" % [str(body.name), str((b.inverse() * (sn.global_position - o)).snapped(Vector3.ONE * 0.01)), str((sn.shape as BoxShape3D).size.snapped(Vector3.ONE * 0.01) if sn.shape is BoxShape3D else "")])
 		var inside := (b.inverse() * (player.global_position - o))

@@ -313,6 +313,42 @@ func _physics_process(delta: float) -> void:
 		_physics_process_body(delta)
 
 
+## Rolling it back did not work (wedged against a trunk or a wall): stand
+## it back on its wheels where it lies, if there is room for it there.
+func _set_upright() -> bool:
+	var yaw := atan2(-global_basis.z.x, -global_basis.z.z)
+	var fwd := Vector3(-sin(yaw), 0, -cos(yaw))
+	var b := Basis.looking_at(fwd, Vector3.UP)
+	var box := BoxShape3D.new()
+	box.size = Vector3(1.9, 1.3, 4.1)
+	var q := PhysicsShapeQueryParameters3D.new()
+	q.shape = box
+	q.collision_mask = 1 | 2 | 4
+	q.exclude = [get_rid()]
+	var space := get_world_3d().direct_space_state
+	var side := Vector3(fwd.z, 0, -fwd.x)
+	var at := Vector3.INF
+	# Where it lies, or a step or two clear of whatever it is wedged on.
+	for off in [Vector3.ZERO, side * 1.6, -side * 1.6, fwd * 2.2, -fwd * 2.2, side * 3.0, -side * 3.0]:
+		var p: Vector3 = global_position + (off as Vector3)
+		var down := space.intersect_ray(PhysicsRayQueryParameters3D.create(p + Vector3.UP * 3.0, p + Vector3.DOWN * 4.0, 1, [get_rid()]))
+		if down.is_empty():
+			continue
+		var g: Vector3 = down["position"]
+		q.transform = Transform3D(b, g + Vector3.UP * 1.65)
+		if space.intersect_shape(q, 1).is_empty():
+			at = g + Vector3.UP * 0.9
+			break
+	if at == Vector3.INF:
+		return false
+	global_transform = Transform3D(b, at)
+	linear_velocity = Vector3.ZERO
+	angular_velocity = Vector3.ZERO
+	_last_vel = Vector3.ZERO
+	_crash_cd = maxf(_crash_cd, 1.5)
+	return true
+
+
 ## Someone getting out keeps passing through the jeep until they are clear
 ## of it. Dropping that the moment they leave the seat, while their body
 ## is still in it, makes the physics shove the jeep aside: a lurch on every
@@ -464,9 +500,13 @@ func _physics_process_body(delta: float) -> void:
 	# Air control and anti-flip: a little stabilising torque.
 	if _grounded == 0:
 		apply_torque(-angular_velocity * mass * 0.6)
-	if up.y < 0.35 and linear_velocity.length() < 2.0:
+	# How long it has been on its side counts on regardless of the little hops
+	# the assist itself gives it (those used to reset it, forever).
+	if up.y < 0.35:
 		_flip_t += delta
-		if _flip_t > 2.5:
+		if _flip_t > 7.0 and linear_velocity.length() < 4.0 and _set_upright():
+			_flip_t = 0.0
+		elif _flip_t > 2.5 and linear_velocity.length() < 2.5:
 			# Roll it back onto its wheels (and do not let the roll count as
 			# a crash).
 			var axis := up.cross(Vector3.UP).normalized()

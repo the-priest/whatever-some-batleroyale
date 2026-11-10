@@ -1318,6 +1318,8 @@ func _proc_box(xf: Transform3D, mat: String) -> void:
 
 
 func _proc_material(key: String) -> Material:
+	if key == "wood" or key == "wood_dark":
+		return Wood.material(key == "wood_dark", true)
 	var m := StandardMaterial3D.new()
 	if key.begins_with("cloth_"):
 		var cols := {"cloth_red": Color(0.7, 0.16, 0.12), "cloth_blue": Color(0.18, 0.3, 0.62), "cloth_green": Color(0.2, 0.48, 0.24), "cloth_yellow": Color(0.86, 0.68, 0.22)}
@@ -1564,12 +1566,17 @@ func _build_ruin(c: Vector2, pad: float) -> void:
 	var origin := Vector3(c.x, pad, c.y)
 	var w := 4 if rng.randf() < 0.5 else 3
 	var d := 3
+	# What stands in every cell of the four sides: 0 gone, 1 a stub, 2 a wall.
+	var stands: Array = [[], [], [], []]
 	# Perimeter of a ruined building: some modules standing, some gone.
 	for side in 4:
 		var cells := w if side % 2 == 0 else d
+		(stands[side] as Array).resize(cells)
+		(stands[side] as Array).fill(0)
 		for i in cells:
 			if rng.randf() < 0.4:
 				continue
+			stands[side][i] = 2
 			var along := -float(cells - 1) + float(i) * 2.0
 			var local := Vector3.ZERO
 			var wall_yaw := 0.0
@@ -1602,6 +1609,7 @@ func _build_ruin(c: Vector2, pad: float) -> void:
 					_place("Prop_Vine%d" % [1, 2, 5][rng.randi() % 3], pos + Basis(Vector3.UP, yaw + wall_yaw) * Vector3(rng.randf_range(-0.6, 0.6), 0, 0.24), yaw + wall_yaw)
 			else:
 				# Broken down to a jagged stub: waist or chest high cover.
+				stands[side][i] = 1
 				var wb := Basis(Vector3.UP, yaw + wall_yaw)
 				var h1 := rng.randf_range(0.8, 1.7)
 				_proc_box(Transform3D(wb.scaled_local(Vector3(1.98, h1, 0.42)), pos + Vector3(0, h1 * 0.5, 0)), "stone")
@@ -1612,6 +1620,7 @@ func _build_ruin(c: Vector2, pad: float) -> void:
 				_add_box_collider(pos + wb * Vector3(sx2, h1 + h2 * 0.5, 0), Vector3(0.9, h2, 0.42), yaw + wall_yaw)
 				for k in 2:
 					_place("Prop_Brick%d" % rng.randi_range(1, 4), pos + wb * Vector3(rng.randf_range(-0.9, 0.9), 0, rng.randf_range(0.5, 1.4) * (1.0 if rng.randf() < 0.5 else -1.0)), rng.randf() * TAU)
+	_ruin_breaks(origin, b, yaw, w, d, stands)
 	# What is left of the floor.
 	var fx := -float(w) + 1.0
 	while fx < float(w):
@@ -1634,3 +1643,66 @@ func _build_ruin(c: Vector2, pad: float) -> void:
 		var lp := origin + b * Vector3(rng.randf_range(-w + 1.0, w - 1.0), 0.08, rng.randf_range(-d + 1.0, d - 1.0))
 		loot_points.append({"pos": lp, "kind": "weapon" if i == 0 else "gear", "village": false})
 	_stat.ruins += 1
+
+
+## Makes a ruin read as one fallen building instead of loose panels: where a
+## wall ends at a gap the masonry steps down in broken courses, the corners
+## keep their stone piers, and a roof timber or two lies where it fell.
+func _ruin_breaks(origin: Vector3, b: Basis, yaw: float, w: int, d: int, stands: Array) -> void:
+	var r2 := RandomNumberGenerator.new()
+	r2.seed = hash(Vector2(origin.x, origin.z))
+	for side in 4:
+		var row: Array = stands[side]
+		var cells := row.size()
+		var wall_yaw: float = [0.0, PI * 0.5, PI, -PI * 0.5][side]
+		var wb := Basis(Vector3.UP, yaw + wall_yaw)
+		# Centre of the side; the wall's own x runs along it.
+		var mids: Array[Vector3] = [Vector3(0, 0, float(d)), Vector3(float(w), 0, 0), Vector3(0, 0, -float(d)), Vector3(-float(w), 0, 0)]
+		var mid: Vector3 = origin + b * mids[side]
+		for i in cells:
+			if int(row[i]) != 2:
+				continue
+			# Broken courses stepping down into the gap on either side.
+			for dir: int in [-1, 1]:
+				var j := i + dir
+				if j < 0 or j >= cells or int(row[j]) != 0:
+					continue
+				var edge := -float(cells - 1) + float(i) * 2.0 + float(dir)
+				var at := 0.0
+				var h := WALL_HEIGHT
+				for step in 3:
+					var sw := r2.randf_range(0.34, 0.52)
+					h -= r2.randf_range(0.55, 0.95)
+					if h < 0.35:
+						break
+					var cx := edge + float(dir) * (at + sw * 0.5)
+					var thick := 0.40 + 0.012 * float(step)
+					var pos := mid + wb * Vector3(cx, h * 0.5, 0)
+					_proc_box(Transform3D(wb.scaled_local(Vector3(sw + 0.02, h, thick)), pos), "stone")
+					_add_box_collider(pos, Vector3(sw + 0.02, h, thick), yaw + wall_yaw)
+					at += sw
+					if at > 0.98:
+						break
+	# Corner piers: as tall as the best wall that reaches them.
+	var corners: Array[Vector3] = [Vector3(float(w), 0, float(d)), Vector3(float(w), 0, -float(d)), Vector3(-float(w), 0, -float(d)), Vector3(-float(w), 0, float(d))]
+	for corner in 4:
+		var row0: Array = stands[corner]
+		var row1: Array = stands[(corner + 1) % 4]
+		var best := maxi(int(row0[row0.size() - 1]), int(row1[0]))
+		if best == 0:
+			continue
+		var ph := r2.randf_range(2.5, 3.3) if best == 2 else r2.randf_range(1.0, 1.7)
+		var pp := origin + b * corners[corner] + Vector3(0, ph * 0.5, 0)
+		_proc_box(Transform3D(b.scaled_local(Vector3(0.62, ph, 0.62)), pp), "stone")
+		_add_box_collider(pp, Vector3(0.62, ph, 0.62), yaw)
+		# A capstone knocked askew on the tall ones.
+		if best == 2:
+			var cb := Basis(Vector3.UP, yaw + r2.randf_range(-0.3, 0.3))
+			_proc_box(Transform3D(cb.scaled_local(Vector3(0.78, 0.16, 0.78)), pp + Vector3(0, ph * 0.5 + 0.08, 0)), "stone")
+	# Roof timbers where they came down: flat on the floor, at odd angles.
+	for i in r2.randi_range(1, 3):
+		var blen := r2.randf_range(2.6, 4.4)
+		var by := yaw + r2.randf() * TAU
+		var bp := origin + b * Vector3(r2.randf_range(-float(w) + 1.6, float(w) - 1.6), 0.13, r2.randf_range(-float(d) + 1.6, float(d) - 1.6))
+		_proc_box(Transform3D(Basis(Vector3.UP, by).scaled_local(Vector3(0.24, 0.24, blen)), bp), "wood_dark")
+		_add_box_collider(bp, Vector3(0.24, 0.24, blen), by)

@@ -15,7 +15,12 @@ var terrain: Terrain
 var villages: Villages
 var loot_points: Array[Dictionary] = []
 var spawn_points: Array[Vector3] = []
-var minimap_texture: ImageTexture
+## What the map is drawn from: heights + water depth, and tree cover.
+var map_data_texture: ImageTexture
+var map_canopy_texture: ImageTexture
+const MAP_CANOPY_RES := 2048
+## The dry land's bounding box in world x/z (the lobby frames its map on it).
+var land_rect := Rect2(-Terrain.HALF, -Terrain.HALF, Terrain.SIZE, Terrain.SIZE)
 var rng := RandomNumberGenerator.new()
 
 var _nature_cache: Dictionary = {}
@@ -649,43 +654,237 @@ func _loop_stream(name: String) -> AudioStream:
 var _shape_cache: Dictionary = {}
 
 
-## Collision made of a nature model's own triangles (only surfaces whose
-## material name contains `filter`, e.g. "Bark"; all when empty).
-## Trunk radius at chest height, collider height (to the canopy) and the
-## trunk's sideways offset from the model origin (x only), unscaled.
-const TRUNK_SINK := 1.5
+var _hull_cache: Dictionary = {}
 
 
-func _trunk_dims(name: String, canopy: float) -> Vector3:
+## The trunk of a tree model as triangles (three points each): the connected
+## piece of bark that stands on the ground. Limbs and twigs are separate
+## pieces in the kit's models, so they fall away.
+var _trunk_cache: Dictionary = {}
+
+
+func _trunk_tris(name: String) -> PackedVector3Array:
+	if _trunk_cache.has(name):
+		return _trunk_cache[name]
+	var out := PackedVector3Array()
 	var data := _nature_mesh(name)
-	var r := 0.0
-	var cx := 0.0
-	var cz := 0.0
-	var n := 0
-	var top := 0.0
+	var corners := PackedVector3Array()
 	if not data.is_empty():
 		var mesh: Mesh = data.mesh
 		for si in mesh.get_surface_count():
 			var mat := mesh.surface_get_material(si)
 			if mat == null or not mat.resource_name.contains("Bark"):
 				continue
-			var verts: PackedVector3Array = mesh.surface_get_arrays(si)[Mesh.ARRAY_VERTEX]
-			for v in verts:
-				top = maxf(top, v.y)
-				if v.y > 0.4 and v.y < 1.6:
-					cx += v.x
-					cz += v.z
-					n += 1
-			if n > 0:
-				cx /= float(n)
-				cz /= float(n)
-			for v in verts:
-				if v.y > 0.4 and v.y < 1.6:
-					r = maxf(r, Vector2(v.x - cx, v.z - cz).length())
-	var h := canopy if canopy < INF else top * 0.6
-	return Vector3(maxf(0.1, r), maxf(1.5, h), cx)
+			var arrays := mesh.surface_get_arrays(si)
+			var vs: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+			var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX] if arrays[Mesh.ARRAY_INDEX] != null else PackedInt32Array()
+			if idx.is_empty():
+				corners.append_array(vs)
+			else:
+				for i in idx:
+					corners.append(vs[i])
+	# Weld corners by position, then join whatever shares a triangle.
+	var id_of: Dictionary = {}
+	var parent: Array[int] = []
+	var vid := PackedInt32Array()
+	vid.resize(corners.size())
+	var lowest := -1
+	var lowest_y := INF
+	for i in corners.size():
+		var p := corners[i]
+		var key := Vector3i(roundi(p.x * 2000.0), roundi(p.y * 2000.0), roundi(p.z * 2000.0))
+		if not id_of.has(key):
+			id_of[key] = parent.size()
+			parent.append(parent.size())
+		vid[i] = int(id_of[key])
+		if p.y < lowest_y:
+			lowest_y = p.y
+			lowest = vid[i]
+	for t in range(0, corners.size() - 2, 3):
+		var ra := _uf_root(parent, vid[t])
+		parent[_uf_root(parent, vid[t + 1])] = ra
+		parent[_uf_root(parent, vid[t + 2])] = ra
+	if lowest >= 0:
+		var trunk := _uf_root(parent, lowest)
+		for t in range(0, corners.size() - 2, 3):
+			if _uf_root(parent, vid[t]) == trunk:
+				out.append(corners[t])
+				out.append(corners[t + 1])
+				out.append(corners[t + 2])
+	_trunk_cache[name] = out
+	return out
 
 
+func _uf_root(parent: Array[int], a: int) -> int:
+	while parent[a] != a:
+		parent[a] = parent[parent[a]]
+		a = parent[a]
+	return a
+
+
+## Where the trunk crosses height y: x,z = centre, and the widest reach from
+## it as the third number (0 when nothing crosses).
+func _trunk_section(tris: PackedVector3Array, y: float) -> Vector3:
+	var pts := PackedVector2Array()
+	for t in range(0, tris.size() - 2, 3):
+		for e in 3:
+			var p := tris[t + e]
+			var q := tris[t + (e + 1) % 3]
+			if (p.y - y) * (q.y - y) < 0.0:
+				var x := p.lerp(q, (y - p.y) / (q.y - p.y))
+				pts.append(Vector2(x.x, x.z))
+	if pts.size() < 3:
+		return Vector3.ZERO
+	# Centre of the outline's box: the mean would lean toward wherever the
+	# model happens to have more edges.
+	var lo := pts[0]
+	var hi := pts[0]
+	for p in pts:
+		lo = lo.min(p)
+		hi = hi.max(p)
+	var c := (lo + hi) * 0.5
+	var r := 0.0
+	for p in pts:
+		r = maxf(r, p.distance_to(c))
+	return Vector3(c.x, r, c.y)
+
+
+## The part of a triangle between two heights (its corners, in order).
+func _clip_tri_y(a: Vector3, b: Vector3, c: Vector3, y0: float, y1: float) -> PackedVector3Array:
+	var poly := PackedVector3Array([a, b, c])
+	for side in 2:
+		var lim := y0 if side == 0 else y1
+		var sgn := 1.0 if side == 0 else -1.0
+		var res := PackedVector3Array()
+		var n := poly.size()
+		for i in n:
+			var p := poly[i]
+			var q := poly[(i + 1) % n]
+			var dp := (p.y - lim) * sgn
+			var dq := (q.y - lim) * sgn
+			if dp >= 0.0:
+				res.append(p)
+			if (dp > 0.0 and dq < 0.0) or (dp < 0.0 and dq > 0.0):
+				res.append(p.lerp(q, dp / (dp - dq)))
+		poly = res
+		if poly.is_empty():
+			break
+	return poly
+
+
+## The trunk as a stack of convex slabs cut from its own bark, in the mesh's
+## space: from the roots (reaching a little below them, for slopes) up into
+## the lowest leaves, or to where a bare trunk thins to a twig. Slabs are as
+## tall as the trunk stays straight, so each hull hugs the wood: a bullet
+## stops where you see the trunk and nowhere else.
+func _trunk_hulls(name: String, canopy: float) -> Array:
+	if _hull_cache.has(name):
+		return _hull_cache[name]
+	var out: Array = []
+	var tris := _trunk_tris(name)
+	if tris.size() < 9:
+		_hull_cache[name] = out
+		return out
+	var lo := INF
+	var top := -INF
+	for v in tris:
+		lo = minf(lo, v.y)
+		top = maxf(top, v.y)
+	var cut := top - 0.02
+	if canopy < INF:
+		cut = minf(cut, maxf(canopy, lo + 1.0))
+	# The trunk's outline every 10 cm (of the model) up to the cut.
+	var ys := PackedFloat32Array()
+	var secs := PackedVector3Array()
+	var y := lo + 0.02
+	while true:
+		var last := y >= cut
+		if last:
+			y = cut
+		var sec := _trunk_section(tris, y)
+		if sec.y <= 0.0:
+			break
+		# A bare trunk ends where it is no thicker than a branch.
+		if canopy == INF and sec.y < 0.11 and ys.size() > 4:
+			break
+		ys.append(y)
+		secs.append(sec)
+		if last:
+			break
+		y = lo + 0.1 * float(ys.size())
+	var n := ys.size()
+	var i0 := 0
+	while i0 < n - 1:
+		# As far up as a straight taper between the two ends stays within
+		# 3 cm (of the model) of the wood in between.
+		var i1 := i0 + 1
+		while i1 + 1 < n and ys[i1 + 1] - ys[i0] < 3.0 and _slab_fits(ys, secs, i0, i1 + 1):
+			i1 += 1
+		var hull := PackedVector3Array()
+		while true:
+			hull = _slab_points(tris, lo - 1.0 if i0 == 0 else ys[i0], ys[i1], i0 == 0)
+			# Jolt keeps at most 256 corners of a hull: cut again rather than
+			# let it drop some.
+			if hull.size() <= 220 or i1 <= i0 + 1:
+				break
+			i1 = i0 + maxi(1, (i1 - i0) / 2)
+		if hull.size() >= 4:
+			var shape := ConvexPolygonShape3D.new()
+			shape.points = hull
+			out.append(shape)
+		i0 = i1
+	_hull_cache[name] = out
+	return out
+
+
+func _slab_fits(ys: PackedFloat32Array, secs: PackedVector3Array, a: int, b: int) -> bool:
+	var span := ys[b] - ys[a]
+	for j in range(a + 1, b):
+		var t := (ys[j] - ys[a]) / span
+		var s := secs[a].lerp(secs[b], t)
+		var off := Vector2(s.x - secs[j].x, s.z - secs[j].z).length()
+		if off + s.y - secs[j].y > 0.03:
+			return false
+	return true
+
+
+## Every corner of the trunk between two heights, each once.
+func _slab_points(tris: PackedVector3Array, y0: float, y1: float, planted: bool) -> PackedVector3Array:
+	var seen: Dictionary = {}
+	var pts := PackedVector3Array()
+	var base := INF
+	if planted:
+		for v in tris:
+			base = minf(base, v.y)
+	for t in range(0, tris.size() - 2, 3):
+		var a := tris[t]
+		var b := tris[t + 1]
+		var c := tris[t + 2]
+		if maxf(a.y, maxf(b.y, c.y)) < y0 or minf(a.y, minf(b.y, c.y)) > y1:
+			continue
+		for p in _clip_tri_y(a, b, c, y0, y1):
+			var key := Vector3i(roundi(p.x * 400.0), roundi(p.y * 400.0), roundi(p.z * 400.0))
+			if seen.has(key):
+				continue
+			seen[key] = true
+			pts.append(p)
+			if planted and p.y < base + 0.12:
+				# Planted into the ground: on a slope the base would float
+				# over the downhill side and snag walkers.
+				pts.append(Vector3(p.x, -0.6, p.z))
+	return pts
+
+
+## The trunk alone as an exact triangle shape (tests measure against it).
+func _trunk_shape(name: String) -> ConcavePolygonShape3D:
+	var shape := ConcavePolygonShape3D.new()
+	shape.set_faces(_trunk_tris(name))
+	shape.backface_collision = true
+	return shape
+
+
+## Collision made of a nature model's own triangles (only surfaces whose
+## material name contains `filter`, e.g. "Bark"; all when empty).
 func _mesh_shape(name: String, filter: String, max_y := INF) -> ConcavePolygonShape3D:
 	var ck := name + "|" + filter + "|" + str(max_y)
 	if _shape_cache.has(ck):
@@ -758,6 +957,50 @@ func _find_mesh(node: Node) -> MeshInstance3D:
 	return null
 
 
+## How far a trunk's roots reach at the ground, per unit of tree scale.
+const TRUNK_FOOT := {
+	"CommonTree_3": 0.60, "CommonTree_4": 0.60, "CommonTree_5": 0.56,
+	"Pine_4": 0.40, "Pine_5": 0.40, "DeadTree_5": 0.93,
+}
+## Clear ground kept between the roots of neighbouring trees.
+const TRUNK_GAP := 1.4
+const TRUNK_CELL := 8.0
+
+
+## Where a tree with roots reaching `foot` can stand near p without crowding
+## the trees already placed (x, foot, z each, by cell): p itself, a step away
+## from whichever neighbours it crowds, or Vector2.INF when there is no room.
+func _tree_spot(placed: Dictionary, p: Vector2, foot: float) -> Vector2:
+	for attempt in 4:
+		var push := Vector2.ZERO
+		var worst := 0.0
+		var cx := floori(p.x / TRUNK_CELL)
+		var cz := floori(p.y / TRUNK_CELL)
+		for dx in range(-1, 2):
+			for dz in range(-1, 2):
+				var cell := Vector2i(cx + dx, cz + dz)
+				if not placed.has(cell):
+					continue
+				for o: Vector3 in placed[cell]:
+					var away := p - Vector2(o.x, o.z)
+					var need := foot + o.y + TRUNK_GAP
+					var d := away.length()
+					if d >= need:
+						continue
+					if need - d > worst:
+						worst = need - d
+						var dir := away / d if d > 0.01 else Vector2(1, 0)
+						push = Vector2(o.x, o.z) + dir * (need + 0.05) - p
+		if worst <= 0.0:
+			return p
+		p += push
+	return Vector2.INF
+
+
+## Every tree placed: {name, pos, rot, scale} (tests and tools read it).
+var tree_records: Array = []
+
+
 func _scatter_trees() -> void:
 	var species := [
 		# Old growth: 18-32 m broadleaves, 20-35 m pines with trunks you can
@@ -775,6 +1018,7 @@ func _scatter_trees() -> void:
 
 	var placements: Array[Dictionary] = []
 	var grid: Dictionary = {}
+	var trunk_grid: Dictionary = {}
 	var attempts := 210000
 	for i in attempts:
 		var x := rng.randf_range(-Terrain.HALF + 12.0, Terrain.HALF - 12.0)
@@ -811,8 +1055,30 @@ func _scatter_trees() -> void:
 		var sc := lerpf(sr.x, sr.y, k)
 		if rng.randf() < 0.07:
 			sc *= 1.3
-		placements.append({"name": chosen, "pos": Vector3(x, h - 0.25, z), "rot": rng.randf_range(0.0, TAU), "scale": sc})
+		var rot := rng.randf_range(0.0, TAU)
+		# Room to walk (and shoot) between any two trunks: a tree that would
+		# stand root to root with a neighbour steps aside, or is left out.
+		var foot := float(TRUNK_FOOT.get(chosen, 0.6)) * sc
+		var spot := _tree_spot(trunk_grid, Vector2(x, z), foot)
+		if spot == Vector2.INF:
+			continue
+		if spot != Vector2(x, z):
+			x = spot.x
+			z = spot.y
+			h = terrain.height_at(x, z)
+			if absf(x) > Terrain.HALF - 12.0 or absf(z) > Terrain.HALF - 12.0:
+				continue
+			if h < Terrain.WATER_LEVEL + 1.2 or terrain.slope_at(x, z) > 0.52:
+				continue
+			if _near_village(x, z, 42.0) or _road_distance(x, z) < 4.5:
+				continue
+		var tcell := Vector2i(floori(x / TRUNK_CELL), floori(z / TRUNK_CELL))
+		if not trunk_grid.has(tcell):
+			trunk_grid[tcell] = []
+		(trunk_grid[tcell] as Array).append(Vector3(x, foot, z))
+		placements.append({"name": chosen, "pos": Vector3(x, h - 0.25, z), "rot": rot, "scale": sc})
 
+	tree_records = placements
 	# Batch into 300 m tiles per species so frustum culling can do its job.
 	for p in placements:
 		var tile_x := int(floor((p.pos.x + Terrain.HALF) / TREE_TILE))
@@ -831,6 +1097,7 @@ func _scatter_trees() -> void:
 	trunk_body.name = "TreeCollision"
 	trunk_body.collision_layer = 1
 	trunk_body.collision_mask = 0
+	var trunk_rid := trunk_body.get_rid()
 
 	for key in groups:
 		var parts: PackedStringArray = key.split("|")
@@ -879,24 +1146,18 @@ func _scatter_trees() -> void:
 					for v in lv:
 						low = minf(low, v.y)
 					canopy = minf(canopy, low + 0.8)
-		# One upright cylinder per trunk, sized to the bark at chest height:
-		# thousands of detailed bark meshes cost every walker and bullet far
-		# more than they add.
-		var dims := _trunk_dims(parts[0], canopy)
+		# The trunk is its own bark, cut into slabs each wrapped in a convex
+		# hull (branches left out), shared by every tree of the kind and
+		# scaled per tree: a bullet stops where you see the trunk, and
+		# nowhere else. The full bark meshes cost every walker and bullet far
+		# more than they add. Straight to the physics server: tens of
+		# thousands of shape nodes would only slow the load.
+		var hulls := _trunk_hulls(parts[0], canopy)
 		for it in list:
-			var sc: float = it.scale
-			var cyl := CylinderShape3D.new()
-			cyl.radius = maxf(0.12, dims.x * sc)
-			# Planted well into the ground: on a slope a trunk that starts at
-			# its base point floats above the downhill side, and walkers
-			# snag under its rim.
-			var above := maxf(1.5, dims.y * sc)
-			cyl.height = above + TRUNK_SINK
-			var shape := CollisionShape3D.new()
-			shape.shape = cyl
-			shape.position = Vector3(it.pos.x + dims.z * sc * cos(it.rot), it.pos.y + above * 0.5 - TRUNK_SINK * 0.5, it.pos.z - dims.z * sc * sin(it.rot))
-			trunk_body.add_child(shape)
-			stats.colliders += 1
+			var xf := Transform3D(Basis(Vector3.UP, float(it.rot)).scaled(Vector3.ONE * float(it.scale)), Vector3(it.pos))
+			for hull in hulls:
+				PhysicsServer3D.body_add_shape(trunk_rid, (hull as Shape3D).get_rid(), xf)
+				stats.colliders += 1
 	# Into the tree only once every shape is attached: adding shapes to a live
 	# body rebuilds its compound shape each time.
 	add_child(trunk_body)
@@ -1338,92 +1599,85 @@ func _build_clouds() -> void:
 			add_child(s)
 
 
+## Bakes what the map shader draws from (shaders/map_base.gdshader): the
+## ground height and water depth at every grid sample, and a tree-cover image
+## with one soft blob per tree that was actually planted.
 func _build_minimap() -> void:
-	# Shade straight from the height samples (one pixel per 6 m grid point),
-	# then upscale and draw roads and buildings at full resolution on top.
 	var n := Terrain.RES
-	var img := Image.create(n, n, false, Image.FORMAT_RGBA8)
 	var hs := terrain.heights
-	var light := Vector3(-0.6, 0.75, -0.5).normalized()
+	var data := PackedFloat32Array()
+	data.resize(n * n * 2)
+	var min_x := n
+	var max_x := 0
+	var min_z := n
+	var max_z := 0
 	for iz in n:
 		var z := -Terrain.HALF + float(iz) * Terrain.STEP
 		for ix in n:
 			var x := -Terrain.HALF + float(ix) * Terrain.STEP
 			var h: float = hs[iz * n + ix]
-			var hl: float = hs[iz * n + maxi(ix - 1, 0)]
-			var hr: float = hs[iz * n + mini(ix + 1, n - 1)]
-			var hd: float = hs[maxi(iz - 1, 0) * n + ix]
-			var hu: float = hs[mini(iz + 1, n - 1) * n + ix]
-			var nrm := Vector3(hl - hr, 2.0 * Terrain.STEP, hd - hu).normalized()
-			var slope := 1.0 - nrm.y
-			var wl := terrain.water_surface_at(x, z)
-			var c: Color
-			if h < wl:
-				var depth := clampf((wl - h) / 9.0, 0.0, 1.0)
-				c = Color(0.16, 0.36, 0.46).lerp(Color(0.07, 0.18, 0.28), depth)
-			elif h < wl + 1.6:
-				c = Color(0.78, 0.72, 0.55)
-			elif slope > 0.45:
-				c = Color(0.46, 0.44, 0.40)
-			else:
-				var hv := clampf((h - 2.0) / 70.0, 0.0, 1.0)
-				c = Color(0.31, 0.44, 0.22).lerp(Color(0.50, 0.55, 0.33), hv)
-				if terrain.forest_density(x, z) > 0.62:
-					c = c.lerp(Color(0.17, 0.31, 0.15), 0.4)
-			if h >= wl:
-				var shade := 0.55 + clampf(nrm.dot(light), 0.0, 1.0) * 0.6
-				if fmod(h, 10.0) < 0.6 and h > 3.0 and slope < 0.45:
-					shade *= 0.9
-				c = Color(c.r * shade, c.g * shade, c.b * shade)
-			img.set_pixel(ix, iz, Color(c.r, c.g, c.b, 1.0))
-	var res := 1024
-	img.resize(res, res, Image.INTERPOLATE_BILINEAR)
-	# Roads.
+			var depth := terrain.water_surface_at(x, z) - h
+			var at := (iz * n + ix) * 2
+			data[at] = h
+			data[at + 1] = depth
+			if depth < -0.4:
+				min_x = mini(min_x, ix)
+				max_x = maxi(max_x, ix)
+				min_z = mini(min_z, iz)
+				max_z = maxi(max_z, iz)
+	var dimg := Image.create_from_data(n, n, false, Image.FORMAT_RGF, data.to_byte_array())
+	# Half floats filter on every GPU; full floats do not.
+	dimg.convert(Image.FORMAT_RGH)
+	map_data_texture = ImageTexture.create_from_image(dimg)
+	if max_x > min_x and max_z > min_z:
+		var lo := Vector2(float(min_x), float(min_z)) * Terrain.STEP - Vector2.ONE * Terrain.HALF
+		var hi := Vector2(float(max_x), float(max_z)) * Terrain.STEP - Vector2.ONE * Terrain.HALF
+		land_rect = Rect2(lo, hi - lo)
+
+	# Tree cover. Blobs are blended in natively, one small stamp per tree.
+	var res := MAP_CANOPY_RES
 	var k := float(res) / Terrain.SIZE
-	var road_col := Color(0.64, 0.54, 0.40)
-	for r in villages.roads:
-		var a: Vector2 = r.a
-		var b: Vector2 = r.b
-		var w: float = r.w + (1.0 if r.get("bridge", false) else 0.4)
-		var col: Color = Color(0.78, 0.74, 0.66) if r.get("bridge", false) else road_col
-		var steps := int(a.distance_to(b) * k) + 1
-		for i in steps + 1:
-			var p := a.lerp(b, float(i) / float(steps))
-			var px := (p + Vector2.ONE * Terrain.HALF) * k
-			var rad := maxf(1.0, w * k)
-			for oy in range(int(-rad), int(rad) + 1):
-				for ox in range(int(-rad), int(rad) + 1):
-					var qx := int(px.x) + ox
-					var qy := int(px.y) + oy
-					if qx >= 0 and qy >= 0 and qx < res and qy < res and ox * ox + oy * oy <= rad * rad + 0.5:
-						img.set_pixel(qx, qy, col)
-	# Buildings as small dark blocks, like a real map.
-	for h in villages.houses:
-		var hc: Vector2 = h.center
-		_map_rect(img, res, hc, Vector2(float(h.w), float(h.d)) * 0.5, Color(0.36, 0.30, 0.26))
-	for t in villages.towers:
-		_map_rect(img, res, t.center, Vector2(3.5, 3.5), Color(0.22, 0.20, 0.20))
-	for p in villages.poi_pads:
-		if p.type == "ruin":
-			_map_rect(img, res, p.center, Vector2(4.0, 3.0), Color(0.45, 0.42, 0.38))
-	var lm := Color(0.30, 0.27, 0.25)
-	_map_rect(img, res, terrain.castle_c, Vector2(24.0, 24.0), lm)
-	_map_rect(img, res, terrain.temple_c, Vector2(16.0, 16.0), lm)
-	_map_rect(img, res, terrain.lighthouse_c, Vector2(4.0, 4.0), Color(0.85, 0.82, 0.78))
-	_map_rect(img, res, terrain.henge_c, Vector2(5.0, 5.0), Color(0.6, 0.58, 0.55))
-	minimap_texture = ImageTexture.create_from_image(img)
+	var cimg := Image.create(res, res, false, Image.FORMAT_RGBA8)
+	cimg.fill(Color(0, 0, 0, 1))
+	var stamps: Dictionary = {}
+	for rec in tree_records:
+		var nm: String = rec.name
+		if nm.begins_with("Dead"):
+			continue
+		var crown := float(rec.scale) * (2.9 if nm.begins_with("Pine") else 2.5)
+		var tp: Vector3 = rec.pos
+		_map_stamp(cimg, stamps, Vector2(tp.x, tp.z), crown, k)
+	# The two great trees: a ring of crowns round a middle one.
+	var giants: Array = [[terrain.oak_c, 9.0, 10.0, 8.0, 6]]
+	if villages.landmarks != null and villages.landmarks.fantasy != null and villages.landmarks.fantasy.tree_town != null:
+		var tt: Vector3 = villages.landmarks.fantasy.tree_town.o
+		giants.append([Vector2(tt.x, tt.z), 26.0, 31.0, 19.0, 9])
+	for g in giants:
+		var gc: Vector2 = g[0]
+		_map_stamp(cimg, stamps, gc, float(g[1]), k)
+		for i in int(g[4]):
+			var ga := TAU * float(i) / float(g[4]) + 0.3
+			_map_stamp(cimg, stamps, gc + Vector2(cos(ga), sin(ga)) * float(g[2]), float(g[3]), k)
+	cimg.convert(Image.FORMAT_R8)
+	cimg.generate_mipmaps()
+	map_canopy_texture = ImageTexture.create_from_image(cimg)
 
 
-func _map_rect(img: Image, res: int, c: Vector2, half: Vector2, col: Color) -> void:
-	var k := float(res) / Terrain.SIZE
-	var x0 := int((c.x - half.x + Terrain.HALF) * k)
-	var x1 := int((c.x + half.x + Terrain.HALF) * k)
-	var y0 := int((c.y - half.y + Terrain.HALF) * k)
-	var y1 := int((c.y + half.y + Terrain.HALF) * k)
-	for y in range(y0, y1 + 1):
-		for x in range(x0, x1 + 1):
-			if x >= 0 and y >= 0 and x < res and y < res:
-				img.set_pixel(x, y, col)
+func _map_stamp(img: Image, stamps: Dictionary, c: Vector2, radius_m: float, k: float) -> void:
+	var r := clampi(int(round(radius_m * k)), 2, 48)
+	if not stamps.has(r):
+		var side := r * 2 + 3
+		var st := Image.create(side, side, false, Image.FORMAT_RGBA8)
+		var mid := float(side - 1) * 0.5
+		for y in side:
+			for x in side:
+				var d := Vector2(float(x) - mid, float(y) - mid).length() / (float(r) + 0.5)
+				st.set_pixel(x, y, Color(1, 1, 1, 1.0 - smoothstep(0.45, 1.0, d)))
+		stamps[r] = st
+	var stamp: Image = stamps[r]
+	var half := (stamp.get_width() - 1) / 2
+	var px := Vector2i(int((c.x + Terrain.HALF) * k) - half, int((c.y + Terrain.HALF) * k) - half)
+	img.blend_rect(stamp, Rect2i(0, 0, stamp.get_width(), stamp.get_height()), px)
 
 
 

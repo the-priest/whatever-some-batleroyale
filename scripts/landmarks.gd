@@ -8,6 +8,8 @@ class_name Landmarks
 ## collision matching what you see.
 
 const TEX := "res://assets/village/T_%s_%s.png"
+## Materials drawn with the board shader (see Wood).
+const WOODS := ["wood", "wood_dark"]
 
 var terrain: Terrain
 var villages: Villages
@@ -58,7 +60,8 @@ func _make_materials() -> void:
 	_mats["block"] = _tex_mat("Brick", 0.4, Color(0.95, 0.93, 0.9))
 	_mats["trim"] = _tex_mat("RockTrim", 0.3, Color(0.92, 0.92, 0.9))
 	_mats["dark"] = _tex_mat("UnevenBrick", 0.32, Color(0.62, 0.6, 0.6))
-	_mats["wood"] = _tex_mat("WoodTrim", 0.5, Color(1, 1, 1))
+	_mats["wood"] = Wood.material(false)
+	_mats["wood_dark"] = Wood.material(true)
 	_mats["roof"] = _tex_mat("RoundTiles", 0.45, Color(1, 1, 1))
 	_mats["plaster"] = _tex_mat("Plaster", 0.3, Color(1, 1, 1))
 	_mats["redbrick"] = _tex_mat("RedBrick", 0.4, Color(1, 1, 1))
@@ -131,6 +134,8 @@ func _surface(mat: String) -> SurfaceTool:
 	if not _st.has(mat):
 		var st := SurfaceTool.new()
 		st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		if mat in WOODS:
+			Wood.begin(st)
 		_st[mat] = st
 	return _st[mat]
 
@@ -172,19 +177,23 @@ func _frame(fwd: Vector3, side := Vector3.ZERO) -> Basis:
 ## Box with an arbitrary basis (columns are the box's local axes).
 func box_b(b: Basis, c: Vector3, size: Vector3, mat := "stone", collide := true) -> void:
 	var st := _surface(mat)
-	var h := size * 0.5
-	var x := b.x * h.x
-	var y := b.y * h.y
-	var z := b.z * h.z
-	var nx := b.x.normalized()
-	var ny := b.y.normalized()
-	var nz := b.z.normalized()
-	_quad(st, c + x - y - z, c + x + y - z, c + x + y + z, c + x - y + z, nx)
-	_quad(st, c - x - y + z, c - x + y + z, c - x + y - z, c - x - y - z, -nx)
-	_quad(st, c - x + y - z, c - x + y + z, c + x + y + z, c + x + y - z, ny)
-	_quad(st, c - x - y + z, c - x - y - z, c + x - y - z, c + x - y + z, -ny)
-	_quad(st, c - x - y + z, c + x - y + z, c + x + y + z, c - x + y + z, nz)
-	_quad(st, c + x - y - z, c - x - y - z, c - x + y - z, c + x + y - z, -nz)
+	if mat in WOODS:
+		# Boards: grain along the piece, seams across it, sawn ends.
+		Wood.box(st, b, c, size)
+	else:
+		var h := size * 0.5
+		var x := b.x * h.x
+		var y := b.y * h.y
+		var z := b.z * h.z
+		var nx := b.x.normalized()
+		var ny := b.y.normalized()
+		var nz := b.z.normalized()
+		_quad(st, c + x - y - z, c + x + y - z, c + x + y + z, c + x - y + z, nx)
+		_quad(st, c - x - y + z, c - x + y + z, c - x + y - z, c - x - y - z, -nx)
+		_quad(st, c - x + y - z, c - x + y + z, c + x + y + z, c + x + y - z, ny)
+		_quad(st, c - x - y + z, c - x - y - z, c + x - y - z, c + x - y + z, -ny)
+		_quad(st, c - x - y + z, c + x - y + z, c + x + y + z, c - x + y + z, nz)
+		_quad(st, c + x - y - z, c - x - y - z, c - x + y - z, c + x + y - z, -nz)
 	if collide:
 		var cs := CollisionShape3D.new()
 		var shape := BoxShape3D.new()
@@ -233,6 +242,10 @@ func ramp(a: Vector3, b: Vector3, width: float, mat := "stone", thick := 0.5, st
 ## Vertical cylinder (or cone when r_top is 0) standing on `base`.
 func cyl(base: Vector3, r_bottom: float, r_top: float, h: float, mat := "stone", sides := 16, collide := true, cap := true) -> void:
 	var st := _surface(mat)
+	var woody := mat in WOODS
+	if woody:
+		# A log: grain runs up it, no board seams.
+		Wood.grain(st, Vector3.UP, true)
 	var slope := (r_bottom - r_top) / h
 	for i in sides:
 		var a0 := TAU * float(i) / float(sides)
@@ -244,6 +257,8 @@ func cyl(base: Vector3, r_bottom: float, r_top: float, h: float, mat := "stone",
 		if cap and r_top > 0.01:
 			var top := base + Vector3(0, h, 0)
 			_tri(st, top, top + d0 * r_top, top + d1 * r_top, Vector3.UP)
+	if woody:
+		Wood.begin(st)
 	if collide:
 		# Exactly the drawn frustum (tapers and cones included).
 		var pts := PackedVector3Array()
@@ -1069,6 +1084,7 @@ func _build_oak() -> void:
 	# metre lower than its middle), not at a step you would have to climb.
 	var sp0 := o + Vector3(cos(start_a) * hr, 0, sin(start_a) * hr)
 	var y_start := minf(0.5, terrain.height_at(sp0.x, sp0.z) - o.y + 0.08)
+	var stair_prev_y := -INF
 	for i in steps:
 		var t0 := float(i) / float(steps)
 		var t1 := float(i + 1) / float(steps)
@@ -1076,7 +1092,11 @@ func _build_oak() -> void:
 		var a1 := lerpf(start_a, end_a, t1)
 		var p0 := o + Vector3(cos(a0) * hr, lerpf(y_start, deck_y, t0), sin(a0) * hr)
 		var p1 := o + Vector3(cos(a1) * hr, lerpf(y_start, deck_y, t1), sin(a1) * hr)
-		p0.y = maxf(p0.y, terrain.height_at(p0.x, p0.z) + 0.05)
+		# Never under the ground, and never stepping down: where the ground
+		# rises along the way the stair rides on it.
+		p0.y = maxf(maxf(p0.y, terrain.height_at(p0.x, p0.z) + 0.05), stair_prev_y)
+		p1.y = maxf(maxf(p1.y, terrain.height_at(p1.x, p1.z) + 0.05), p0.y)
+		stair_prev_y = p1.y
 		var dv := p1 - p0
 		var hb := _frame(dv)
 		box_b(hb, (p0 + p1) * 0.5 - hb.y * 0.12, Vector3(1.8, 0.24, dv.length() + 0.2), "wood")
@@ -1086,6 +1106,16 @@ func _build_oak() -> void:
 			if p0.y - (o.y + 0.3) > 1.2:
 				var gp := Vector3(p0.x, terrain.height_at(p0.x, p0.z), p0.z)
 				box(Vector3(gp.x, (gp.y + p0.y) * 0.5 - 0.2, gp.z) + outdir * 0.6, Vector3(0.22, p0.y - gp.y, 0.22), -a0, "wood", false)
+	# Where the ground falls away before the first step (the tree stands on a
+	# hillside on some islands), a short ramp up to it instead of a ledge.
+	var first := o + Vector3(cos(start_a) * hr, maxf(y_start, terrain.height_at(o.x + cos(start_a) * hr, o.z + sin(start_a) * hr) - o.y + 0.05), sin(start_a) * hr)
+	for back in [0.3, 0.45]:
+		var pa := start_a - float(back)
+		var pre := o + Vector3(cos(pa) * hr, 0, sin(pa) * hr)
+		pre.y = terrain.height_at(pre.x, pre.z) + 0.04
+		if first.y - pre.y > 0.25:
+			ramp(pre, first, 1.8, "wood", 0.3)
+			break
 	# Deck railing with a gap where the stair arrives.
 	var rn := 24
 	for i in rn:
@@ -1134,7 +1164,7 @@ func _build_oak() -> void:
 	_loot(o + Vector3(cos(end_a + 3.6) * 3.6, deck_y + 0.3, sin(end_a + 3.6) * 3.6), "gear", true)
 	_loot(o + Vector3(7.5, 0.4, 0), "gear")
 	_loot(o + Vector3(-6.0, 0.4, 5.0), "weapon")
-	oak_stair = [o, hr, start_a, end_a, deck_y]
+	oak_stair = [o, hr, start_a, end_a, deck_y, y_start]
 	_end(2000.0)
 	labels.append(["ELDER OAK", c + Vector2(0, -22.0)])
 	clear_areas.append({"center": c, "radius": 14.0})

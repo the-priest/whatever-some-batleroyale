@@ -150,6 +150,8 @@ func _ready() -> void:
 	col.shape = cap
 	col.position.y = 0.875
 	add_child(col)
+	_body_col = col
+	_body_cap = cap
 
 	camera = Camera3D.new()
 	camera.name = "Camera"
@@ -958,7 +960,8 @@ func _update_camera(delta: float) -> void:
 		camera.fov = lerpf(camera.fov, target_fov, clampf(delta * 14.0, 0.0, 1.0))
 
 	# Smooth crouch + land dip + foot bob.
-	var crouching := _ap("crouch") and mode == Mode.GROUND
+	_update_crouch_box()
+	var crouching := (_ap("crouch") or _crouch_box) and mode == Mode.GROUND
 	var target_y := CROUCH_EYE if (crouching or vaulting_window()) else EYE
 	if mode == Mode.FREEFALL or mode == Mode.CHUTE:
 		target_y = cam_base.y
@@ -1944,7 +1947,37 @@ func display_name() -> String:
 
 
 func crouching() -> bool:
-	return mode == Mode.GROUND and _ap("crouch")
+	return mode == Mode.GROUND and (_ap("crouch") or _crouch_box)
+
+
+## Crouching shrinks the body, so a round over your head misses (as for
+## bots); standing back up needs the room to.
+var _body_col: CollisionShape3D
+var _body_cap: CapsuleShape3D
+var _crouch_box := false
+
+
+func _update_crouch_box() -> void:
+	if _body_cap == null:
+		return
+	var want := mode == Mode.GROUND and (_ap("crouch") or vaulting_window())
+	if want and not _crouch_box:
+		_crouch_box = true
+		_body_cap.height = 1.2
+		_body_col.position.y = 0.6
+	elif not want and _crouch_box:
+		var q := PhysicsRayQueryParameters3D.create(global_position + Vector3.UP * 1.1, global_position + Vector3.UP * 1.85, 1 | 4)
+		q.exclude = [get_rid()]
+		if not get_world_3d().direct_space_state.intersect_ray(q).is_empty():
+			return
+		_crouch_box = false
+		_body_cap.height = 1.75
+		_body_col.position.y = 0.875
+
+
+## Where a hit counts as a headshot (helmets protect above this).
+func head_y() -> float:
+	return global_position.y + (0.92 if _crouch_box else 1.48)
 
 
 ## Everything we carry, for the host to keep while we play (a crashed game

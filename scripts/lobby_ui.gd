@@ -50,7 +50,7 @@ var _squad_count: Label
 var _addr_label: Label
 var _chat_log: RichTextLabel
 var _chat_edit: LineEdit
-var _map_tex: TextureRect
+var _map_view: MapView
 var _map_caption: Label
 var _mode_squad: Button
 var _mode_ffa: Button
@@ -299,13 +299,11 @@ func _build_lobby() -> void:
 	_lobby.add_child(ml)
 	var mc := _card(Vector2(1200, 178), Vector2(320, 456))
 	_lobby.add_child(mc)
-	_map_tex = TextureRect.new()
-	_map_tex.position = Vector2(12, 12)
-	_map_tex.size = Vector2(296, 196)
-	_map_tex.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_map_tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-	_map_tex.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	mc.add_child(_map_tex)
+	_map_view = MapView.new()
+	_map_view.position = Vector2(12, 12)
+	_map_view.size = Vector2(296, 196)
+	_map_view.set_grid(0.0)
+	mc.add_child(_map_view)
 	var shade := ColorRect.new()
 	shade.color = Color(0, 0, 0, 0.45)
 	shade.position = Vector2(12, 172)
@@ -526,7 +524,8 @@ func show_lobby() -> void:
 		_addr_label.text = "CONNECTED TO THE HOST     ·     PRESS  READY  WHEN YOU ARE SET"
 	_lobby.get_node("Copy").visible = net.hosting
 	if game != null and game.world != null:
-		_map_tex.texture = game.world.minimap_texture
+		_map_view.set_world(game.world)
+		_map_view.fit(game.world.land_rect, 0.05)
 		_map_caption.text = "HIGHFALLS ARCHIPELAGO   ·   #%d" % int(game.seed_value)
 	if _chat_log.get_parsed_text() == "":
 		_on_chat(0, "", "WELCOME TO THE LOBBY  ·  PRESS ENTER TO CHAT", true)
@@ -544,7 +543,8 @@ func close() -> void:
 
 func refresh_map() -> void:
 	if _view == "lobby" and game != null and game.world != null:
-		_map_tex.texture = game.world.minimap_texture
+		_map_view.set_world(game.world)
+		_map_view.fit(game.world.land_rect, 0.05)
 		_map_caption.text = "HIGHFALLS ARCHIPELAGO   ·   #%d" % int(game.seed_value)
 
 

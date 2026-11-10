@@ -125,7 +125,8 @@ var hit_kill := false
 var hit_head := false
 var notice_t := 0.0
 var big_t := 0.0
-var minimap_tex: Texture2D
+var mm_view: MapView
+var bm_view: MapView
 var pings: Array = []
 var markers: Array = []
 var zone_center := Vector2.ZERO
@@ -589,13 +590,20 @@ func _build_weapon_panel() -> void:
 func _build_minimap() -> void:
 	minimap = Control.new()
 	minimap.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	minimap.offset_left = -248
+	minimap.offset_left = -252
 	minimap.offset_right = -28
-	minimap.offset_top = -364
-	minimap.offset_bottom = -144
+	minimap.offset_top = -372
+	minimap.offset_bottom = -148
 	minimap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	minimap.clip_contents = true
 	root.add_child(minimap)
+	mm_view = MapView.new()
+	mm_view.set_anchors_preset(Control.PRESET_FULL_RECT)
+	mm_view.offset_left = 3
+	mm_view.offset_top = 3
+	mm_view.offset_right = -3
+	mm_view.offset_bottom = -3
+	minimap.add_child(mm_view)
 	minimap_draw = Control.new()
 	minimap_draw.set_anchors_preset(Control.PRESET_FULL_RECT)
 	minimap_draw.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -649,9 +657,11 @@ func _build_big_map() -> void:
 	root.add_child(big_map)
 	var bg := ColorRect.new()
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	bg.color = Color(0.01, 0.015, 0.02, 0.66)
+	bg.color = Color(0.012, 0.018, 0.026, 0.90)
 	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	big_map.add_child(bg)
+	bm_view = MapView.new()
+	big_map.add_child(bm_view)
 	big_map_draw = Control.new()
 	big_map_draw.set_anchors_preset(Control.PRESET_FULL_RECT)
 	big_map_draw.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -1113,6 +1123,8 @@ func set_map_open(v: bool) -> void:
 	var in_match: bool = g != null and str(g.get("phase")) in ["plane", "playing"]
 	if v:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		_bm_focus = Vector2(player_pos.x, player_pos.z)
+		_sync_big_map()
 		# Start the cursor on yourself.
 		await get_tree().process_frame
 		if big_map.visible and _bm_inner.size.x > 0.0:
@@ -1352,8 +1364,10 @@ func set_heading(deg: float) -> void:
 		compass.queue_redraw()
 
 
-func set_minimap(tex: Texture2D) -> void:
-	minimap_tex = tex
+## Gives both maps the island they draw (terrain data, roads, buildings).
+func set_world_map(world: WorldBuilder) -> void:
+	mm_view.set_world(world)
+	bm_view.set_world(world)
 
 
 func set_places(p: Array) -> void:
@@ -1365,6 +1379,7 @@ func set_plane_path(a: Vector3, b: Vector3) -> void:
 
 
 func update_minimap(p: Vector3, zc: Vector2, zr: float, nc: Vector2, nr: float, p_markers: Array) -> void:
+	_mm_moved += Vector2(p.x - player_pos.x, p.z - player_pos.z).length()
 	player_pos = p
 	zone_center = zc
 	zone_radius = zr
@@ -1383,6 +1398,12 @@ var mates: Array = []
 ## Map / compass / world markers: {pos: Vector3, color: Color, name: String}.
 var waypoints: Array = []
 var _bm_inner := Rect2()
+## Where the full map is centred while zoomed in (world x/z).
+var _bm_focus := Vector2.ZERO
+## Metres the minimap shows either side of you; opens up when you travel fast.
+var _mm_half := MINIMAP_VIEW
+var _mm_moved := 0.0
+var _mm_speed := 0.0
 var _bm_origin := Vector2.ZERO
 var _bm_span := 1.0
 ## Overhead labels for team mates: {pos: Vector3, name: String, color: Color}.
@@ -1503,11 +1524,16 @@ func _unhandled_input(event: InputEvent) -> void:
 			map_clicked.emit(w, mb.button_index)
 			get_viewport().set_input_as_handled()
 			return
-		if mb.button_index == MOUSE_BUTTON_WHEEL_UP:
-			map_zoom = minf(6.0, map_zoom * 1.5)
-			get_viewport().set_input_as_handled()
-		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			map_zoom = maxf(1.0, map_zoom / 1.5)
+		if mb.button_index == MOUSE_BUTTON_WHEEL_UP or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			# Zoom on whatever is under the cursor, like any map.
+			var z := minf(8.0, map_zoom * 1.5) if mb.button_index == MOUSE_BUTTON_WHEEL_UP else maxf(1.0, map_zoom / 1.5)
+			if _bm_inner.size.x > 0.0:
+				var f := ((mb.position - _bm_inner.position) / _bm_inner.size.x).clamp(Vector2.ZERO, Vector2.ONE)
+				var under := _bm_origin + f * _bm_span
+				var span := MAP_EXTENT * 2.0 / z
+				_bm_focus = under - f * span + Vector2(span, span) * 0.5
+			map_zoom = z
+			_sync_big_map()
 			get_viewport().set_input_as_handled()
 
 
@@ -1541,8 +1567,10 @@ func _process_body(delta: float) -> void:
 	damage_ring.queue_redraw()
 	vignette.queue_redraw()
 	if minimap.visible:
+		_sync_minimap(delta)
 		minimap_draw.queue_redraw()
 	if big_map.visible:
+		_sync_big_map()
 		big_map_draw.queue_redraw()
 	if _scare_layer != null and _scare_layer.visible:
 		_scare_layer.queue_redraw()
@@ -1790,134 +1818,264 @@ func _draw_damage() -> void:
 		damage_ring.draw_line(tip, tip + base * 9.0, col, 2.0)
 
 
-func _map_style(ctrl: Control, r: Rect2) -> void:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.03, 0.04, 0.045, 0.85)
-	sb.border_color = Color(1, 1, 1, 0.14)
-	sb.set_border_width_all(1)
-	ctrl.draw_style_box(sb, r)
+# --------------------------------------------------------------- the maps --
+func _sync_minimap(delta: float) -> void:
+	# Open the view up when you travel fast (driving, falling), like a sat-nav.
+	if delta > 0.0:
+		# (A jump of hundreds of metres in a frame is a respawn, not travel.)
+		var v := _mm_moved / delta
+		_mm_speed = lerpf(_mm_speed, v if v < 140.0 else 0.0, clampf(delta * 3.0, 0.0, 1.0))
+	_mm_moved = 0.0
+	var want := lerpf(MINIMAP_VIEW, MINIMAP_VIEW * 2.4, smoothstep(11.0, 30.0, _mm_speed))
+	_mm_half = lerpf(_mm_half, want, clampf(delta * 1.6, 0.0, 1.0))
+	var span := _mm_half * 2.0
+	mm_view.set_view(Vector2(player_pos.x, player_pos.z) - Vector2(span, span) * 0.5, span)
+	mm_view.set_zone(zone_center, zone_radius, next_center, next_radius)
 
 
-## Draws the island inside `inner`, showing world rect [origin, origin + span].
-func _draw_world(ctrl: Control, inner: Rect2, origin: Vector2, span: float, big: bool) -> void:
+## Where the full map sits on screen.
+func _map_layout() -> Rect2:
+	var vp := big_map.size
+	var side := floorf(minf(vp.x - 60.0, vp.y - 132.0))
+	return Rect2(Vector2(floorf((vp.x - side) * 0.5), floorf((vp.y - side) * 0.5) + 8.0), Vector2(side, side))
+
+
+func _sync_big_map() -> void:
+	var inner := _map_layout()
+	if inner.size.x < 8.0:
+		return
+	bm_view.position = inner.position
+	bm_view.size = inner.size
+	var span := MAP_EXTENT * 2.0 / map_zoom
+	var origin := _bm_focus - Vector2(span, span) * 0.5
+	origin = origin.clamp(Vector2(-MAP_EXTENT, -MAP_EXTENT), Vector2(MAP_EXTENT - span, MAP_EXTENT - span))
+	_bm_focus = origin + Vector2(span, span) * 0.5
+	bm_view.set_view(origin, span)
+	bm_view.set_zone(zone_center, zone_radius, next_center, next_radius)
+	_bm_inner = inner
+	_bm_origin = origin
+	_bm_span = span
+
+
+## "D4" for a world position: 300 m squares, A-H across, 1-8 down.
+func _grid_ref(w: Vector2) -> String:
+	var col := int(clampf((w.x + MAP_EXTENT) / (MAP_EXTENT * 2.0) * 8.0, 0.0, 7.0))
+	var row := int(clampf((w.y + MAP_EXTENT) / (MAP_EXTENT * 2.0) * 8.0, 0.0, 7.0))
+	return "%s%d" % ["ABCDEFGH"[col], row + 1]
+
+
+func _dist_text(d: float) -> String:
+	return ("%.1f KM" % (d / 1000.0)) if d >= 1000.0 else ("%d M" % int(d))
+
+
+## Metres to the edge of the next safe zone (0 inside it) and of the storm
+## wall (above 0 means you are standing in the storm).
+func _zone_distances() -> Vector2:
+	var me := Vector2(player_pos.x, player_pos.z)
+	var to_safe := maxf(0.0, me.distance_to(next_center) - next_radius) if next_radius > 0.5 else 0.0
+	var in_storm_by := maxf(0.0, me.distance_to(zone_center) - zone_radius) if zone_radius > 0.5 else 0.0
+	return Vector2(to_safe, in_storm_by)
+
+
+func _text_out(ctrl: Control, at: Vector2, txt: String, fs: int, col: Color, outline := 4) -> void:
+	ctrl.draw_string_outline(font_bold, at, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, outline, Color(0.02, 0.03, 0.04, 0.78))
+	ctrl.draw_string(font_bold, at, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
+
+
+## One map symbol, centred on `c`. The legend draws the same ones.
+func _map_icon(ctrl: Control, kind: String, c: Vector2, k: float, col := Color.WHITE) -> void:
+	match kind:
+		"tower":
+			var tri := PackedVector2Array([c + Vector2(0, -6.5) * k, c + Vector2(-5.5, 4.5) * k, c + Vector2(5.5, 4.5) * k])
+			ctrl.draw_colored_polygon(tri, Color(0.98, 0.78, 0.36))
+			ctrl.draw_polyline(PackedVector2Array([tri[0], tri[1], tri[2], tri[0]]), Color(0.10, 0.07, 0.03, 0.9), 1.2, true)
+		"ruin":
+			ctrl.draw_rect(Rect2(c - Vector2(4, 4) * k, Vector2(8, 8) * k), Color(0.08, 0.08, 0.08, 0.55))
+			ctrl.draw_rect(Rect2(c - Vector2(4, 4) * k, Vector2(8, 8) * k), Color(0.88, 0.86, 0.80), false, 1.5)
+		"landmark":
+			var dm := PackedVector2Array([c + Vector2(0, -5.5) * k, c + Vector2(5.5, 0) * k, c + Vector2(0, 5.5) * k, c + Vector2(-5.5, 0) * k])
+			ctrl.draw_colored_polygon(dm, Color(1.0, 0.86, 0.46))
+			ctrl.draw_polyline(PackedVector2Array([dm[0], dm[1], dm[2], dm[3], dm[0]]), Color(0.10, 0.07, 0.03, 0.9), 1.2, true)
+		"drop":
+			ctrl.draw_rect(Rect2(c - Vector2(5, 5) * k, Vector2(10, 10) * k), Color(0.93, 0.25, 0.20))
+			ctrl.draw_rect(Rect2(c - Vector2(5, 5) * k, Vector2(10, 10) * k), Color(1, 1, 1, 0.95), false, 1.3)
+			ctrl.draw_line(c + Vector2(-5, 0) * k, c + Vector2(5, 0) * k, Color(1, 1, 1, 0.95), 1.3)
+			ctrl.draw_line(c + Vector2(0, -5) * k, c + Vector2(0, 5) * k, Color(1, 1, 1, 0.95), 1.3)
+		"mate":
+			ctrl.draw_circle(c, 5.6 * k, Color(0.02, 0.03, 0.04, 0.85))
+			ctrl.draw_circle(c, 4.2 * k, col)
+		"mark":
+			# A map pin: round head, point on the spot.
+			var head := c + Vector2(0, -9.0) * k
+			var pin := PackedVector2Array([c, head + Vector2(-4.6, 1.6) * k, head + Vector2(4.6, 1.6) * k])
+			ctrl.draw_colored_polygon(PackedVector2Array([c + Vector2(0, 2.0) * k, head + Vector2(-6.4, 1.2) * k, head + Vector2(6.4, 1.2) * k]), Color(0.02, 0.03, 0.04, 0.85))
+			ctrl.draw_circle(head, 6.6 * k, Color(0.02, 0.03, 0.04, 0.85))
+			ctrl.draw_colored_polygon(pin, col)
+			ctrl.draw_circle(head, 5.0 * k, col)
+			ctrl.draw_circle(head, 2.0 * k, Color(0.02, 0.03, 0.04, 0.85))
+		"shot":
+			ctrl.draw_arc(c, 6.0 * k, 0, TAU, 20, Color(1.0, 0.36, 0.26), 1.6, true)
+			ctrl.draw_circle(c, 1.8 * k, Color(1.0, 0.36, 0.26))
+		"you":
+			_map_arrow(ctrl, c, 0.0, k)
+		"safe":
+			ctrl.draw_arc(c, 6.5 * k, 0, TAU, 24, Color(0.02, 0.03, 0.05, 0.6), 3.5, true)
+			ctrl.draw_arc(c, 6.5 * k, 0, TAU, 24, Color.WHITE, 1.6, true)
+		"storm":
+			ctrl.draw_rect(Rect2(c - Vector2(7, 7) * k, Vector2(14, 14) * k), Color(STORM.r * 0.76, STORM.g * 0.64, STORM.b * 0.92, 0.85))
+			ctrl.draw_rect(Rect2(c - Vector2(7, 7) * k, Vector2(14, 14) * k), Color(0.86, 0.74, 1.0), false, 1.4)
+		"route":
+			ctrl.draw_dashed_line(c + Vector2(-8, 0) * k, c + Vector2(8, 0) * k, Color(1, 1, 1, 0.9), 2.0, 4.0)
+
+
+## The arrow that is you (or anyone): chevron with a white rim.
+func _map_arrow(ctrl: Control, c: Vector2, ang: float, k: float, fill := ACCENT) -> void:
+	var fwd := Vector2(sin(ang), -cos(ang))
+	var right := Vector2(cos(ang), sin(ang))
+	var shape := func(s: float) -> PackedVector2Array:
+		return PackedVector2Array([c + fwd * 9.0 * s, c - fwd * 6.5 * s - right * 6.5 * s, c - fwd * 2.6 * s, c - fwd * 6.5 * s + right * 6.5 * s])
+	var sh: PackedVector2Array = shape.call(k * 1.32)
+	# Two triangles: the chevron is concave.
+	ctrl.draw_colored_polygon(PackedVector2Array([sh[0], sh[1], sh[2]]), Color(0.02, 0.03, 0.04, 0.8))
+	ctrl.draw_colored_polygon(PackedVector2Array([sh[0], sh[2], sh[3]]), Color(0.02, 0.03, 0.04, 0.8))
+	var p: PackedVector2Array = shape.call(k)
+	ctrl.draw_colored_polygon(PackedVector2Array([p[0], p[1], p[2]]), fill)
+	ctrl.draw_colored_polygon(PackedVector2Array([p[0], p[2], p[3]]), fill.darkened(0.14))
+	ctrl.draw_polyline(PackedVector2Array([p[0], p[1], p[2], p[3], p[0]]), Color(1, 1, 1, 0.95), 1.3, true)
+
+
+## Everything that sits on top of a MapView: routes, names, markers, you.
+func _draw_markers(ctrl: Control, view: MapView, big: bool) -> void:
+	var off := view.position
+	var inner := Rect2(off, view.size)
+	var scale := view.scale_px()
 	var to_map := func(p: Vector2) -> Vector2:
-		return inner.position + (p - origin) / span * inner.size.x
-	# Terrain texture: map the world rect onto the texture's pixel space.
-	if minimap_tex != null:
-		var ts := minimap_tex.get_size()
-		var src := Rect2((origin + Vector2(MAP_EXTENT, MAP_EXTENT)) / (MAP_EXTENT * 2.0) * ts.x, Vector2.ONE * span / (MAP_EXTENT * 2.0) * ts.x)
-		ctrl.draw_rect(inner, Color(0.07, 0.18, 0.28))
-		ctrl.draw_texture_rect_region(minimap_tex, inner, src, Color(1, 1, 1, 0.95))
-	var scale := inner.size.x / span
+		return off + view.to_map(p)
+	var me: Vector2 = to_map.call(Vector2(player_pos.x, player_pos.z))
 
 	# Plane route.
 	if plane_path.size() == 2:
 		var seg := _clip_segment(to_map.call(plane_path[0]), to_map.call(plane_path[1]), inner)
 		if seg.size() == 2:
-			ctrl.draw_dashed_line(seg[0], seg[1], Color(1, 1, 1, 0.55), 2.0, 10.0)
+			ctrl.draw_line(seg[0], seg[1], Color(0.02, 0.03, 0.05, 0.35), 4.0, true)
+			ctrl.draw_dashed_line(seg[0], seg[1], Color(1, 1, 1, 0.85), 2.0, 10.0)
 
-	# Storm: current circle (purple) and next safe zone (white).
-	if zone_radius > 0.5:
-		var zc: Vector2 = to_map.call(zone_center)
-		ctrl.draw_arc(zc, zone_radius * scale, 0, TAU, 96, Color(STORM.r, STORM.g, STORM.b, 0.95), 2.0)
-	if next_radius > 0.5 and absf(next_radius - zone_radius) > 0.5:
-		var nc: Vector2 = to_map.call(next_center)
-		ctrl.draw_arc(nc, next_radius * scale, 0, TAU, 96, Color(1, 1, 1, 0.9), 1.5)
-
-	# Named places on the big map. Icons always; names only where they do
-	# not overlap one already drawn (towns first, then landmarks), with a
-	# dark outline so they read over any terrain.
+	# Named places on the full map. Icons always; names only where they do
+	# not overlap one already drawn (towns first, then landmarks).
 	if big:
 		var taken: Array[Rect2] = []
+		var zoomed := map_zoom > 1.8
 		for pass_kind in ["town", "landmark", "tower", "ruin"]:
 			for pl in places:
 				var kind: String = pl[2]
 				if kind != pass_kind:
 					continue
 				var mp: Vector2 = to_map.call(pl[1])
-				if not inner.grow(20.0).has_point(mp):
+				if not inner.grow(-6.0).has_point(mp):
 					continue
-				match kind:
-					"tower":
-						ctrl.draw_colored_polygon(PackedVector2Array([mp + Vector2(0, -6), mp + Vector2(-5, 4), mp + Vector2(5, 4)]), Color(0.95, 0.75, 0.35))
-					"landmark":
-						ctrl.draw_circle(mp, 3.5, Color(1.0, 0.82, 0.42))
-					"ruin":
-						ctrl.draw_rect(Rect2(mp - Vector2(3, 3), Vector2(6, 6)), Color(0.8, 0.78, 0.72), false, 1.5)
-				if kind != "town" and kind != "landmark":
+				if kind != "town":
+					_map_icon(ctrl, kind, mp, 0.9 if kind == "landmark" else 0.8)
+				if kind != "town" and kind != "landmark" and not zoomed:
 					continue
-				var fs := 13 if kind == "town" else 11
+				var fs := 14 if kind == "town" else 11
+				if zoomed and kind == "town":
+					fs = 17
 				var txt: String = pl[0]
 				var tw := font_bold.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
-				var at := mp + Vector2(-tw * 0.5, -10 if kind == "town" else -8)
-				var box := Rect2(at + Vector2(-2, -fs), Vector2(tw + 4, fs + 4))
+				var at := mp + Vector2(-tw * 0.5, -11 if kind == "town" else -10)
+				at.x = clampf(at.x, inner.position.x + 4.0, inner.end.x - tw - 4.0)
+				var box := Rect2(at + Vector2(-3, -fs), Vector2(tw + 6, fs + 5))
 				var clash := false
 				for r in taken:
 					if r.intersects(box):
 						clash = true
 						break
-				if clash:
+				if clash or box.position.y < inner.position.y:
 					continue
 				taken.append(box)
-				var col := WHITE if kind == "town" else Color(1.0, 0.86, 0.55)
-				ctrl.draw_string_outline(font_bold, at, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 4, Color(0, 0, 0, 0.55))
-				ctrl.draw_string(font_bold, at, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
-	# Markers (supply drops).
+				var col := WHITE
+				if kind == "landmark":
+					col = Color(1.0, 0.90, 0.60)
+				elif kind != "town":
+					col = Color(0.86, 0.88, 0.90)
+				_text_out(ctrl, at, txt, fs, col, 5 if kind == "town" else 4)
+
+	# Supply drops.
 	for m in markers:
 		var mp: Vector2 = to_map.call(Vector2(m.x, m.z))
-		ctrl.draw_rect(Rect2(mp - Vector2(4, 4), Vector2(8, 8)), Color(0.95, 0.25, 0.2))
-		ctrl.draw_rect(Rect2(mp - Vector2(4, 4), Vector2(8, 8)), Color(1, 1, 1, 0.9), false, 1.0)
+		if inner.has_point(mp):
+			_map_icon(ctrl, "drop", mp, 1.0 if big else 0.85)
 
 	# Gunfire pings.
 	for p in pings:
 		var pp: Vector2 = to_map.call(p["p"])
+		if not inner.has_point(pp):
+			continue
 		var life: float = clampf(float(p["t"]) / 2.2, 0.0, 1.0)
-		ctrl.draw_arc(pp, 3.0 + (1.0 - life) * 7.0, 0, TAU, 16, Color(1.0, 0.35, 0.25, life), 1.5)
+		ctrl.draw_arc(pp, 3.0 + (1.0 - life) * 9.0, 0, TAU, 20, Color(1.0, 0.36, 0.26, life), 1.8, true)
+		ctrl.draw_circle(pp, 1.8, Color(1.0, 0.36, 0.26, life))
+
+	# Way to safety: a line from you to the edge of the next circle.
+	var zd := _zone_distances()
+	if zd.x > 0.5:
+		var nc: Vector2 = to_map.call(next_center)
+		var edge := nc + (me - nc).normalized() * next_radius * scale
+		var seg2 := _clip_segment(me, edge, inner)
+		if seg2.size() == 2 and (seg2[0] as Vector2).distance_to(seg2[1]) > 6.0:
+			ctrl.draw_line(seg2[0], seg2[1], Color(0.02, 0.03, 0.05, 0.4), 3.5, true)
+			ctrl.draw_dashed_line(seg2[0], seg2[1], Color(1, 1, 1, 0.92), 1.6, 7.0)
 
 	# Squad mates.
 	for m in mates:
 		if m.size() > 3 and not bool(m[3]):
 			continue
 		var mp: Vector2 = to_map.call(m[1])
-		if not inner.has_point(mp):
-			continue
 		var mc: Color = m[2] if m.size() > 2 else Color(0.45, 0.95, 0.55)
-		ctrl.draw_circle(mp, 5.5 if big else 4.5, Color(0, 0, 0, 0.7))
-		ctrl.draw_circle(mp, 4.2 if big else 3.4, mc)
+		if not inner.has_point(mp):
+			# Off the minimap: a tick on the rim so you know which way they are.
+			if not big:
+				var rim := _clip_segment(me, mp, inner.grow(-7.0))
+				if rim.size() == 2:
+					ctrl.draw_circle(rim[1], 4.2, Color(0.02, 0.03, 0.04, 0.85))
+					ctrl.draw_circle(rim[1], 3.0, mc)
+			continue
+		_map_icon(ctrl, "mate", mp, 1.0 if big else 0.85, mc)
 		if big:
-			ctrl.draw_string(font_bold, mp + Vector2(-60, -10), m[0], HORIZONTAL_ALIGNMENT_CENTER, 120, 11, mc)
-	# Waypoints.
+			var nm: String = m[0]
+			var nw := font_bold.get_string_size(nm, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
+			_text_out(ctrl, mp + Vector2(-nw * 0.5, -9), nm, 11, mc)
+
+	# Your marks (and your squad's).
 	for w in waypoints:
 		var wp: Vector2 = to_map.call(Vector2(w.pos.x, w.pos.z))
-		if not inner.has_point(wp):
-			continue
 		var wc: Color = w.color
-		var k2 := 7.0 if big else 5.0
-		ctrl.draw_colored_polygon(PackedVector2Array([wp + Vector2(0, -k2), wp + Vector2(k2, 0), wp + Vector2(0, k2), wp + Vector2(-k2, 0)]), Color(0, 0, 0, 0.6))
-		ctrl.draw_colored_polygon(PackedVector2Array([wp + Vector2(0, -k2 + 1.5), wp + Vector2(k2 - 1.5, 0), wp + Vector2(0, k2 - 1.5), wp + Vector2(-k2 + 1.5, 0)]), wc)
-	if big:
-		_bm_inner = inner
-		_bm_origin = origin
-		_bm_span = span
+		if not inner.has_point(wp):
+			if not big:
+				var rim2 := _clip_segment(me, wp, inner.grow(-8.0))
+				if rim2.size() == 2:
+					var dir := (wp - me).normalized()
+					var side := Vector2(-dir.y, dir.x)
+					var tip: Vector2 = rim2[1]
+					ctrl.draw_colored_polygon(PackedVector2Array([tip + dir * 6.0, tip - dir * 4.0 + side * 5.0, tip - dir * 4.0 - side * 5.0]), wc)
+			continue
+		_map_icon(ctrl, "mark", wp, 1.0 if big else 0.8, wc)
+		if big:
+			var dtxt := _dist_text(Vector2(player_pos.x, player_pos.z).distance_to(Vector2(w.pos.x, w.pos.z)))
+			var dw := font_bold.get_string_size(dtxt, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
+			_text_out(ctrl, wp + Vector2(-dw * 0.5, 15), dtxt, 11, WHITE)
 
-	# Player arrow.
-	var me: Vector2 = to_map.call(Vector2(player_pos.x, player_pos.z))
-	var ang := deg_to_rad(heading)
-	var fwd := Vector2(sin(ang), -cos(ang))
-	var right := Vector2(cos(ang), sin(ang))
-	var k := 1.6 if big else 1.0
-	var p0 := me + fwd * 7.0 * k
-	var p1 := me - fwd * 4.0 * k - right * 4.0 * k
-	var p2 := me - fwd * 4.0 * k + right * 4.0 * k
-	ctrl.draw_colored_polygon(PackedVector2Array([p0, p1, p2]), ACCENT)
-	ctrl.draw_polyline(PackedVector2Array([p0, p1, p2, p0]), Color(0, 0, 0, 0.6), 1.0)
-
-	# Line to safety.
-	if big and next_radius > 0.5:
-		var nc: Vector2 = to_map.call(next_center)
-		if me.distance_to(nc) > next_radius * scale:
-			var edge := nc + (me - nc).normalized() * next_radius * scale
-			ctrl.draw_dashed_line(me, edge, Color(1, 1, 1, 0.6), 1.5, 6.0)
+	# You: where you look, then the arrow.
+	if inner.grow(10.0).has_point(me):
+		var ang := deg_to_rad(heading)
+		var reach := 58.0 if big else 46.0
+		var pts := PackedVector2Array([me])
+		var cols := PackedColorArray([Color(1, 1, 1, 0.36)])
+		for i in 9:
+			var a := ang - 0.60 + 1.20 * float(i) / 8.0
+			pts.append(me + Vector2(sin(a), -cos(a)) * reach)
+			cols.append(Color(1, 1, 1, 0.0))
+		ctrl.draw_polygon(pts, cols)
+		_map_arrow(ctrl, me, ang, 1.15 if big else 0.95)
 
 
 ## Liang-Barsky: the part of a-b inside r, or [] if none.
@@ -1943,54 +2101,172 @@ func _clip_segment(a: Vector2, b: Vector2, r: Rect2) -> Array:
 
 
 func _draw_minimap() -> void:
-	var r := Rect2(Vector2.ZERO, minimap_draw.size)
-	_map_style(minimap_draw, r)
-	var inner := r.grow(-2.0)
-	var span := MINIMAP_VIEW * 2.0
-	var origin := Vector2(player_pos.x, player_pos.z) - Vector2(span, span) * 0.5
-	_draw_world(minimap_draw, inner, origin, span, false)
-	minimap_draw.draw_rect(inner, Color(1, 1, 1, 0.14), false, 1.0)
+	var d := minimap_draw
+	var r := Rect2(Vector2.ZERO, d.size)
+	_draw_markers(d, mm_view, false)
+	var inner := r.grow(-3.0)
+	# Where you are, top left.
+	var ref := _grid_ref(Vector2(player_pos.x, player_pos.z))
+	var rw := font_bold.get_string_size(ref, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x
+	d.draw_rect(Rect2(inner.position, Vector2(rw + 12.0, 19.0)), Color(0.03, 0.04, 0.05, 0.78))
+	d.draw_string(font_bold, inner.position + Vector2(6, 14), ref, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, WHITE)
+	# North, top centre.
+	var nx := r.size.x * 0.5
+	d.draw_colored_polygon(PackedVector2Array([Vector2(nx, inner.position.y + 2.0), Vector2(nx - 4.5, inner.position.y + 9.0), Vector2(nx + 4.5, inner.position.y + 9.0)]), Color(1, 1, 1, 0.9))
+	# How far to safety, along the bottom, while you are outside it.
+	var zd := _zone_distances()
+	if zd.x > 0.5 or zd.y > 0.5:
+		var stormy := zd.y > 0.5
+		var bar := Rect2(Vector2(inner.position.x, inner.end.y - 21.0), Vector2(inner.size.x, 21.0))
+		var pulse := 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.008)
+		d.draw_rect(bar, Color(0.30, 0.14, 0.62, 0.80 + 0.14 * pulse) if stormy else Color(0.03, 0.04, 0.05, 0.80))
+		var txt := ("IN THE STORM" if stormy else "SAFE ZONE")
+		d.draw_string(font_bold, bar.position + Vector2(8, 15), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.93, 0.86, 1.0) if stormy else MUTED)
+		var dt := _dist_text(zd.x) if zd.x > 0.5 else "RUN"
+		var dtw := font_bold.get_string_size(dt, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x
+		d.draw_string(font_bold, Vector2(bar.end.x - dtw - 8.0, bar.position.y + 15.0), dt, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, WHITE)
+	# Frame.
+	d.draw_rect(r.grow(-1.5), Color(0.03, 0.04, 0.05, 0.96), false, 3.0)
+	d.draw_rect(r.grow(-3.5), Color(1, 1, 1, 0.20), false, 1.0)
+	d.draw_rect(r.grow(-0.5), Color(1, 1, 1, 0.10), false, 1.0)
+
+
+## A key cap with what it does; returns the x after it.
+func _keycap(ctrl: Control, at: Vector2, key: String, what: String) -> float:
+	var kw := font_bold.get_string_size(key, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
+	var box := Rect2(at + Vector2(0, -15), Vector2(kw + 14.0, 21.0))
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(1, 1, 1, 0.10)
+	sb.border_color = Color(1, 1, 1, 0.42)
+	sb.set_border_width_all(1)
+	sb.border_width_bottom = 2
+	sb.set_corner_radius_all(4)
+	ctrl.draw_style_box(sb, box)
+	ctrl.draw_string(font_bold, at + Vector2(7, 0), key, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, WHITE)
+	var x := at.x + kw + 22.0
+	ctrl.draw_string(font_bold, Vector2(x, at.y), what, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, MUTED)
+	return x + font_bold.get_string_size(what, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x + 26.0
+
+
+func _keycaps_width(pairs: Array) -> float:
+	var w := 0.0
+	for pr in pairs:
+		w += font_bold.get_string_size(pr[0], HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x + 22.0
+		w += font_bold.get_string_size(pr[1], HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x + 26.0
+	return w - 26.0
 
 
 func _draw_big_map() -> void:
-	var vp := big_map_draw.size
-	var side := minf(vp.x, vp.y) - 120.0
-	var inner := Rect2((vp - Vector2(side, side)) * 0.5, Vector2(side, side))
-	_map_style(big_map_draw, inner.grow(3.0))
-	var span := MAP_EXTENT * 2.0 / map_zoom
-	var origin := Vector2(player_pos.x, player_pos.z) - Vector2(span, span) * 0.5
-	origin = origin.clamp(Vector2(-MAP_EXTENT, -MAP_EXTENT), Vector2(MAP_EXTENT - span, MAP_EXTENT - span))
-	if map_zoom <= 1.01:
-		origin = Vector2(-MAP_EXTENT, -MAP_EXTENT)
-	_draw_world(big_map_draw, inner, origin, span, true)
-	# Grid labels like a real map.
-	var cells := 8
-	for i in cells + 1:
-		var f := float(i) / float(cells)
-		var x := inner.position.x + inner.size.x * f
-		var y := inner.position.y + inner.size.y * f
-		big_map_draw.draw_line(Vector2(x, inner.position.y), Vector2(x, inner.end.y), Color(1, 1, 1, 0.06), 1.0)
-		big_map_draw.draw_line(Vector2(inner.position.x, y), Vector2(inner.end.x, y), Color(1, 1, 1, 0.06), 1.0)
-		if i < cells:
-			big_map_draw.draw_string(font_bold, Vector2(x + inner.size.x / cells * 0.5 - 4, inner.position.y - 10), "ABCDEFGH"[i], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, MUTED)
-			big_map_draw.draw_string(font_bold, Vector2(inner.position.x - 18, y + inner.size.y / cells * 0.5 + 4), str(i + 1), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, MUTED)
-	big_map_draw.draw_string(font_bold, Vector2(inner.position.x, inner.end.y + 26), "M  CLOSE MAP      ·      LEFT CLICK  MARK      ·      RIGHT CLICK  REMOVE      ·      WHEEL  ZOOM      ·      WHITE CIRCLE = NEXT SAFE ZONE", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, MUTED)
+	var d := big_map_draw
+	var inner := _bm_inner
+	if inner.size.x < 8.0:
+		return
+	var vp := d.size
+	# Frame.
+	d.draw_rect(inner.grow(2.0), Color(0.03, 0.04, 0.05, 1.0), false, 4.0)
+	d.draw_rect(inner.grow(4.5), Color(1, 1, 1, 0.20), false, 1.0)
+	_draw_markers(d, bm_view, true)
+
+	# Grid references along the top and the left, following the zoom.
+	for i in 8:
+		var wc := -MAP_EXTENT + (float(i) + 0.5) * MAP_EXTENT * 0.25
+		var x := inner.position.x + (wc - _bm_origin.x) / _bm_span * inner.size.x
+		var y := inner.position.y + (wc - _bm_origin.y) / _bm_span * inner.size.y
+		if x > inner.position.x + 6.0 and x < inner.end.x - 6.0:
+			d.draw_string(font_bold, Vector2(x - 4.0, inner.position.y - 11.0), "ABCDEFGH"[i], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, MUTED)
+		if y > inner.position.y + 6.0 and y < inner.end.y - 6.0:
+			d.draw_string(font_bold, Vector2(inner.position.x - 20.0, y + 4.0), str(i + 1), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, MUTED)
+
+	# Scale bar, bottom left of the map.
+	var ppm := inner.size.x / _bm_span
+	var metres := 1000.0
+	for cand in [1000.0, 500.0, 200.0, 100.0, 50.0]:
+		metres = cand
+		if cand * ppm <= 150.0:
+			break
+	var sb0 := Vector2(inner.position.x + 14.0, inner.end.y - 14.0)
+	var sb1 := sb0 + Vector2(metres * ppm, 0.0)
+	for pass_i in 2:
+		var c := Color(0.02, 0.03, 0.05, 0.7) if pass_i == 0 else Color(1, 1, 1, 0.95)
+		var wd := 4.0 if pass_i == 0 else 1.6
+		d.draw_line(sb0, sb1, c, wd)
+		d.draw_line(sb0 + Vector2(0, -5), sb0 + Vector2(0, 1), c, wd)
+		d.draw_line(sb1 + Vector2(0, -5), sb1 + Vector2(0, 1), c, wd)
+	_text_out(d, sb0 + Vector2(0, -9), _dist_text(metres), 11, WHITE)
+
+	# Header: where this is, and what the storm is doing.
+	var top := inner.position.y - 36.0
+	d.draw_string(font_bold, Vector2(inner.position.x - 2.0, top), "HIGHFALLS ARCHIPELAGO", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, WHITE)
+	var zd := _zone_distances()
+	var state := "%s   %s" % [lbl_zone_state.text, lbl_zone_timer.text]
+	var sw := font_bold.get_string_size(state, HORIZONTAL_ALIGNMENT_LEFT, -1, 15).x
+	d.draw_string(font_bold, Vector2(inner.end.x - sw + 2.0, top), state, HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color(0.84, 0.74, 1.0) if zd.y > 0.5 else WHITE)
+
+	# Side panels where there is room: your situation left, the key right.
+	var room := inner.position.x - 40.0
+	if room >= 200.0:
+		var lx := inner.position.x - 40.0 - 190.0
+		var ly := inner.position.y + 6.0
+		var me2 := Vector2(player_pos.x, player_pos.z)
+		var rows := [
+			["POSITION", _grid_ref(me2), WHITE],
+			["SAFE ZONE", "INSIDE" if zd.x <= 0.5 else _dist_text(zd.x), Color(0.55, 0.92, 0.60) if zd.x <= 0.5 else WHITE],
+			["STORM", "YOU ARE IN IT" if zd.y > 0.5 else ("%s AWAY" % _dist_text(maxf(0.0, zone_radius - me2.distance_to(zone_center)))), Color(0.84, 0.74, 1.0) if zd.y > 0.5 else WHITE],
+			[lbl_alive.text.get_slice("  ", 0), lbl_alive.text.get_slice("  ", 1), WHITE],
+		]
+		for row in rows:
+			d.draw_string(font_bold, Vector2(lx, ly + 11.0), row[0], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, MUTED)
+			d.draw_string(font_bold, Vector2(lx, ly + 32.0), row[1], HORIZONTAL_ALIGNMENT_LEFT, -1, 18, row[2])
+			d.draw_line(Vector2(lx, ly + 44.0), Vector2(lx + 190.0, ly + 44.0), Color(1, 1, 1, 0.10), 1.0)
+			ly += 58.0
+
+		var kx := inner.end.x + 40.0
+		var ky := inner.position.y + 6.0
+		d.draw_string(font_bold, Vector2(kx, ky + 11.0), "MAP KEY", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, MUTED)
+		ky += 34.0
+		var key := [["you", "YOU"], ["mate", "SQUAD MATE"], ["mark", "YOUR MARK"], ["safe", "NEXT SAFE ZONE"], ["storm", "THE STORM"], ["drop", "SUPPLY DROP"], ["shot", "GUNFIRE"], ["tower", "LOOKOUT TOWER"], ["ruin", "RUINS"], ["landmark", "LANDMARK"]]
+		if plane_path.size() == 2:
+			key.append(["route", "FLIGHT PATH"])
+		for e in key:
+			var ic := Vector2(kx + 9.0, ky - 4.0)
+			if e[0] == "mark":
+				_map_icon(d, "mark", ic + Vector2(0, 6), 0.8, ACCENT)
+			elif e[0] == "mate":
+				_map_icon(d, "mate", ic, 0.9, Color(0.45, 0.95, 0.55))
+			else:
+				_map_icon(d, e[0], ic, 0.8)
+			d.draw_string(font_bold, Vector2(kx + 30.0, ky), e[1], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.86, 0.88, 0.90))
+			ky += 26.0
+
+	# What the keys do, centred under the map.
+	var pairs := [["M", "CLOSE"], ["LEFT CLICK", "MARK"], ["RIGHT CLICK", "REMOVE MARK"], ["WHEEL", "ZOOM"]]
+	var hx := inner.position.x + (inner.size.x - _keycaps_width(pairs)) * 0.5
+	var hy := minf(inner.end.y + 34.0, vp.y - 10.0)
+	for pr in pairs:
+		hx = _keycap(d, Vector2(hx, hy), pr[0], pr[1])
+
 	# Cursor readout: grid square and how far that is from you.
-	var mp := big_map_draw.get_local_mouse_position()
+	var mp := d.get_local_mouse_position()
 	if inner.has_point(mp) and Input.mouse_mode == Input.MOUSE_MODE_VISIBLE:
-		var w := origin + (mp - inner.position) / inner.size.x * span
-		var d := Vector2(player_pos.x, player_pos.z).distance_to(w)
-		var col := int(clampf((w.x + MAP_EXTENT) / (MAP_EXTENT * 2.0) * 8.0, 0.0, 7.0))
-		var row := int(clampf((w.y + MAP_EXTENT) / (MAP_EXTENT * 2.0) * 8.0, 0.0, 7.0))
-		var txt := "%s%d   ·   %s" % ["ABCDEFGH"[col], row + 1, ("%.1f KM" % (d / 1000.0)) if d >= 1000.0 else ("%d M" % int(d))]
-		big_map_draw.draw_arc(mp, 9.0, 0.0, TAU, 24, Color(1, 1, 1, 0.85), 1.5, true)
-		big_map_draw.draw_line(mp + Vector2(-15, 0), mp + Vector2(-5, 0), Color(1, 1, 1, 0.85), 1.5)
-		big_map_draw.draw_line(mp + Vector2(5, 0), mp + Vector2(15, 0), Color(1, 1, 1, 0.85), 1.5)
-		big_map_draw.draw_line(mp + Vector2(0, -15), mp + Vector2(0, -5), Color(1, 1, 1, 0.85), 1.5)
-		big_map_draw.draw_line(mp + Vector2(0, 5), mp + Vector2(0, 15), Color(1, 1, 1, 0.85), 1.5)
-		var tp := mp + Vector2(16, -14)
-		big_map_draw.draw_rect(Rect2(tp + Vector2(-4, -14), Vector2(font_bold.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x + 8, 20)), Color(0, 0, 0, 0.6))
-		big_map_draw.draw_string(font_bold, tp, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, WHITE)
+		var w := _bm_origin + (mp - inner.position) / inner.size.x * _bm_span
+		var dist := Vector2(player_pos.x, player_pos.z).distance_to(w)
+		var txt := "%s   ·   %s" % [_grid_ref(w), _dist_text(dist)]
+		for pass_i in 2:
+			var c := Color(0.02, 0.03, 0.05, 0.65) if pass_i == 0 else Color(1, 1, 1, 0.95)
+			var wd := 3.5 if pass_i == 0 else 1.5
+			d.draw_arc(mp, 9.0, 0.0, TAU, 24, c, wd, true)
+			d.draw_line(mp + Vector2(-16, 0), mp + Vector2(-5, 0), c, wd)
+			d.draw_line(mp + Vector2(5, 0), mp + Vector2(16, 0), c, wd)
+			d.draw_line(mp + Vector2(0, -16), mp + Vector2(0, -5), c, wd)
+			d.draw_line(mp + Vector2(0, 5), mp + Vector2(0, 16), c, wd)
+		var tw := font_bold.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
+		var tp := mp + Vector2(18, -16)
+		if tp.x + tw + 8.0 > inner.end.x:
+			tp.x = mp.x - 18.0 - tw
+		if tp.y - 16.0 < inner.position.y:
+			tp.y = mp.y + 30.0
+		d.draw_rect(Rect2(tp + Vector2(-6, -15), Vector2(tw + 12, 22)), Color(0.03, 0.04, 0.05, 0.86))
+		d.draw_string(font_bold, tp, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, WHITE)
 
 
 
