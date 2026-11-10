@@ -1018,6 +1018,13 @@ func _build_lighthouse() -> void:
 		var hb := _frame(dv)
 		var up := hb.y
 		box_b(hb, (p0 + p1) * 0.5 - up * 0.18, Vector3(1.7, 0.36, dv.length() + 0.25), "trim")
+		# A handrail and a knee rail between the posts, all the way up.
+		var o0 := Vector3(cos(a0), 0, sin(a0)) * 0.8
+		var o1 := Vector3(cos(a1), 0, sin(a1)) * 0.8
+		for rh: float in [1.08, 0.56]:
+			var q0 := p0 + o0 + Vector3(0, rh, 0)
+			var q1 := p1 + o1 + Vector3(0, rh, 0)
+			box_b(_frame(q1 - q0), (q0 + q1) * 0.5, Vector3(0.07, 0.07, q0.distance_to(q1) + 0.03), "iron", false)
 		# Outer rail post and support bracket every other step.
 		if i % 2 == 0:
 			var outer := Vector3(cos(a0), 0, sin(a0))

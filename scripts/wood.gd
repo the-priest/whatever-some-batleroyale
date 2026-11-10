@@ -58,6 +58,14 @@ static func box(st: SurfaceTool, b: Basis, c: Vector3, size: Vector3) -> void:
 		var end := k == l
 		var ai := (k + 1) % 3 if end else l
 		var bi := (k + 2) % 3 if end else 3 - k - l
+		if end and maxf(sz[ai], sz[bi]) > 0.45:
+			# Too big to be the sawn end of one timber (the side of a counter,
+			# a crate): it is boarded like the other faces.
+			end = false
+			if sz[bi] > sz[ai]:
+				var t := ai
+				ai = bi
+				bi = t
 		var ha := ax[ai] * sz[ai] * 0.5
 		var hb := ax[bi] * sz[bi] * 0.5
 		var boards := maxf(1.0, round(sz[bi] / BOARD_W))

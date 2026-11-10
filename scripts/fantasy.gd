@@ -322,6 +322,13 @@ func _build_spire(c: Vector2) -> void:
 		var dv := p1 - p0
 		var hb := lm._frame(dv)
 		lm.box_b(hb, (p0 + p1) * 0.5 - hb.y * 0.18, Vector3(1.8, 0.36, dv.length() + 0.25), "trim")
+		# A handrail and a knee rail between the posts, all the way up.
+		var o0 := Vector3(cos(a0), 0, sin(a0)) * 0.85
+		var o1 := Vector3(cos(a1), 0, sin(a1)) * 0.85
+		for rh: float in [1.08, 0.56]:
+			var q0 := p0 + o0 + Vector3(0, rh, 0)
+			var q1 := p1 + o1 + Vector3(0, rh, 0)
+			lm.box_b(lm._frame(q1 - q0), (q0 + q1) * 0.5, Vector3(0.07, 0.07, q0.distance_to(q1) + 0.03), "iron", false)
 		if i % 2 == 0:
 			var outer := Vector3(cos(a0), 0, sin(a0))
 			lm.box(p0 + outer * 0.85 + Vector3(0, 0.55, 0), Vector3(0.12, 1.1, 0.12), -a0, "iron", false)

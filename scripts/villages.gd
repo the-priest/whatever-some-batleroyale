@@ -863,16 +863,42 @@ func _build_square(sq: Dictionary) -> void:
 const CLOTHS := ["cloth_red", "cloth_blue", "cloth_green", "cloth_yellow"]
 
 
-## A market stall: counter, four posts and a sloped awning, loot on the counter.
+## A market stall: a plank counter with a worn top, four posts carrying a
+## striped awning with a scalloped valance, and goods stacked on and behind it.
+## Loot lies on the counter.
 func _build_stall(p: Vector3, yaw: float, i: int) -> void:
 	var sb := Basis(Vector3.UP, yaw)
-	_proc_box(Transform3D(sb.scaled_local(Vector3(2.6, 0.9, 1.2)), p + Vector3(0, 0.45, 0)), "wood")
-	for px in [-1.2, 1.2]:
-		for pz in [-0.55, 0.55]:
-			_proc_box(Transform3D(sb.scaled_local(Vector3(0.1, 2.4, 0.1)), p + sb * Vector3(px, 1.2, pz)), "wood_dark")
-	_proc_box(Transform3D((sb * Basis(Vector3.RIGHT, 0.25)).scaled_local(Vector3(2.9, 0.05, 1.7)), p + Vector3(0, 2.45, 0)), CLOTHS[i % CLOTHS.size()])
+	var cloth: String = CLOTHS[i % CLOTHS.size()]
+	_proc_box(Transform3D(sb.scaled_local(Vector3(2.6, 0.88, 1.2)), p + Vector3(0, 0.44, 0)), "wood")
+	_proc_box(Transform3D(sb.scaled_local(Vector3(2.84, 0.07, 1.4)), p + Vector3(0, 0.915, 0)), "wood_dark")
+	# Posts: the back pair taller, so the awning sheds rain to the front.
+	var tilt := 0.25
+	for px: float in [-1.3, 1.3]:
+		for pz: float in [-0.6, 0.6]:
+			var ph := 2.45 - pz * tan(tilt)
+			_proc_box(Transform3D(sb.scaled_local(Vector3(0.11, ph, 0.11)), p + sb * Vector3(px, ph * 0.5, pz)), "wood_dark")
+		# A rail between each pair, under the cloth.
+		_proc_box(Transform3D((sb * Basis(Vector3.RIGHT, tilt)).scaled_local(Vector3(0.09, 0.09, 1.5)), p + sb * Vector3(px, 2.4, 0)), "wood_dark")
+	for pz: float in [-0.6, 0.6]:
+		_proc_box(Transform3D(sb.scaled_local(Vector3(2.75, 0.09, 0.09)), p + sb * Vector3(0, 2.4 - pz * tan(tilt), pz)), "wood_dark")
+	# The awning: six stripes, each ending in a flap of the valance.
+	var strip := 2.94 / 6.0
+	var roof := sb * Basis(Vector3.RIGHT, tilt)
+	for k in 6:
+		var x := -1.47 + (float(k) + 0.5) * strip
+		var col := cloth if k % 2 == 0 else "cloth_white"
+		_proc_box(Transform3D(roof.scaled_local(Vector3(strip + 0.004, 0.045, 1.76)), p + sb * Vector3(x, 2.47, 0)), col)
+		var drop := 0.24 if k % 2 == 0 else 0.17
+		_proc_box(Transform3D(sb.scaled_local(Vector3(strip + 0.004, drop, 0.035)), p + sb * Vector3(x, 2.47 - 0.88 * sin(tilt) - drop * 0.5 + 0.02, 0.88 * cos(tilt))), col)
+	# Goods: a crate and a keg at the ends of the counter, sacks behind.
+	var side := 1.0 if i % 2 == 0 else -1.0
+	_proc_box(Transform3D((sb * Basis(Vector3.UP, 0.3)).scaled_local(Vector3(0.46, 0.4, 0.46)), p + sb * Vector3(side * 0.98, 1.15, -0.2)), "wood")
+	_proc_box(Transform3D((sb * Basis(Vector3.UP, -0.2)).scaled_local(Vector3(0.34, 0.3, 0.34)), p + sb * Vector3(side * 0.9, 1.5, -0.22)), "wood_dark")
+	_proc_box(Transform3D((sb * Basis(Vector3.UP, 0.5)).scaled_local(Vector3(0.55, 0.36, 0.42)), p + sb * Vector3(-side * 0.7, 0.18, -1.0)), cloth)
+	_proc_box(Transform3D((sb * Basis(Vector3.UP, -0.3)).scaled_local(Vector3(0.5, 0.34, 0.4)), p + sb * Vector3(-side * 0.2, 0.17, -1.12)), "cloth_white")
+	_proc_box(Transform3D((sb * Basis(Vector3.UP, 0.1)).scaled_local(Vector3(0.5, 0.3, 0.4)), p + sb * Vector3(-side * 0.46, 0.5, -1.05)), "cloth_white")
 	_add_box_collider(p + Vector3(0, 0.45, 0), Vector3(2.6, 0.9, 1.2), yaw)
-	loot_points.append({"pos": p + sb * Vector3(0, 0.95, 0), "kind": "gear" if i % 3 else "weapon", "village": true})
+	loot_points.append({"pos": p + sb * Vector3(0, 0.98, 0), "kind": "gear" if i % 3 else "weapon", "village": true})
 
 
 ## A ring of stone blocks (basin kerbs, well heads), `n` segments around `r`.
@@ -900,7 +926,7 @@ func _build_well(p: Vector3, yaw: float) -> void:
 	_proc_box(Transform3D(b.scaled_local(Vector3(0.05, 0.6, 0.05)), p + b * Vector3(0, 1.72, 0)), "wood")
 	for sz in [-1.0, 1.0]:
 		var roof := b * Basis(Vector3.RIGHT, float(sz) * 0.6)
-		_proc_box(Transform3D(roof.scaled_local(Vector3(2.4, 0.06, 1.1)), p + b * Vector3(0, 2.55, float(sz) * 0.42)), "cloth_red")
+		_proc_box(Transform3D(roof.scaled_local(Vector3(2.4, 0.07, 1.1)), p + b * Vector3(0, 2.55, float(sz) * 0.42)), "wood")
 	_add_box_collider(p + Vector3(0, 0.42, 0), Vector3(2.0, 0.85, 2.0), yaw)
 
 
@@ -1332,7 +1358,7 @@ func _proc_material(key: String) -> Material:
 		return Wood.material(key == "wood_dark", true)
 	var m := StandardMaterial3D.new()
 	if key.begins_with("cloth_"):
-		var cols := {"cloth_red": Color(0.7, 0.16, 0.12), "cloth_blue": Color(0.18, 0.3, 0.62), "cloth_green": Color(0.2, 0.48, 0.24), "cloth_yellow": Color(0.86, 0.68, 0.22)}
+		var cols := {"cloth_red": Color(0.62, 0.13, 0.11), "cloth_blue": Color(0.16, 0.27, 0.55), "cloth_green": Color(0.18, 0.42, 0.22), "cloth_yellow": Color(0.80, 0.60, 0.18), "cloth_white": Color(0.90, 0.86, 0.76)}
 		m.albedo_color = cols[key]
 		m.roughness = 0.95
 		m.cull_mode = BaseMaterial3D.CULL_DISABLED

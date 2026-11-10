@@ -53,8 +53,21 @@ void vertex() {
 		if (k == l) {
 			int a = (k + 1) % 3;
 			int b = (k + 2) % 3;
-			lay = vec4(VERTEX[a] * sz[a], VERTEX[b] * sz[b], 1.0, seed);
-			lay2 = vec3(4.0, board_w, 0.0);
+			if (max(sz[a], sz[b]) > 0.45) {
+				// Too big to be the sawn end of one timber (the side of a
+				// counter, a crate): it is boarded like the other faces.
+				if (sz[b] > sz[a]) {
+					int t = a;
+					a = b;
+					b = t;
+				}
+				float n = max(1.0, floor(sz[b] / board_w + 0.5));
+				lay = vec4(VERTEX[a] * sz[a], (VERTEX[b] + 0.5) * n, 0.0, seed + 0.31);
+				lay2 = vec3(4.0, sz[b] / n, 0.0);
+			} else {
+				lay = vec4(VERTEX[a] * sz[a], VERTEX[b] * sz[b], 1.0, seed);
+				lay2 = vec3(4.0, board_w, 0.0);
+			}
 		} else {
 			int o = 3 - k - l;
 			float n = max(1.0, floor(sz[o] / board_w + 0.5));
