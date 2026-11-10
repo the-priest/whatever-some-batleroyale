@@ -1115,6 +1115,240 @@ func _build_village_extras() -> void:
 				_add_box_collider(p2 + Vector3(0, 0.55, 0), Vector3(2.0, 1.1, 0.4), ang + PI * 0.5)
 				for k in 3:
 					_place("Prop_Brick%d" % rng.randi_range(1, 4), p2 + wb * Vector3(rng.randf_range(-0.6, 1.4), 0, rng.randf_range(-1.2, 0.8)), rng.randf() * TAU)
+	_dress_streets()
+
+
+# ------------------------------------------------------- street dressing --
+## Barrels against house corners and lamp posts along town streets. Every
+## spot is kept off doors, roads, other houses and whatever already stands
+## there, so nothing new blocks a way in or a street.
+var _barrels: Array = []
+var _occupied: Dictionary = {}
+
+
+func _occupy_index() -> void:
+	_occupied.clear()
+	for c in _colliders:
+		var xf: Transform3D = c.xform
+		var sz: Vector3 = c.get("size", Vector3(2.0, 2.0, 2.0))
+		var r := Vector2(sz.x, sz.z).length() * 0.5
+		var o := Vector2(xf.origin.x, xf.origin.z)
+		for gx in range(int(floor((o.x - r) / 4.0)), int(floor((o.x + r) / 4.0)) + 1):
+			for gz in range(int(floor((o.y - r) / 4.0)), int(floor((o.y + r) / 4.0)) + 1):
+				var k := Vector2i(gx, gz)
+				if not _occupied.has(k):
+					_occupied[k] = []
+				(_occupied[k] as Array).append([o, r])
+
+
+func _occupy(p: Vector2, r: float) -> void:
+	var k := Vector2i(int(floor(p.x / 4.0)), int(floor(p.y / 4.0)))
+	if not _occupied.has(k):
+		_occupied[k] = []
+	(_occupied[k] as Array).append([p, r])
+
+
+## Room for something of radius `r` at `p`: no house (except `own`, whose
+## door apron still counts), no road, nothing already standing.
+func _free_spot(p: Vector2, r: float, own: Dictionary = {}) -> bool:
+	if _on_road(p, r + 0.3):
+		return false
+	for h in houses:
+		var hc: Vector2 = h.center
+		if hc.distance_to(p) > 14.0:
+			continue
+		var ap: Array = h.apron
+		var al: Vector2 = (p - (ap[0] as Vector2)).rotated(float(h.yaw))
+		if absf(al.x) < float(ap[1]) * 0.5 + r + 0.4 and absf(al.y) < float(ap[2]) * 0.5 + r + 0.4:
+			return false
+		if h == own:
+			continue
+		var local: Vector2 = (p - hc).rotated(float(h.yaw))
+		if absf(local.x) < float(h.w) * 0.5 + r + 0.6 and absf(local.y) < float(h.d) * 0.5 + r + 0.6:
+			return false
+	for gx in range(int(floor((p.x - r - 3.0) / 4.0)), int(floor((p.x + r + 3.0) / 4.0)) + 1):
+		for gz in range(int(floor((p.y - r - 3.0) / 4.0)), int(floor((p.y + r + 3.0) / 4.0)) + 1):
+			for e in _occupied.get(Vector2i(gx, gz), []):
+				# (The own house's walls do not count: barrels lean on them.)
+				if not own.is_empty() and (e[0] as Vector2).distance_to(own.center) < Vector2(float(own.w), float(own.d)).length() * 0.5 + 0.3:
+					continue
+				if (e[0] as Vector2).distance_to(p) < float(e[1]) + r + 0.15:
+					return false
+	return true
+
+
+func _dress_streets() -> void:
+	_occupy_index()
+	var r2 := RandomNumberGenerator.new()
+	r2.seed = rng.seed + 911
+	var barrels := 0
+	var lamps := 0
+	for v in village_pads:
+		var site: Vector2 = v.center
+		var vr := float(v.radius)
+		# Barrels at house corners: one, or a little group of two or three.
+		for h in houses:
+			var hc: Vector2 = h.center
+			if hc.distance_to(site) > vr + 6.0 or r2.randf() > 0.55:
+				continue
+			var hw := float(h.w) * 0.5
+			var hd := float(h.d) * 0.5
+			var corner := r2.randi() % 4
+			var sx := 1.0 if corner % 2 == 0 else -1.0
+			var sz := 1.0 if corner < 2 else -1.0
+			var n := r2.randi_range(1, 3)
+			var spots: Array[Vector2] = [Vector2(sx * (hw + 0.5), sz * (hd + 0.5)), Vector2(sx * (hw - 0.4), sz * (hd + 0.5)), Vector2(sx * (hw + 0.5), sz * (hd - 0.4))]
+			var y := float(h.pad)
+			for i in n:
+				var wp: Vector2 = hc + spots[i].rotated(-float(h.yaw))
+				if not _free_spot(wp, 0.42, h):
+					continue
+				_barrel(Vector3(wp.x, y, wp.y), r2.randf() * TAU)
+				_occupy(wp, 0.42)
+				barrels += 1
+		# Lamp posts along the streets of towns and cities.
+		if v.type != "town" and v.type != "city":
+			continue
+		for r in roads:
+			var a: Vector2 = r.a
+			var b: Vector2 = r.b
+			var len := a.distance_to(b)
+			if len < 8.0 or bool(r.get("bridge", false)):
+				continue
+			var dir := (b - a) / len
+			var side := Vector2(-dir.y, dir.x)
+			var k := 0
+			var along := 7.0
+			while along < len - 5.0:
+				var q := a + dir * along
+				if q.distance_to(site) < vr - 3.0:
+					var sd := 1.0 if k % 2 == 0 else -1.0
+					var lp := q + side * sd * (float(r.w) + 0.95)
+					if _free_spot(lp, 0.35):
+						var gy := terrain.height_at(lp.x, lp.y)
+						_lamp_post(Vector3(lp.x, gy - 0.05, lp.y), -side * sd)
+						_occupy(lp, 0.35)
+						lamps += 1
+					k += 1
+				along += 17.0
+	print("[villages] street dressing: %d barrels, %d lamp posts" % [barrels, lamps])
+
+
+## A coopered barrel standing on `p`.
+func _barrel(p: Vector3, yaw: float) -> void:
+	_barrels.append(Transform3D(Basis(Vector3.UP, yaw), p))
+	_add_box_collider(p + Vector3(0, 0.52, 0), Vector3(0.74, 1.04, 0.74), yaw)
+
+
+## A street lamp: post, a bracket over the street, a lantern hanging off it.
+func _lamp_post(p: Vector3, toward: Vector2) -> void:
+	var yaw := atan2(toward.x, toward.y)
+	var b := Basis(Vector3.UP, yaw)
+	_proc_box(Transform3D(b.scaled_local(Vector3(0.36, 0.3, 0.36)), p + Vector3(0, 0.15, 0)), "stone")
+	_proc_box(Transform3D(b.scaled_local(Vector3(0.17, 3.3, 0.17)), p + Vector3(0, 1.75, 0)), "wood_dark")
+	_proc_box(Transform3D(b.scaled_local(Vector3(0.1, 0.1, 0.95)), p + Vector3(0, 3.25, 0) + b * Vector3(0, 0, 0.4)), "wood_dark")
+	_proc_box(Transform3D((b * Basis(Vector3.RIGHT, -0.75)).scaled_local(Vector3(0.07, 0.07, 0.62)), p + Vector3(0, 3.02, 0) + b * Vector3(0, 0, 0.2)), "wood_dark")
+	var lantern := p + Vector3(0, 2.88, 0) + b * Vector3(0, 0, 0.78)
+	_proc_box(Transform3D(b.scaled_local(Vector3(0.03, 0.2, 0.03)), lantern + Vector3(0, 0.29, 0)), "iron")
+	_proc_box(Transform3D(b.scaled_local(Vector3(0.3, 0.06, 0.3)), lantern + Vector3(0, 0.2, 0)), "iron")
+	_proc_box(Transform3D(b.scaled_local(Vector3(0.22, 0.32, 0.22)), lantern), "lamp")
+	_proc_box(Transform3D(b.scaled_local(Vector3(0.26, 0.04, 0.26)), lantern - Vector3(0, 0.17, 0)), "iron")
+	_add_box_collider(p + Vector3(0, 1.65, 0), Vector3(0.24, 3.3, 0.24), yaw)
+
+
+func _commit_barrels() -> void:
+	if _barrels.is_empty():
+		return
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = _barrel_mesh()
+	mm.instance_count = _barrels.size()
+	for i in _barrels.size():
+		mm.set_instance_transform(i, _barrels[i])
+	var mmi := MultiMeshInstance3D.new()
+	mmi.name = "Barrels"
+	mmi.multimesh = mm
+	mmi.visibility_range_end = 700.0
+	add_child(mmi)
+
+
+## Staves bulging out to the middle, a lid, three iron hoops.
+func _barrel_mesh() -> ArrayMesh:
+	var prof := [[0.0, 0.32], [0.26, 0.385], [0.52, 0.405], [0.78, 0.385], [1.04, 0.32]]
+	var n := 16
+	var mesh := ArrayMesh.new()
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_uv(Vector2.ZERO)
+	# Grain up the staves (see Wood): boards with seams.
+	st.set_color(Color(0.5, 1.0, 0.5, 0.5))
+	for k in prof.size() - 1:
+		var y0 := float(prof[k][0])
+		var r0 := float(prof[k][1])
+		var y1 := float(prof[k + 1][0])
+		var r1 := float(prof[k + 1][1])
+		for i in n:
+			var a0 := TAU * float(i) / float(n)
+			var a1 := TAU * float(i + 1) / float(n)
+			var d0 := Vector3(cos(a0), 0, sin(a0))
+			var d1 := Vector3(cos(a1), 0, sin(a1))
+			var slope := (r0 - r1) / (y1 - y0)
+			var n0 := (d0 + Vector3.UP * slope).normalized()
+			var n1 := (d1 + Vector3.UP * slope).normalized()
+			_tri_smooth(st, [d0 * r0 + Vector3.UP * y0, d1 * r0 + Vector3.UP * y0, d1 * r1 + Vector3.UP * y1], [n0, n1, n1])
+			_tri_smooth(st, [d0 * r0 + Vector3.UP * y0, d1 * r1 + Vector3.UP * y1, d0 * r1 + Vector3.UP * y1], [n0, n1, n0])
+	# The lid, set a little into the rim.
+	st.set_color(Color(0.5, 0.5, 0.5, 0.0))
+	var top := 1.0
+	for i in n:
+		var a0 := TAU * float(i) / float(n)
+		var a1 := TAU * float(i + 1) / float(n)
+		var c := Vector3.UP * top
+		_tri_smooth(st, [c, c + Vector3(cos(a0), 0, sin(a0)) * 0.31, c + Vector3(cos(a1), 0, sin(a1)) * 0.31], [Vector3.UP, Vector3.UP, Vector3.UP])
+	for i in n:
+		var a0 := TAU * float(i) / float(n)
+		var a1 := TAU * float(i + 1) / float(n)
+		var d0 := Vector3(cos(a0), 0, sin(a0))
+		var d1 := Vector3(cos(a1), 0, sin(a1))
+		_tri_smooth(st, [d0 * 0.31 + Vector3.UP * top, d1 * 0.31 + Vector3.UP * top, d1 * 0.32 + Vector3.UP * 1.04], [-d0, -d1, -d1])
+		_tri_smooth(st, [d0 * 0.31 + Vector3.UP * top, d1 * 0.32 + Vector3.UP * 1.04, d0 * 0.32 + Vector3.UP * 1.04], [-d0, -d1, -d0])
+	st.commit(mesh)
+	mesh.surface_set_material(0, Wood.material(true))
+	# Hoops.
+	var sh := SurfaceTool.new()
+	sh.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for hy: float in [0.12, 0.52, 0.92]:
+		var rr := 0.01
+		for k in prof.size() - 1:
+			if hy >= float(prof[k][0]) and hy <= float(prof[k + 1][0]):
+				rr += lerpf(float(prof[k][1]), float(prof[k + 1][1]), (hy - float(prof[k][0])) / (float(prof[k + 1][0]) - float(prof[k][0])))
+		for i in n:
+			var a0 := TAU * float(i) / float(n)
+			var a1 := TAU * float(i + 1) / float(n)
+			var d0 := Vector3(cos(a0), 0, sin(a0))
+			var d1 := Vector3(cos(a1), 0, sin(a1))
+			var lo := Vector3.UP * (hy - 0.035)
+			var hi := Vector3.UP * (hy + 0.035)
+			_tri_smooth(sh, [d0 * rr + lo, d1 * rr + lo, d1 * rr + hi], [d0, d1, d1])
+			_tri_smooth(sh, [d0 * rr + lo, d1 * rr + hi, d0 * rr + hi], [d0, d1, d0])
+	sh.commit(mesh)
+	var iron := StandardMaterial3D.new()
+	iron.albedo_color = Color(0.17, 0.17, 0.18)
+	iron.metallic = 0.6
+	iron.roughness = 0.45
+	mesh.surface_set_material(1, iron)
+	return mesh
+
+
+## A triangle with a normal per corner, wound to face its normals.
+func _tri_smooth(st: SurfaceTool, p: Array, nrm: Array) -> void:
+	var face: Vector3 = (nrm[0] as Vector3) + (nrm[1] as Vector3) + (nrm[2] as Vector3)
+	var order := [0, 1, 2]
+	if ((p[1] as Vector3) - (p[0] as Vector3)).cross((p[2] as Vector3) - (p[0] as Vector3)).dot(face) > 0.0:
+		order = [0, 2, 1]
+	for i: int in order:
+		st.set_normal(nrm[i])
+		st.add_vertex(p[i])
 
 
 func _place(key: String, bottom_center: Vector3, yaw: float, _align := true, pivot := Vector3.INF) -> void:
@@ -1363,6 +1597,17 @@ func _proc_material(key: String) -> Material:
 		m.roughness = 0.95
 		m.cull_mode = BaseMaterial3D.CULL_DISABLED
 		return m
+	if key == "lamp":
+		m.albedo_color = Color(1.0, 0.84, 0.55)
+		m.emission_enabled = true
+		m.emission = Color(1.0, 0.72, 0.38)
+		m.emission_energy_multiplier = 2.4
+		return m
+	if key == "iron":
+		m.albedo_color = Color(0.15, 0.15, 0.16)
+		m.metallic = 0.6
+		m.roughness = 0.45
+		return m
 	if key == "water":
 		m.albedo_color = Color(0.22, 0.42, 0.5)
 		m.roughness = 0.05
@@ -1426,6 +1671,7 @@ func _commit_proc() -> void:
 
 func _commit_batches() -> void:
 	_commit_proc()
+	_commit_barrels()
 	_commit_gables()
 	for bkey in _batches:
 		var key: String = bkey.split("|")[0]
