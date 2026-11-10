@@ -113,11 +113,11 @@ for target in "${TARGETS[@]}"; do
 		linux)
 			export_one "Linux" "${ROOT}/build/linux/BlockRoyale.x86_64"
 			chmod +x "${ROOT}/build/linux/BlockRoyale.x86_64"
-			(cd "${ROOT}/build" && rm -f BlockRoyale-linux.zip && zip -q -r BlockRoyale-linux.zip linux 2>/dev/null) || true
+			(cd "${ROOT}/build" && rm -f BlockRoyale-linux.zip && zip -q -9 -r BlockRoyale-linux.zip linux 2>/dev/null) || true
 			;;
 		windows)
 			export_one "Windows Desktop" "${ROOT}/build/windows/BlockRoyale.exe"
-			(cd "${ROOT}/build" && rm -f BlockRoyale-windows.zip && zip -q -r BlockRoyale-windows.zip windows 2>/dev/null) || true
+			(cd "${ROOT}/build" && rm -f BlockRoyale-windows.zip && zip -q -9 -r BlockRoyale-windows.zip windows 2>/dev/null) || true
 			;;
 		*)
 			die "unknown target '${target}' (use linux or windows)"

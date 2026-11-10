@@ -29,6 +29,8 @@ const GEAR_TABLE := [
 	["extmag", "", 4.5], ["comp", "", 4.5], ["grenade", "", 7.0],
 ]
 const SETTINGS_PATH := "user://settings.cfg"
+## Start in fullscreen (F11 / Alt + Enter or Settings switch it).
+var fullscreen := true
 const HEAR_RANGE := 70.0
 const PING_RANGE := 160.0
 
@@ -177,6 +179,9 @@ func _ready() -> void:
 		music.set_volumes(a, b)
 		_save_settings())
 	hud.music_skip.connect(func(): music.skip())
+	hud.fullscreen_changed.connect(func(on):
+		fullscreen = on
+		_save_settings())
 	hud.graphics_changed.connect(func(q):
 		graphics_quality = q
 		_apply_graphics()
@@ -377,6 +382,7 @@ func _load_settings() -> void:
 		music_menu = float(cfg.get_value("audio", "music_menu", music_menu))
 		music_match = float(cfg.get_value("audio", "music_match", music_match))
 		graphics_quality = clampi(int(cfg.get_value("video", "quality", graphics_quality)), 0, 3)
+		fullscreen = bool(cfg.get_value("video", "fullscreen", true))
 	if not Weapons.DEFS.has(loadout_primary):
 		loadout_primary = "carbine"
 	if not Weapons.DEFS.has(loadout_secondary):
@@ -387,6 +393,15 @@ func _load_settings() -> void:
 	hud.scope_sens_slider.set_value_no_signal(scope_sens)
 	hud.set_music(music_menu, music_match)
 	hud.set_graphics(graphics_quality)
+	# Screenshots and tests keep the window they were given.
+	var scripted := false
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--"):
+			scripted = true
+	if scripted:
+		hud.fullscreen = fullscreen
+	else:
+		hud.set_fullscreen(fullscreen)
 	if music != null:
 		music.set_volumes(music_menu, music_match)
 	hud.set_loadout(loadout_primary, loadout_secondary, loadout_optic, loadout_enabled)
@@ -430,6 +445,7 @@ func _save_settings() -> void:
 	cfg.set_value("audio", "music_match", music_match)
 	cfg.set_value("video", "fov", fov)
 	cfg.set_value("video", "quality", graphics_quality)
+	cfg.set_value("video", "fullscreen", fullscreen)
 	cfg.set_value("match", "players", match_size)
 	cfg.set_value("loadout", "primary", loadout_primary)
 	cfg.set_value("loadout", "secondary", loadout_secondary)

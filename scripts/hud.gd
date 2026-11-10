@@ -5,6 +5,7 @@ signal play_pressed
 signal music_changed(menu_volume: float, match_volume: float)
 signal music_skip
 signal graphics_changed(quality: int)
+signal fullscreen_changed(on: bool)
 signal chat_sent(text: String)
 signal chat_closed
 signal map_clicked(world: Vector2, button: int)
@@ -105,6 +106,8 @@ var sens_slider: HSlider
 var music_menu_slider: HSlider
 var lbl_gfx: Label
 var gfx_button: Button
+var display_button: Button
+var fullscreen := true
 var gfx_quality := 2
 var music_match_slider: HSlider
 var lbl_music_menu: Label
@@ -863,19 +866,31 @@ func _build_pause() -> void:
 	pause_panel.add_child(bg)
 	_pause_bg = bg
 
-	var col := VBoxContainer.new()
-	col.set_anchors_preset(Control.PRESET_CENTER)
-	col.offset_left = -170
-	col.offset_right = 170
-	col.offset_top = -300
-	col.offset_bottom = 300
-	col.alignment = BoxContainer.ALIGNMENT_CENTER
-	col.add_theme_constant_override("separation", 8)
-	pause_panel.add_child(col)
-
+	# Two columns of settings with the buttons underneath, so it all fits
+	# on a 720p screen.
+	var outer := VBoxContainer.new()
+	outer.set_anchors_preset(Control.PRESET_CENTER)
+	outer.offset_left = -320
+	outer.offset_right = 320
+	outer.offset_top = -270
+	outer.offset_bottom = 270
+	outer.alignment = BoxContainer.ALIGNMENT_CENTER
+	outer.add_theme_constant_override("separation", 10)
+	pause_panel.add_child(outer)
 	_pause_title = _lv("PAUSED", 44, WHITE)
-	col.add_child(_pause_title)
-	col.add_child(_spacer(8))
+	outer.add_child(_pause_title)
+	outer.add_child(_spacer(4))
+	var cols := HBoxContainer.new()
+	cols.add_theme_constant_override("separation", 40)
+	outer.add_child(cols)
+	var col := VBoxContainer.new()
+	col.custom_minimum_size = Vector2(300, 0)
+	col.add_theme_constant_override("separation", 8)
+	cols.add_child(col)
+	var col2 := VBoxContainer.new()
+	col2.custom_minimum_size = Vector2(300, 0)
+	col2.add_theme_constant_override("separation", 8)
+	cols.add_child(col2)
 
 	lbl_sens = _lv("MOUSE SENSITIVITY", 12, MUTED)
 	col.add_child(lbl_sens)
@@ -915,7 +930,7 @@ func _build_pause() -> void:
 	col.add_child(vol_slider)
 
 	lbl_gfx = _lv("GRAPHICS", 12, MUTED)
-	col.add_child(lbl_gfx)
+	col2.add_child(lbl_gfx)
 	gfx_button = _button("HIGH", false)
 	gfx_button.custom_minimum_size = Vector2(300, 36)
 	gfx_button.add_theme_font_size_override("font_size", 14)
@@ -924,7 +939,17 @@ func _build_pause() -> void:
 		gfx_quality = (gfx_quality + 1) % 4
 		_settings_labels()
 		graphics_changed.emit(gfx_quality))
-	col.add_child(gfx_button)
+	col2.add_child(gfx_button)
+
+	col2.add_child(_lv("DISPLAY   ·   F11 OR ALT + ENTER", 12, MUTED))
+	display_button = _button("FULLSCREEN", false)
+	display_button.custom_minimum_size = Vector2(300, 36)
+	display_button.text = "◀   FULLSCREEN   ▶"
+	display_button.add_theme_font_size_override("font_size", 14)
+	display_button.pressed.connect(func():
+		sfx_click()
+		set_fullscreen(not fullscreen, true))
+	col2.add_child(display_button)
 
 	lbl_music_menu = _lv("MENU MUSIC", 12, MUTED)
 	col.add_child(lbl_music_menu)
@@ -957,7 +982,7 @@ func _build_pause() -> void:
 	col.add_child(mrow)
 
 	lbl_fov = _lv("FIELD OF VIEW", 12, MUTED)
-	col.add_child(lbl_fov)
+	col2.add_child(lbl_fov)
 	fov_slider = HSlider.new()
 	fov_slider.min_value = 70.0
 	fov_slider.max_value = 100.0
@@ -965,10 +990,10 @@ func _build_pause() -> void:
 	fov_slider.value = 82.0
 	fov_slider.custom_minimum_size = Vector2(300, 22)
 	fov_slider.value_changed.connect(func(_v): _settings_changed())
-	col.add_child(fov_slider)
+	col2.add_child(fov_slider)
 
 	lbl_size = _lv("MATCH SIZE", 12, MUTED)
-	col.add_child(lbl_size)
+	col2.add_child(lbl_size)
 	size_slider = HSlider.new()
 	size_slider.min_value = 10
 	size_slider.max_value = 100
@@ -976,20 +1001,25 @@ func _build_pause() -> void:
 	size_slider.value = 50
 	size_slider.custom_minimum_size = Vector2(300, 22)
 	size_slider.value_changed.connect(func(_v): _settings_changed())
-	col.add_child(size_slider)
-	col.add_child(_spacer(12))
-
+	col2.add_child(size_slider)
+	outer.add_child(_spacer(10))
+	var brow := HBoxContainer.new()
+	brow.add_theme_constant_override("separation", 10)
+	outer.add_child(brow)
 	var resume := _button("RESUME", true)
 	resume.pressed.connect(_on_resume_button)
-	col.add_child(resume)
+	resume.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	brow.add_child(resume)
 	_pause_resume = resume
 	var quit := _button("LEAVE MATCH", false)
 	quit.pressed.connect(func(): quit_pressed.emit())
-	col.add_child(quit)
+	quit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	brow.add_child(quit)
 	_pause_leave = quit
 	var exit := _button("QUIT GAME", false)
 	exit.pressed.connect(func(): get_tree().quit())
-	col.add_child(exit)
+	exit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	brow.add_child(exit)
 
 
 func _on_resume_button() -> void:
@@ -1037,6 +1067,20 @@ func now_playing(title: String) -> void:
 	tw.tween_property(_now_playing, "modulate:a", 1.0, 0.6)
 	tw.tween_interval(4.5)
 	tw.tween_property(_now_playing, "modulate:a", 0.0, 1.2)
+
+
+## Fullscreen or a window. `tell` saves the choice (the game listens).
+func set_fullscreen(on: bool, tell := false) -> void:
+	fullscreen = on
+	if display_button != null:
+		display_button.text = "◀   %s   ▶" % ("FULLSCREEN" if on else "WINDOWED")
+	if DisplayServer.get_name() != "headless":
+		if on:
+			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+		elif DisplayServer.window_get_mode() in [DisplayServer.WINDOW_MODE_FULLSCREEN, DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN]:
+			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_MAXIMIZED)
+	if tell:
+		fullscreen_changed.emit(on)
 
 
 func set_graphics(q: int) -> void:
@@ -1487,6 +1531,15 @@ func hide_end() -> void:
 
 
 # ------------------------------------------------------------------- input --
+func _input(event: InputEvent) -> void:
+	# F11 or Alt + Enter: fullscreen on and off, anywhere in the game.
+	if event is InputEventKey and event.pressed and not event.echo:
+		var k := event as InputEventKey
+		if k.keycode == KEY_F11 or (k.keycode == KEY_ENTER and k.alt_pressed):
+			set_fullscreen(not fullscreen, true)
+			get_viewport().set_input_as_handled()
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	# Esc backs out of the armory or menu settings.
 	if event.is_action_pressed("pause"):
