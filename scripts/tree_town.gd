@@ -197,8 +197,10 @@ func stair_mid_r(y: float) -> float:
 func _roots() -> void:
 	for i in 11:
 		var a := TAU * float(i) / 11.0 + rng.randf_range(-0.12, 0.12)
-		# Keep the foot of the stair clear.
-		if absf(wrapf(a - stair_a0, -PI, PI)) < 0.55:
+		# Keep the stair clear: its foot, and the first stretch where it is
+		# still lower than a root is tall.
+		var off := wrapf(a - stair_a0, -PI, PI)
+		if off > -0.6 and off < (stair_angle(9.5) - stair_a0) + 0.45:
 			continue
 		var dir := Vector3(cos(a), 0, sin(a))
 		var p0 := o + dir * 10.5 + Vector3.UP * 4.0
@@ -326,28 +328,40 @@ func _deck(idx: int) -> void:
 			var b0 := o + Vector3(cos(am) * (tr + 0.2), y - 6.0, sin(am) * (tr + 0.2))
 			var b1 := o + Vector3(cos(am) * (outer - 0.6), y - 0.45, sin(am) * (outer - 0.6))
 			lm.box_b(lm._frame(b1 - b0), (b0 + b1) * 0.5, Vector3(0.45, 0.45, b0.distance_to(b1)), "wood", false)
-	# Railing round the outer edge, open where a rope bridge leaves.
-	var bridges := bridge_angles() if idx == DECKS.size() - 1 else []
-	var rn := 96
-	for i in rn:
-		var a0 := TAU * float(i) / float(rn)
-		var a1 := TAU * float(i + 1) / float(rn)
-		var skip := false
+	# Railing round the outer edge, open where a rope bridge leaves. It is
+	# laid out arc by arc between the bridges, so every opening is exactly
+	# the bridge's width wherever the stair happens to arrive.
+	var bridges: Array = bridge_angles() if idx == DECKS.size() - 1 else []
+	var half := 1.13 / outer
+	var arcs: Array = []
+	if bridges.is_empty():
+		arcs.append([0.0, TAU])
+	else:
+		var cuts: Array = []
 		for ba in bridges:
-			# Open just the bridge's own width.
-			if absf(wrapf((a0 + a1) * 0.5 - float(ba), -PI, PI)) < 1.0 / outer:
-				skip = true
-		if skip:
-			continue
-		var q0 := Vector3(cos(a0), 0, sin(a0)) * (outer - 0.12)
-		var q1 := Vector3(cos(a1), 0, sin(a1)) * (outer - 0.12)
-		var m := o + (q0 + q1) * 0.5 + Vector3(0, y + 0.55, 0)
-		var ryaw := atan2(q1.x - q0.x, q1.z - q0.z)
-		lm.box(m, Vector3(0.14, 1.1, q0.distance_to(q1) + 0.05), ryaw, "wood")
-		# A cap rail along the top and a post every few boards.
-		lm.box(m + Vector3(0, 0.59, 0), Vector3(0.26, 0.08, q0.distance_to(q1) + 0.07), ryaw, "wood_dark", false)
-		if i % 4 == 0:
-			lm.box(o + q0 + Vector3(0, y + 0.62, 0), Vector3(0.24, 1.34, 0.24), -a0, "wood_dark", false)
+			cuts.append(wrapf(float(ba), 0.0, TAU))
+		cuts.sort()
+		for k in cuts.size():
+			var from := float(cuts[k]) + half
+			var to := float(cuts[(k + 1) % cuts.size()]) - half
+			if to < from:
+				to += TAU
+			arcs.append([from, to])
+	for arc in arcs:
+		var span := float(arc[1]) - float(arc[0])
+		var rn := maxi(1, int(round(span / (TAU / 96.0))))
+		for i in rn:
+			var a0 := float(arc[0]) + span * float(i) / float(rn)
+			var a1 := float(arc[0]) + span * float(i + 1) / float(rn)
+			var q0 := Vector3(cos(a0), 0, sin(a0)) * (outer - 0.12)
+			var q1 := Vector3(cos(a1), 0, sin(a1)) * (outer - 0.12)
+			var m := o + (q0 + q1) * 0.5 + Vector3(0, y + 0.55, 0)
+			var ryaw := atan2(q1.x - q0.x, q1.z - q0.z)
+			lm.box(m, Vector3(0.14, 1.1, q0.distance_to(q1) + 0.05), ryaw, "wood")
+			# A cap rail along the top and a post every few boards.
+			lm.box(m + Vector3(0, 0.59, 0), Vector3(0.26, 0.08, q0.distance_to(q1) + 0.07), ryaw, "wood_dark", false)
+			if i % 4 == 0:
+				lm.box(o + q0 + Vector3(0, y + 0.62, 0), Vector3(0.24, 1.34, 0.24), -a0, "wood_dark", false)
 	# Huts round the outer part, doors facing the trunk, none over the stair.
 	var hut_r := (lane + outer) * 0.5 + 0.2
 	for k in huts:
@@ -481,13 +495,16 @@ func _lookouts() -> void:
 		_limb(b0, b1, 1.6, 1.1, true)
 		# Round platform.
 		lm.cyl(center - Vector3.UP * 0.5, pr, pr, 0.5, "wood", 16, true)
-		for i in 32:
-			var q0 := Vector3(cos(TAU * i / 32.0), 0, sin(TAU * i / 32.0)) * (pr - 0.1)
-			var q1 := Vector3(cos(TAU * (i + 1) / 32.0), 0, sin(TAU * (i + 1) / 32.0)) * (pr - 0.1)
+		# Railing all the way round except the bridge's own width, measured
+		# from the bridge so the opening is always centred on it.
+		var back := a + PI
+		var gap := 1.13 / (pr - 0.1)
+		for i in 30:
+			var r0a := back + gap + (TAU - gap * 2.0) * float(i) / 30.0
+			var r1a := back + gap + (TAU - gap * 2.0) * float(i + 1) / 30.0
+			var q0 := Vector3(cos(r0a), 0, sin(r0a)) * (pr - 0.1)
+			var q1 := Vector3(cos(r1a), 0, sin(r1a)) * (pr - 0.1)
 			var mid := (q0 + q1) * 0.5
-			# Gap facing the bridge, as wide as the bridge.
-			if acos(clampf(mid.normalized().dot(-dir), -1.0, 1.0)) < 1.0 / pr:
-				continue
 			lm.box(center + mid + Vector3.UP * 0.55, Vector3(0.14, 1.1, q0.distance_to(q1) + 0.05), atan2(q1.x - q0.x, q1.z - q0.z), "wood")
 			lm.box(center + mid + Vector3.UP * 1.14, Vector3(0.26, 0.08, q0.distance_to(q1) + 0.07), atan2(q1.x - q0.x, q1.z - q0.z), "wood_dark", false)
 		# A little roof on posts: shade, and something to see from far off.

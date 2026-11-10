@@ -6484,6 +6484,13 @@ func _run_fantasy_test() -> void:
 				player.test_input = Vector2(0, -1)
 				await get_tree().physics_frame
 				t2 += get_physics_process_delta_time()
+				if OS.has_environment("DBG_SPIRE") and int(t2 * 60.0) % 180 == 0:
+					var hs2: Array = []
+					for k in player.get_slide_collision_count():
+						var col2 := player.get_slide_collision(k)
+						hs2.append("n=%s at %s" % [col2.get_normal().snapped(Vector3.ONE * 0.1), (col2.get_position() - tt.o).snapped(Vector3.ONE * 0.1)])
+					var rp := pp - tt.o
+					print("[dbg] bridge t=%.0f wi=%d r=%.1f ang=%.2f (ba %.2f) y=%.1f hits=%s" % [t2, wi, Vector2(rp.x, rp.z).length(), atan2(rp.z, rp.x), wrapf(ba, -PI, PI), rp.y, str(hs2)])
 			print("[fantasy] treetown bridge: reached lookout=%s in %.0fs (y %.1f)" % [made, t2, player.global_position.y - tt.o.y])
 			all_ok = all_ok and made
 		player.test_input = Vector2.INF

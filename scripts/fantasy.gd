@@ -346,15 +346,18 @@ func _build_spire(c: Vector2) -> void:
 	var rail_n := 28
 	for i in rail_n:
 		var a0 := TAU * float(i) / float(rail_n)
-		if absf(wrapf(a0 - end_a, -PI, PI)) < 0.45:
-			continue
 		var a1 := TAU * float(i + 1) / float(rail_n)
+		# The gap is centred on where the stair arrives, whatever way it faces.
+		if absf(wrapf((a0 + a1) * 0.5 - (end_a + 0.1), -PI, PI)) < 0.5:
+			continue
 		var q0 := Vector2(c.x + cos(a0) * 4.55, c.y + sin(a0) * 4.55)
 		var q1 := Vector2(c.x + cos(a1) * 4.55, c.y + sin(a1) * 4.55)
 		var m := (q0 + q1) * 0.5
 		lm.box(Vector3(m.x, gy + deck + 0.5, m.y), Vector3(0.3, 1.0, q0.distance_to(q1) + 0.08), atan2(q1.x - q0.x, q1.y - q0.y), "trim")
 	for i in 6:
-		var a := TAU * float(i) / 6.0 + 0.3
+		# Columns either side of the stair head, never in front of it (on some
+		# islands one stood right where you step onto the deck).
+		var a := end_a + 0.1 + PI / 6.0 + TAU * float(i) / 6.0
 		lm.cyl(o + Vector3(cos(a) * 3.85, deck, sin(a) * 3.85), 0.28, 0.24, 4.2, "trim", 10)
 	lm.cyl(o + Vector3(0, deck + 4.2, 0), 4.5, 4.3, 0.5, "trim", 24)
 	lm.cyl(o + Vector3(0, deck + 4.7, 0), 5.2, 0.0, 9.0, "roof_arcane", 24, false)

@@ -277,6 +277,7 @@ func _carve_landmarks() -> void:
 	# --- Landmark sites.
 	castle_c = _settle(Vector2(-150.0, 330.0), 34.0)
 	castle_h = _raise_mound(castle_c, 34.0, 26.0, 6.0)
+	_flats.append([castle_c, 42.0])
 	reserved.append([castle_c, 85.0])
 	henge_c = _settle(Vector2(-830.0, 170.0), 18.0)
 	henge_h = flatten_circle(henge_c.x, henge_c.y, 18.0, 16.0)
@@ -695,6 +696,10 @@ func random_land_point(rng: RandomNumberGenerator, min_h := 2.0, max_slope := 0.
 
 
 ## Soft circular terrace used for villages and POIs.
+## Every flat made so far: [centre, radius]. Later ones leave these alone.
+var _flats: Array = []
+
+
 func flatten_circle(cx: float, cz: float, radius: float, shoulder: float = 22.0, target: float = NAN) -> float:
 	var goal := target
 	if is_nan(goal):
@@ -720,6 +725,13 @@ func flatten_circle(cx: float, cz: float, radius: float, shoulder: float = 22.0,
 			goal = dry
 
 	var outer := radius + shoulder
+	# Ground levelled earlier stays level: the slope of a later terrace never
+	# cuts into (or piles up on) a landmark's or a town's own flat.
+	var here := Vector2(cx, cz)
+	var guarded: Array = []
+	for pd in _flats:
+		if here.distance_to(pd[0]) < outer + float(pd[1]):
+			guarded.append(pd)
 	var x0 := int(floor((cx - outer + HALF) / STEP))
 	var x1 := int(ceil((cx + outer + HALF) / STEP))
 	var z0 := int(floor((cz - outer + HALF) / STEP))
@@ -735,10 +747,18 @@ func flatten_circle(cx: float, cz: float, radius: float, shoulder: float = 22.0,
 			var d := Vector2(wx - cx, wz - cz).length()
 			if d > outer:
 				continue
+			var held := false
+			for pd in guarded:
+				if Vector2(wx, wz).distance_to(pd[0]) < float(pd[1]):
+					held = true
+					break
+			if held:
+				continue
 			var t := 1.0 - smoothstep(radius, outer, d)
 			t = t * t * (3.0 - 2.0 * t)
 			var idx := iz * RES + ix
 			heights[idx] = lerpf(heights[idx], goal, t)
+	_flats.append([here, radius + STEP])
 	return goal
 
 

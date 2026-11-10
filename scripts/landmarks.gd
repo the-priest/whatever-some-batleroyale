@@ -1165,7 +1165,9 @@ func _build_oak() -> void:
 	# Root buttresses spreading into the ground.
 	for i in 7:
 		var a := TAU * float(i) / 7.0 + rng.randf() * 0.3
-		if absf(wrapf(a - (start_a - 0.25), -PI, PI)) < 0.75:
+		# Not across the stair's foot, nor under its first low steps.
+		var off := wrapf(a - start_a, -PI, PI)
+		if off > -1.0 and off < 1.6:
 			continue
 		var dir := Vector3(cos(a), 0, sin(a))
 		var p0 := o + dir * 2.2 + Vector3.UP * 1.3
