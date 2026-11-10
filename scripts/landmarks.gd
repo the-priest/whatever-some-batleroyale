@@ -83,11 +83,11 @@ func _make_materials() -> void:
 	_mats["iron"] = iron
 	for key in ["banner_red", "banner_blue"]:
 		var b := StandardMaterial3D.new()
-		b.albedo_color = Color(0.62, 0.12, 0.12) if key == "banner_red" else Color(0.16, 0.24, 0.52)
+		b.albedo_color = Color(0.50, 0.07, 0.09) if key == "banner_red" else Color(0.13, 0.20, 0.46)
 		b.roughness = 0.9
 		b.cull_mode = BaseMaterial3D.CULL_DISABLED
 		b.backlight_enabled = true
-		b.backlight = b.albedo_color.lightened(0.2)
+		b.backlight = b.albedo_color.lightened(0.1)
 		_mats[key] = b
 
 
@@ -349,11 +349,61 @@ func wall(o: Vector3, yaw: float, a: Vector2, b: Vector2, y0: float, h: float, t
 		box(world, Vector3(thick, hi - lo, s1 - s0), wyaw, mat)
 
 
+## Dressed stone (or timber) round one opening of a wall() built with the
+## same arguments: jambs, a lintel, and a sill under windows.
+func opening_frame(o: Vector3, yaw: float, a: Vector2, b: Vector2, y0: float, thick: float, op: Array, mat := "trim") -> void:
+	var bs := Basis(Vector3.UP, yaw)
+	var len := a.distance_to(b)
+	var dir := (b - a) / maxf(0.001, len)
+	var wyaw := yaw + atan2(dir.x, dir.y)
+	var oc := float(op[0])
+	var ow := float(op[1])
+	var sill := float(op[2])
+	var top := float(op[3])
+	var at := func(along: float, y: float) -> Vector3:
+		var q := a + dir * along
+		return o + bs * Vector3(q.x, y0 + y, q.y)
+	var deep := thick + 0.22
+	for sd: float in [-1.0, 1.0]:
+		box(at.call(oc + sd * (ow * 0.5 + 0.09), (sill + top) * 0.5), Vector3(deep, top - sill + 0.36, 0.2), wyaw, mat, false)
+	box(at.call(oc, top + 0.11), Vector3(deep + 0.06, 0.24, ow + 0.6), wyaw, mat, false)
+	if sill > 0.0:
+		box(at.call(oc, sill - 0.09), Vector3(deep + 0.12, 0.18, ow + 0.5), wyaw, mat, false)
+
+
+## A coopered barrel standing on `base`.
+func barrel(base: Vector3, r := 0.42, h := 1.05) -> void:
+	cyl(base, r * 0.9, r, h * 0.5, "wood_dark", 10, false)
+	cyl(base + Vector3(0, h * 0.5, 0), r, r * 0.9, h * 0.5, "wood_dark", 10, false)
+	for hy: float in [0.16, 0.5, 0.84]:
+		cyl(base + Vector3(0, h * hy - 0.03, 0), r * 1.03, r * 1.03, 0.06, "iron", 10, false, false)
+	var cs := CollisionShape3D.new()
+	var shape := CylinderShape3D.new()
+	shape.radius = r
+	shape.height = h
+	cs.shape = shape
+	cs.position = base + Vector3(0, h * 0.5, 0)
+	_body.add_child(cs)
+	_stat.shapes += 1
+
+
 func banner(top: Vector3, out: Vector3, width: float, length: float, mat := "banner_red") -> void:
 	var yaw := atan2(out.x, out.z)
-	var p := top + out * 0.12 - Vector3(0, length * 0.5, 0)
-	box(p, Vector3(width, length, 0.06), yaw, mat, false)
+	var b := Basis(Vector3.UP, yaw)
+	var face := top + out * 0.12
+	# The cloth, cut to a swallowtail, with a gold band, hem and device.
+	var body := length * 0.84
+	box(face - Vector3(0, body * 0.5, 0), Vector3(width, body, 0.06), yaw, mat, false)
+	for sx: float in [-1.0, 1.0]:
+		box(face + b * Vector3(sx * width * 0.31, 0, 0) - Vector3(0, body + (length - body) * 0.5, 0), Vector3(width * 0.38, length - body, 0.06), yaw, mat, false)
+	box(face - Vector3(0, 0.42, 0), Vector3(width, 0.16, 0.075), yaw, "gold", false)
+	box(face - Vector3(0, body - 0.16, 0), Vector3(width, 0.09, 0.075), yaw, "gold", false)
+	var dev := width * 0.44
+	box_b(b * Basis(Vector3.BACK, PI * 0.25), face - Vector3(0, body * 0.46, 0), Vector3(dev, dev, 0.075), "gold", false)
+	box_b(b * Basis(Vector3.BACK, PI * 0.25), face - Vector3(0, body * 0.46, 0), Vector3(dev * 0.52, dev * 0.52, 0.09), mat, false)
 	box(top + out * 0.2 + Vector3(0, 0.1, 0), Vector3(width + 0.4, 0.12, 0.12), yaw, "iron", false)
+	for sx: float in [-1.0, 1.0]:
+		box(top + out * 0.2 + Vector3(0, 0.1, 0) + b * Vector3(sx * (width * 0.5 + 0.2), 0, 0), Vector3(0.16, 0.2, 0.2), yaw, "gold", false)
 
 
 func lantern(base: Vector3, post_h := 2.2) -> void:
@@ -711,6 +761,49 @@ func _build_castle() -> void:
 		cs2.shape = sh2
 		cs2.transform = Transform3D(bs, rp + Vector3(0, 0.8, 0))
 		_body.add_child(cs2)
+	# A lean-to stable against the west wall: posts, a plank roof, hay.
+	var sx0 := -half + wt * 0.5
+	for k in 3:
+		box(L.call(sx0 + 3.6, 1.4, -20.0 + float(k) * 4.0), Vector3(0.24, 2.8, 0.24), yaw, "wood_dark")
+	box(L.call(sx0 + 3.6, 2.86, -16.0), Vector3(0.26, 0.24, 8.6), yaw, "wood_dark", false)
+	box(L.call(sx0 + 0.16, 3.5, -16.0), Vector3(0.24, 0.24, 8.6), yaw, "wood_dark", false)
+	var r0: Vector3 = L.call(sx0 + 0.05, 3.72, -16.0)
+	var r1: Vector3 = L.call(sx0 + 4.2, 2.96, -16.0)
+	var rx := (r1 - r0).normalized()
+	box_b(Basis(rx, rx.cross(bs.z).normalized() * -1.0, bs.z), (r0 + r1) * 0.5, Vector3(r0.distance_to(r1), 0.1, 9.0), "wood")
+	for k in 5:
+		var rz := -20.0 + float(k) * 2.0
+		var q0: Vector3 = L.call(sx0 + 0.1, 3.6, rz)
+		var q1: Vector3 = L.call(sx0 + 4.1, 2.86, rz)
+		box_b(Basis(rx, rx.cross(bs.z).normalized() * -1.0, bs.z), (q0 + q1) * 0.5, Vector3(q0.distance_to(q1), 0.16, 0.14), "wood_dark", false)
+	for hb: Vector3 in [Vector3(sx0 + 1.0, 0.45, -19.2), Vector3(sx0 + 1.0, 0.45, -17.9), Vector3(sx0 + 1.05, 1.25, -18.5), Vector3(sx0 + 2.3, 0.45, -19.3)]:
+		box(L.call(hb.x, hb.y + 0.1, hb.z), Vector3(1.1, 0.8, 1.2), yaw + hb.z * 0.07, "straw")
+	box(L.call(sx0 + 1.2, 0.42, -13.4), Vector3(0.7, 0.64, 2.2), yaw, "wood")
+	box(L.call(sx0 + 1.2, 0.71, -13.4), Vector3(0.5, 0.08, 2.0), yaw, "iron", false)
+	# Barrels by the gate, the keep and the stair.
+	for bp: Vector3 in [Vector3(6.6, 0.1, 19.0), Vector3(7.5, 0.1, 19.3), Vector3(7.0, 0.1, 18.2), Vector3(-8.6, 0.1, 2.6), Vector3(-9.5, 0.1, 3.0), Vector3(16.0, 0.1, -17.5), Vector3(16.9, 0.1, -17.0), Vector3(-15.6, 0.1, 15.6)]:
+		barrel(L.call(bp.x, bp.y, bp.z))
+	# The quartermaster's stall: a striped awning over a trestle table.
+	var stall: Vector3 = L.call(-9.0, 0.1, -3.4)
+	for px: float in [-1.5, 1.5]:
+		for pz: float in [-0.9, 0.9]:
+			box(stall + bs * Vector3(px, 1.25 if pz > 0.0 else 1.05, pz), Vector3(0.12, 2.5 if pz > 0.0 else 2.1, 0.12), yaw, "wood_dark", false)
+	var a0: Vector3 = stall + bs * Vector3(0, 2.52, 1.1)
+	var a1: Vector3 = stall + bs * Vector3(0, 2.08, -1.15)
+	var az := (a1 - a0).normalized()
+	for k in 6:
+		var ax := -1.5 + float(k) * 0.6
+		box_b(Basis(bs.x, bs.x.cross(az).normalized() * -1.0, az), (a0 + a1) * 0.5 + bs.x * ax + Vector3(0, 0.02, 0), Vector3(0.6, 0.05, a0.distance_to(a1)), "banner_red" if k % 2 == 0 else "plaster", false)
+	box(stall + bs * Vector3(0, 0.9, 0), Vector3(3.0, 0.1, 1.2), yaw, "wood")
+	for px: float in [-1.3, 1.3]:
+		box(stall + bs * Vector3(px, 0.45, 0), Vector3(0.12, 0.9, 1.0), yaw, "wood_dark", false)
+	var cs3 := CollisionShape3D.new()
+	var sh3 := BoxShape3D.new()
+	sh3.size = Vector3(3.0, 0.95, 1.2)
+	cs3.shape = sh3
+	cs3.transform = Transform3D(bs, stall + Vector3(0, 0.475, 0))
+	_body.add_child(cs3)
+	_loot(stall + bs * Vector3(0.6, 1.0, 0), "gear")
 	# Courtyard: a well, carts and crates for cover.
 	var well: Vector3 = L.call(-11.0, 0, 9.0)
 	cyl(well, 1.6, 1.6, 1.0, "stone", 12)
@@ -750,10 +843,41 @@ func _keep(o: Vector3, yaw: float) -> void:
 		var front: Array = [win.call(3.5), win.call(10.5)]
 		if lvl == 0:
 			front = [[7.0, 2.4, 0.0, 3.3]]
-		wall(o, yaw, Vector2(-hf, hf), Vector2(hf, hf), y0, fh, wt, "stone", front)
-		wall(o, yaw, Vector2(hf, hf), Vector2(hf, -hf), y0, fh, wt, "stone", [win.call(7.0)])
-		wall(o, yaw, Vector2(hf, -hf), Vector2(-hf, -hf), y0, fh, wt, "stone", [win.call(4.0), win.call(10.0)])
-		wall(o, yaw, Vector2(-hf, -hf), Vector2(-hf, hf), y0, fh, wt, "stone", [win.call(7.0)])
+		var faces: Array = [
+			[Vector2(-hf, hf), Vector2(hf, hf), front],
+			[Vector2(hf, hf), Vector2(hf, -hf), [win.call(7.0)]],
+			[Vector2(hf, -hf), Vector2(-hf, -hf), [win.call(4.0), win.call(10.0)]],
+			[Vector2(-hf, -hf), Vector2(-hf, hf), [win.call(7.0)]],
+		]
+		for f in faces:
+			wall(o, yaw, f[0], f[1], y0, fh, wt, "stone", f[2])
+			# Every window and the door get dressed stone round them.
+			for op in f[2]:
+				opening_frame(o, yaw, f[0], f[1], y0, wt, op, "trim")
+	# Dressed corners, a string course between the floors and a corbel
+	# table under the battlements.
+	for sx: float in [-1.0, 1.0]:
+		for sz: float in [-1.0, 1.0]:
+			box(L.call(sx * hf, fh, sz * hf), Vector3(wt + 0.36, fh * 2.0, wt + 0.36), yaw, "trim", false)
+	for cy: float in [fh, fh * 2.0 - 0.2]:
+		for sz: float in [-1.0, 1.0]:
+			box(L.call(0, cy, sz * hf), Vector3(hf * 2.0 + wt + 0.5, 0.34, wt + 0.3), yaw, "trim", false)
+			box(L.call(sz * hf, cy, 0), Vector3(wt + 0.3, 0.34, hf * 2.0 + wt + 0.5), yaw, "trim", false)
+	for k in 12:
+		for sz: float in [-1.0, 1.0]:
+			var cx := -hf + 0.9 + float(k) * (hf * 2.0 - 1.8) / 11.0
+			box(L.call(cx, fh * 2.0 - 0.55, sz * (hf + wt * 0.5 + 0.12)), Vector3(0.34, 0.4, 0.3), yaw, "trim", false)
+			box(L.call(sz * (hf + wt * 0.5 + 0.12), fh * 2.0 - 0.55, cx), Vector3(0.3, 0.4, 0.34), yaw, "trim", false)
+	# The great door: two iron-bound leaves standing open into the hall.
+	for sx: float in [-1.0, 1.0]:
+		var leaf: Vector3 = L.call(sx * 1.28, 1.7, hf - wt * 0.5 - 0.68)
+		box(leaf, Vector3(0.14, 3.2, 1.24), yaw, "wood_dark")
+		for by: float in [-1.0, 0.0, 1.0]:
+			box(leaf + Vector3(0, by * 1.15, 0), Vector3(0.18, 0.12, 1.26), yaw, "iron", false)
+		# Torch beside the door outside.
+		var tp: Vector3 = L.call(sx * 2.3, 2.5, hf + wt * 0.5 + 0.14)
+		box(tp, Vector3(0.12, 0.5, 0.12), yaw, "iron", false)
+		box(tp + Vector3(0, 0.38, 0), Vector3(0.22, 0.26, 0.22), yaw, "lamp", false)
 	# Floors with stairwell holes (see the stair layout below).
 	var inner := hf - wt * 0.5
 	var slab := func(x0: float, x1: float, z0: float, z1: float, y: float, mat: String) -> void:

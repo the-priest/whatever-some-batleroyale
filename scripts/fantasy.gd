@@ -565,7 +565,8 @@ func _build_grove(c: Vector2) -> void:
 		var glow := rng.randf() < 0.45
 		var hgt := rng.randf_range(0.6, 3.2) if not glow else rng.randf_range(0.4, 1.4)
 		var cr := hgt * rng.randf_range(0.45, 0.7) + 0.3
-		lm.cyl(p, cr * 0.22, cr * 0.18, hgt, "stem", 10, hgt > 1.5)
+		# (Always solid: its cap is, and a cap needs something under it.)
+		lm.cyl(p, cr * 0.22, cr * 0.18, hgt, "stem", 10, not glow)
 		if glow:
 			lathe(p + Vector3(0, hgt, 0), [[cr, 0.0], [cr * 0.8, cr * 0.35], [0.0, cr * 0.5]], 12, "glowcap", false)
 		else:
