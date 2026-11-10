@@ -108,16 +108,28 @@ export_one() {
 	[ -f "${out}" ] || die "export of ${preset} failed"
 }
 
+# A zip with one clearly named folder: the game and a read-me.
+package() {
+	local plat="$1" name="$2" exe="$3"
+	local stage="${ROOT}/build/.stage"
+	rm -rf "${stage}" && mkdir -p "${stage}/${name}"
+	cp "${ROOT}/build/${plat}/${exe}" "${stage}/${name}/"
+	cp "${ROOT}/tools/README.txt" "${stage}/${name}/README.txt"
+	chmod +x "${stage}/${name}/${exe}"
+	(cd "${stage}" && rm -f "${ROOT}/build/${name}.zip" && zip -q -9 -r "${ROOT}/build/${name}.zip" "${name}")
+	rm -rf "${stage}"
+}
+
 for target in "${TARGETS[@]}"; do
 	case "${target}" in
 		linux)
 			export_one "Linux" "${ROOT}/build/linux/BlockRoyale.x86_64"
 			chmod +x "${ROOT}/build/linux/BlockRoyale.x86_64"
-			(cd "${ROOT}/build" && rm -f BlockRoyale-linux.zip && zip -q -9 -r BlockRoyale-linux.zip linux 2>/dev/null) || true
+			package "linux" "BlockRoyale-Linux" "BlockRoyale.x86_64"
 			;;
 		windows)
 			export_one "Windows Desktop" "${ROOT}/build/windows/BlockRoyale.exe"
-			(cd "${ROOT}/build" && rm -f BlockRoyale-windows.zip && zip -q -9 -r BlockRoyale-windows.zip windows 2>/dev/null) || true
+			package "windows" "BlockRoyale-Windows" "BlockRoyale.exe"
 			;;
 		*)
 			die "unknown target '${target}' (use linux or windows)"
