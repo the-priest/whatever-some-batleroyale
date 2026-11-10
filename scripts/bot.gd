@@ -786,6 +786,11 @@ func _combat(delta: float, sees: bool) -> Array:
 				if _tactic_t <= 0.0 and heal_timer <= 0.0 and _reload_t <= 0.0:
 					if _hidden_t > 7.0 and _last_seen_t > 7.0:
 						_set_tactic("push" if (aggression > 0.55 or _hit_them_t < 8.0) else "flank", 0.0)
+					elif _engage_t > 20.0 and _hurt_t > 9.0 and _hit_them_t > 9.0 and hp > 45.0:
+						# Trading peeks and nobody is getting hurt: stop waiting
+						# for them to make a mistake and go round.
+						_engage_t = 6.0
+						_set_tactic("flank" if aggression < 0.6 else "push", 0.0)
 					else:
 						_set_tactic("peek", randf_range(1.2, 2.6))
 						fire_timer = maxf(fire_timer, reaction * 0.5)
