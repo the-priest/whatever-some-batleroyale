@@ -2227,8 +2227,17 @@ func _build_ruin(c: Vector2, pad: float) -> void:
 			var pos: Vector3 = origin + b * local
 			var roll := rng.randf()
 			if roll < 0.18:
+				# A doorway still standing: stone jambs and a lintel round the
+				# old timber frame, not a bare frame alone in the grass.
+				var ab := Basis(Vector3.UP, yaw + wall_yaw)
 				_place("Wall_Arch", pos, yaw + wall_yaw)
-				_add_wall_for("Wall_Arch", pos, yaw + wall_yaw)
+				for sx: float in [-1.0, 1.0]:
+					var jp := pos + ab * Vector3(sx * 0.82, WALL_HEIGHT * 0.5, -0.12)
+					_proc_box(Transform3D(ab.scaled_local(Vector3(0.36, WALL_HEIGHT, 0.42)), jp), "stone")
+					_add_box_collider(jp, Vector3(0.36, WALL_HEIGHT, 0.42), yaw + wall_yaw)
+				var lp := pos + ab * Vector3(0, WALL_HEIGHT - 0.25, -0.12)
+				_proc_box(Transform3D(ab.scaled_local(Vector3(2.0, 0.5, 0.42)), lp), "stone")
+				_add_box_collider(lp, Vector3(2.0, 0.5, 0.42), yaw + wall_yaw)
 			elif roll < 0.38:
 				_place("Wall_UnevenBrick_Window_Wide_Round", pos, yaw + wall_yaw)
 				_add_wall_for("Wall_UnevenBrick_Window_Wide_Round", pos, yaw + wall_yaw)

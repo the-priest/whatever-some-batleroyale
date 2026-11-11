@@ -2902,6 +2902,20 @@ func _run_shot() -> void:
 		var tc: Vector2 = world.villages.towers[0].center
 		spot = Vector3(tc.x + 14.0, 0.0, tc.y + 10.0)
 		ang = atan2(14.0, 10.0)
+	for a in OS.get_cmdline_user_args():
+		# --ruin=N: the Nth ruin, from a few metres out.
+		if a.begins_with("--ruin="):
+			var k := 0
+			for pp in world.villages.poi_pads:
+				if str(pp.type) != "ruin":
+					continue
+				if k < int(a.substr(7)):
+					k += 1
+					continue
+				var rc: Vector2 = pp.center
+				spot = Vector3(rc.x + 6.0, 0.0, rc.y + 4.0)
+				ang = atan2(6.0, 4.0)
+				break
 	if OS.get_cmdline_user_args().has("--inside") and world.villages.towers.size() > 0:
 		var tw: Dictionary = world.villages.towers[0]
 		var tb := Basis(Vector3.UP, float(tw.yaw))
