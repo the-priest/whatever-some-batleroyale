@@ -1904,8 +1904,11 @@ func on_player_damaged(_amount: float, _from: Vector3) -> void:
 
 
 func on_player_hit(_pos: Vector3, dmg: float, _headshot: bool) -> void:
-	# No floating numbers: the hitmarker and sound are the feedback.
+	# The hitmarker and sound are the feedback; floating numbers only for
+	# those who switch them on (Settings, GAME).
 	damage_dealt += dmg
+	if int(options.get("damage_numbers", 0)) == 1:
+		spawn_damage_number(_pos, dmg, _headshot)
 	if player != null:
 		anticheat.on_local_hit(player.global_position.distance_to(_pos), _headshot)
 

@@ -143,6 +143,7 @@ const OPTS := {
 	"head_bob": ["HEAD BOB", ["FULL", "REDUCED", "OFF"], 0],
 	"shake": ["CAMERA SHAKE", ["FULL", "REDUCED", "OFF"], 0],
 	"hitmarkers": ["HIT MARKERS", ["ON", "OFF"], 0],
+	"damage_numbers": ["DAMAGE NUMBERS", ["OFF", "ON"], 0],
 	"viewmodel": ["GUN POSITION", ["NORMAL", "CENTRED", "LOW"], 0],
 }
 const XHAIR_COLS := [Color(0.95, 0.96, 0.97), Color(0.45, 1.0, 0.45), Color(1.0, 0.92, 0.3), Color(0.35, 0.95, 1.0), Color(1.0, 0.45, 0.85), Color(1.0, 0.3, 0.25)]
@@ -1107,7 +1108,7 @@ func _build_pause() -> void:
 	size_slider.custom_minimum_size = Vector2(300, 22)
 	size_slider.value_changed.connect(func(_v): _settings_changed())
 	col2.add_child(size_slider)
-	for k in ["crosshair", "xhair_color", "hitmarkers"]:
+	for k in ["crosshair", "xhair_color", "hitmarkers", "damage_numbers"]:
 		_opt_row(t_game[0], k)
 	for k in ["viewmodel", "head_bob", "shake"]:
 		_opt_row(t_game[1], k)
