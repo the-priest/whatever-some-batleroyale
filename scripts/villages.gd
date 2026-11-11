@@ -905,6 +905,7 @@ func _build_house(h: Dictionary) -> void:
 	# through the eaves to above the roof (nothing floats in the attic).
 	if rng.randf() < 0.7:
 		_gable_chimney(h, origin, house_basis, roof_yaw != yaw_house, span, levels)
+	var up_loot_from := loot_points.size()
 	if levels > 1:
 		# The good stuff is upstairs.
 		for i in rng.randi_range(2, 3):
@@ -933,7 +934,7 @@ func _build_house(h: Dictionary) -> void:
 			_place("Prop_Crate", crate_pos, yaw_house + rng.randf_range(-0.3, 0.3))
 			_add_box_collider(crate_pos + Vector3(0, 0.53, 0), Vector3(1.06, 1.06, 1.06), yaw_house)
 
-	_furnish(origin, house_basis, w, d, levels)
+	_furnish(origin, house_basis, w, d, levels, up_loot_from)
 
 	# Loot spots inside; at least one gun guaranteed per house by the loot manager.
 	var gun_spots := rng.randi_range(2, 3)
@@ -957,9 +958,31 @@ func _build_house(h: Dictionary) -> void:
 ## Lived-in touches that never get in the way: a rug in the middle of the
 ## floor and a lantern hanging from each ceiling. Chosen from the house's own
 ## number (_tint), not the village rng.
-func _furnish(origin: Vector3, hb: Basis, w: float, d: float, levels: int) -> void:
+func _furnish(origin: Vector3, hb: Basis, w: float, d: float, levels: int, up_loot_from := -1) -> void:
 	if _tint < 0:
 		return
+	# Upstairs: a low bed in a corner away from the stair (which runs along
+	# +x) and from any loot lying up there.
+	if levels > 1 and _tint % 5 != 0 and up_loot_from >= 0 and minf(w, d) >= 4.0:
+		for sz: float in ([1.0, -1.0] if _tint % 2 == 0 else [-1.0, 1.0]):
+			var lc := Vector3(-w * 0.5 + 0.66, WALL_HEIGHT + 0.03, sz * (d * 0.5 - 1.16))
+			var wc := origin + hb * lc
+			var clear := true
+			for li in range(up_loot_from, loot_points.size()):
+				var lp: Vector3 = loot_points[li].pos
+				if Vector2(lp.x - wc.x, lp.z - wc.z).length() < 1.5:
+					clear = false
+			if not clear:
+				continue
+			var blanket: String = ["cloth_red", "cloth_blue", "cloth_green", "cloth_yellow"][(_tint / 5) % 4]
+			# Frame, straw mattress, pillow at the wall end, blanket over the rest.
+			_beds += 1
+			_proc_box(Transform3D(hb.scaled_local(Vector3(1.08, 0.14, 2.08)), wc + Vector3(0, 0.07, 0)), "wood_dark")
+			_proc_box(Transform3D(hb.scaled_local(Vector3(0.96, 0.12, 1.96)), wc + Vector3(0, 0.19, 0)), "cloth_white")
+			var head := hb * Vector3(0, 0, sz * 0.72)
+			_proc_box(Transform3D(hb.scaled_local(Vector3(0.6, 0.09, 0.32)), wc + head + Vector3(0, 0.29, 0)), "cloth_white")
+			_proc_box(Transform3D(hb.scaled_local(Vector3(1.0, 0.05, 1.3)), wc - hb * Vector3(0, 0, sz * 0.3) + Vector3(0, 0.27, 0)), blanket)
+			break
 	var rugs := ["cloth_red", "cloth_blue", "cloth_green", "cloth_yellow"]
 	if _tint % 3 != 0:
 		var rw := clampf(w * 0.42, 1.6, 3.0)
@@ -1395,7 +1418,7 @@ func _dress_streets() -> void:
 						lamps += 1
 					k += 1
 				along += 17.0
-	print("[villages] %d wall shelves" % _shelves)
+	print("[villages] %d wall shelves, %d beds" % [_shelves, _beds])
 	print("[villages] street dressing: %d barrels, %d lamp posts" % [barrels, lamps])
 
 
@@ -1560,6 +1583,7 @@ func _flower_box(wall_pos: Vector3, yaw: float) -> void:
 
 
 var _shelves := 0
+var _beds := 0
 
 
 ## A plank shelf on about one blank ground-floor wall in four, with jars,
