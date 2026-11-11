@@ -2524,7 +2524,11 @@ func _update_casings(delta: float) -> void:
 		c["vel"] = v
 		n.position += v * delta
 		n.rotation += Vector3(c["spin"]) * delta
-		if float(c["t"]) > 0.5:
+		if float(c["t"]) > 0.32:
+			# Out of view: it carries on as a casing in the world, falls to
+			# the ground at your feet and lies there a while.
+			if game != null and game.has_method("drop_casing") and mode == Mode.GROUND:
+				game.drop_casing(n.global_position, n.mesh, n.material_override, (view.global_basis * v) + velocity)
 			n.queue_free()
 			_casings.erase(c)
 

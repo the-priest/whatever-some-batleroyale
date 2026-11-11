@@ -933,6 +933,10 @@ func _cleanup_match() -> void:
 		if is_instance_valid(h):
 			h.queue_free()
 	_holes.clear()
+	for b in _brass:
+		if is_instance_valid(b):
+			b.queue_free()
+	_brass.clear()
 	_hole_i = 0
 	for g in get_tree().get_nodes_in_group("grenades"):
 		g.queue_free()
@@ -2191,6 +2195,41 @@ func _sparks(pos: Vector3, n: Vector3) -> void:
 		tw.tween_callback(c.queue_free)
 
 
+## Spent brass on the ground: up to 60 lie around, the oldest picked up first.
+var _brass: Array[MeshInstance3D] = []
+
+
+func drop_casing(at: Vector3, mesh: Mesh, mat: Material, vel: Vector3) -> void:
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(mi)
+	mi.global_position = at
+	# The viewmodel's brass is drawn at its scale; in the world, real size.
+	mi.scale = Vector3.ONE * 1.9
+	_brass.append(mi)
+	while _brass.size() > 60:
+		var o: MeshInstance3D = _brass.pop_front()
+		if is_instance_valid(o):
+			o.queue_free()
+	# Where it comes down: a ray straight below, then it lies on its side.
+	var q := PhysicsRayQueryParameters3D.create(at, at + Vector3.DOWN * 4.0, 1)
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	var ground := at + Vector3.DOWN * 1.6
+	if not hit.is_empty():
+		ground = hit.position
+	var flat := Vector3(vel.x, 0.0, vel.z) * 0.18
+	var land := ground + flat + Vector3(0, 0.004, 0)
+	var t := sqrt(maxf(0.02, 2.0 * (at.y - ground.y) / 9.8))
+	var lie := Basis(Vector3.UP, randf() * TAU) * Basis(Vector3.FORWARD, PI * 0.5)
+	var tw := mi.create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(mi, "global_position", land, t).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.tween_property(mi, "rotation", lie.get_euler() + Vector3(0, TAU * 2.0, 0), t)
+	tw.chain().tween_property(mi, "global_position", land + flat * 0.3, 0.15)
+
+
 ## A footstep's puff of dust, or a splash in the shallows.
 func step_puff(pos: Vector3, wet: bool) -> void:
 	if player == null or pos.distance_to(player.global_position) > 60.0:
@@ -3322,6 +3361,11 @@ func _run_shot() -> void:
 		if a2.begins_with("--state="):
 			await _shot_state(a2.substr(8))
 	print("[shot] frames waited")
+	if args.has("--lookback"):
+		p.yaw -= 2.05
+		p.pitch = -0.95
+		for i in 6:
+			await get_tree().process_frame
 	if OS.get_environment("DBG_ADS") != "" and player != null:
 		print("[dbgads] grab_t=", player.hands._grab_t(), " vis=", player.hands.visible, " arm_l=", player.hands.arm_l.position, " gun=", not player.hands._gun.is_empty())
 		print("[dbgads] holder=", player.gun_holder.position, " rot=", player.gun_holder.rotation, " view=", player.view.position, " ads=", Weapons.ads_pos(player.current_id(), player._optic_id), " blend=", player.aim_blend, " equip=", player.equip_t)
