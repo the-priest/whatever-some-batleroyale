@@ -3049,6 +3049,12 @@ func _run_shot() -> void:
 		for i in kinds.size():
 			var lp := p.global_position + fwd * (4.0 + float(i / 4) * 2.2) + right * (float(i % 4) - 1.5) * 1.6
 			_spawn_loot(kinds[i][0], kinds[i][1], ground_at(lp) + Vector3(0, 0.08, 0)).label.visible = true
+	# --opt=key:value: a settings choice, as if picked in the menu.
+	for a in args:
+		if a.begins_with("--opt="):
+			var kv := a.substr(6).split(":")
+			options[kv[0]] = int(kv[1])
+			_apply_options()
 	# --holes=N: N rounds into whatever is in front of the camera.
 	for a in args:
 		if a.begins_with("--holes="):
@@ -6346,6 +6352,7 @@ func _apply_options() -> void:
 	Engine.max_fps = [0, 30, 60, 90, 120, 144, 165, 240][clampi(o.call("fps_cap"), 0, 7)]
 	if DisplayServer.get_name() != "headless":
 		get_tree().root.content_scale_factor = [0.85, 1.0, 1.15, 1.3][clampi(o.call("ui_scale"), 0, 3)]
+		hud.set_colorblind(o.call("colorblind"))
 	if player != null:
 		player.invert_y = o.call("invert_y") == 1
 		player.aim_toggle = o.call("aim_mode") == 1

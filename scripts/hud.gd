@@ -127,6 +127,7 @@ const OPTS := {
 	"fps_cap": ["FRAME RATE LIMIT", ["UNLIMITED", "30", "60", "90", "120", "144", "165", "240"], 0],
 	"ui_scale": ["INTERFACE SIZE", ["85%", "100%", "115%", "130%"], 1],
 	"brightness": ["BRIGHTNESS", ["80%", "90%", "100%", "110%", "120%", "130%"], 2],
+	"colorblind": ["COLOUR-BLIND FILTER", ["OFF", "PROTANOPIA", "DEUTERANOPIA", "TRITANOPIA"], 0],
 	"shadows": ["SHADOWS", ["AUTO", "OFF", "LOW", "MEDIUM", "HIGH"], 0],
 	"lighting": ["LIGHTING", ["AUTO", "BASIC", "SCREEN-SPACE GI", "RAY-MARCHED GI"], 0],
 	"reflections": ["REFLECTIONS", ["AUTO", "OFF", "ON"], 0],
@@ -1047,7 +1048,7 @@ func _build_pause() -> void:
 		video_changed.emit(upscaling, vsync_on, show_fps))
 	vrow.add_child(fps_button)
 	col2.add_child(vrow)
-	for k in ["fps_cap", "brightness", "ui_scale"]:
+	for k in ["fps_cap", "brightness", "ui_scale", "colorblind"]:
 		_opt_row(t_video[1], k)
 
 	col = t_audio[0]
@@ -1237,6 +1238,30 @@ func _step_opt(key: String, d: int) -> void:
 
 
 ## A tab of the settings screen: two columns.
+## Colour-blind filter over everything (3D and HUD): 0 off.
+var _cb_layer: CanvasLayer = null
+
+
+func set_colorblind(mode: int) -> void:
+	if mode <= 0:
+		if _cb_layer != null:
+			_cb_layer.visible = false
+		return
+	if _cb_layer == null:
+		_cb_layer = CanvasLayer.new()
+		_cb_layer.layer = 120
+		add_child(_cb_layer)
+		var r := ColorRect.new()
+		r.set_anchors_preset(Control.PRESET_FULL_RECT)
+		r.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var m := ShaderMaterial.new()
+		m.shader = load("res://shaders/colorblind.gdshader")
+		r.material = m
+		_cb_layer.add_child(r)
+	_cb_layer.visible = true
+	((_cb_layer.get_child(0) as ColorRect).material as ShaderMaterial).set_shader_parameter("mode", mode)
+
+
 ## Click an action, then press the key or mouse button you want for it.
 func _build_keys(t: Array) -> void:
 	Keybinds.snapshot_defaults()
