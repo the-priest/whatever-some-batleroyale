@@ -284,6 +284,20 @@ static func build_irons(id: String) -> Node3D:
 		fdot.height = 0.002
 		_opart(root, fdot, _omat("irondot"), Vector3(0, h - 0.0011, fz + 0.0026))
 		return root
+	if cls(id) == "shotgun":
+		# A shotgun is pointed, not aimed: a brass bead at the muzzle and a
+		# smaller one halfway, on a raised rib along the barrel.
+		var bz := -s * 0.45
+		var rib := BoxMesh.new()
+		rib.size = Vector3(0.006, h - top - 0.0022, s * 0.7)
+		_opart(root, rib, body, Vector3(0, top + (h - top - 0.0022) * 0.5, -s * 0.1))
+		var brass := _omat("bead")
+		for k: float in [1.0, 0.5]:
+			var bead := SphereMesh.new()
+			bead.radius = 0.0022 * (1.0 if k > 0.9 else 0.7)
+			bead.height = bead.radius * 2.0
+			_opart(root, bead, brass, Vector3(0, h - 0.0012, lerpf(-s * 0.1, bz, k)))
+		return root
 	var rz := minf(eye_z - 0.1, s * 0.3)
 	var fz := -s * 0.44
 	# Rear sight: a base on the receiver, a ring, two wings guarding it.
@@ -360,6 +374,15 @@ static func _omat(key: String) -> Material:
 			m.emission_enabled = true
 			m.emission = Color(1, 1, 0.95)
 			m.emission_energy_multiplier = 0.4
+			_optic_mats[key] = m
+			return m
+		"bead":
+			m.albedo_color = Color(0.95, 0.74, 0.36)
+			m.metallic = 0.9
+			m.roughness = 0.25
+			m.emission_enabled = true
+			m.emission = Color(1.0, 0.78, 0.4)
+			m.emission_energy_multiplier = 0.35
 			_optic_mats[key] = m
 			return m
 		"tritium":
