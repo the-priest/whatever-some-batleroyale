@@ -680,8 +680,19 @@ func _ground(delta: float) -> void:
 		use_item("energy")
 	_throw_cd = maxf(0.0, _throw_cd - delta)
 	_tick_throw(delta)
+	# Hold the grenade key to see where it will land; let go to throw.
 	if _ajp("grenade"):
-		throw_grenade()
+		if grenades <= 0:
+			notice.emit("NO GRENADES")
+		elif _throw_t < 0.0:
+			_g_hold = true
+	if _g_hold:
+		if _locked() or not alive or swimming or mode != Mode.GROUND:
+			_g_hold = false
+		elif not Input.is_action_pressed("grenade"):
+			_g_hold = false
+			throw_grenade()
+	_draw_arc(_g_hold)
 	_tick_boost(delta)
 	aiming = _ap("aim") and not reloading and not healing and not swimming and not _map_open()
 	fire_timer = maxf(0.0, fire_timer - delta)
@@ -1977,17 +1988,111 @@ func _release_grenade() -> void:
 		return
 	grenades -= 1
 	inventory_changed.emit()
-	var dir := -camera.global_basis.z
 	var g := Grenade.new()
 	g.game = game
 	g.thrower = self
 	game.add_child(g)
-	var hand := camera.global_transform * Vector3(0.06, 0.0, -0.55)
-	g.global_position = hand
-	g.linear_velocity = dir * 17.0 + Vector3(0, 3.5, 0) + velocity * 0.5
+	var st: Array = _throw_start()
+	g.global_position = st[0]
+	g.linear_velocity = st[1]
 	g.angular_velocity = Vector3(randf_range(-8, 8), randf_range(-8, 8), randf_range(-8, 8))
 	if game.has_method("net_grenade_thrown"):
 		game.net_grenade_thrown(g.global_position, g.linear_velocity)
+
+
+## The arc a grenade thrown now would fly, and a ring where it comes down.
+var _g_hold := false
+var _arc: MeshInstance3D = null
+var _arc_mesh: ImmediateMesh = null
+var _arc_ring: MeshInstance3D = null
+
+
+func _throw_start() -> Array:
+	var dir := -camera.global_basis.z
+	return [camera.global_transform * Vector3(0.06, 0.0, -0.55), dir * 17.0 + Vector3(0, 3.5, 0) + velocity * 0.5]
+
+
+func _draw_arc(show: bool) -> void:
+	if not show:
+		if _arc != null:
+			_arc.visible = false
+			_arc_ring.visible = false
+		return
+	if _arc == null:
+		_arc_mesh = ImmediateMesh.new()
+		_arc = MeshInstance3D.new()
+		_arc.mesh = _arc_mesh
+		_arc.top_level = true
+		_arc.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var m := StandardMaterial3D.new()
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		m.vertex_color_use_as_albedo = true
+		m.cull_mode = BaseMaterial3D.CULL_DISABLED
+		_arc.material_override = m
+		add_child(_arc)
+		_arc_ring = MeshInstance3D.new()
+		var tm := TorusMesh.new()
+		tm.inner_radius = 0.55
+		tm.outer_radius = 0.68
+		tm.rings = 32
+		tm.ring_segments = 4
+		_arc_ring.mesh = tm
+		var rm := StandardMaterial3D.new()
+		rm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		rm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		rm.albedo_color = Color(1.0, 0.55, 0.25, 0.7)
+		_arc_ring.material_override = rm
+		_arc_ring.top_level = true
+		_arc_ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(_arc_ring)
+	_arc.visible = true
+	_arc.global_transform = Transform3D.IDENTITY
+	var st: Array = _throw_start()
+	var p: Vector3 = st[0]
+	var v: Vector3 = st[1]
+	var space := get_world_3d().direct_space_state
+	var pts: Array[Vector3] = [p]
+	var land := Vector3.INF
+	var land_n := Vector3.UP
+	var dt := 1.0 / 30.0
+	for i in 120:
+		v.y -= 9.8 * dt
+		v *= 1.0 - 0.25 * dt
+		var np := p + v * dt
+		var q := PhysicsRayQueryParameters3D.create(p, np, 1)
+		q.exclude = [get_rid()]
+		var hit := space.intersect_ray(q)
+		if not hit.is_empty():
+			land = hit.position
+			land_n = hit.normal
+			pts.append(land)
+			break
+		pts.append(np)
+		p = np
+	# A ribbon facing the camera, fading in from the hand and out at the end.
+	_arc_mesh.clear_surfaces()
+	if pts.size() < 2:
+		return
+	_arc_mesh.surface_begin(Mesh.PRIMITIVE_TRIANGLE_STRIP)
+	var eye := camera.global_position
+	for i in pts.size():
+		var a: Vector3 = pts[i]
+		var b: Vector3 = pts[mini(i + 1, pts.size() - 1)] if i < pts.size() - 1 else a + (a - pts[i - 1])
+		var side := (b - a).cross(eye - a).normalized() * 0.035
+		var f := float(i) / float(pts.size() - 1)
+		var al := clampf(f * 6.0, 0.0, 1.0) * 0.75
+		var c := Color(1.0, 0.85, 0.55, al)
+		_arc_mesh.surface_set_color(c)
+		_arc_mesh.surface_add_vertex(a - side)
+		_arc_mesh.surface_set_color(c)
+		_arc_mesh.surface_add_vertex(a + side)
+	_arc_mesh.surface_end()
+	_arc_ring.visible = land != Vector3.INF
+	if land != Vector3.INF:
+		var up := land_n.normalized()
+		var x := up.cross(Vector3.FORWARD if absf(up.z) < 0.9 else Vector3.RIGHT).normalized()
+		_arc_ring.global_transform = Transform3D(Basis(x, up, x.cross(up)), land + up * 0.04)
 
 
 func is_throwing() -> bool:

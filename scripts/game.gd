@@ -3041,6 +3041,9 @@ func _run_shot() -> void:
 		if a.begins_with("--mapzoom="):
 			hud.map_zoom = float(a.substr(10))
 			hud._bm_focus = Vector2(p.global_position.x, p.global_position.z)
+	if args.has("--garc"):
+		p.grenades = 3
+		Input.action_press("grenade")
 	if args.has("--aim"):
 		p.aim_blend = 1.0
 		p.land_dip = 0.0
