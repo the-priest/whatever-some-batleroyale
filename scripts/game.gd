@@ -3095,6 +3095,9 @@ func _run_shot() -> void:
 	for i in wait:
 		if grab_at >= 0.0:
 			p.hands._grab = grab_at
+		for a in args:
+			if a.begins_with("--inspect="):
+				p._inspect = float(a.substr(10))
 		if rl_at >= 0.0 and p.reloading:
 			p.reload_timer = p._reload_dur * (1.0 - rl_at)
 			p._reload_events.clear()

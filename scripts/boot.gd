@@ -28,6 +28,7 @@ func _enter_tree() -> void:
 	_wheel("swap_weapon", MOUSE_BUTTON_WHEEL_DOWN)
 	_wheel("swap_weapon", MOUSE_BUTTON_WHEEL_UP)
 	_key("map", [KEY_M])
+	_key("inspect", [KEY_I])
 	_key("pause", [KEY_ESCAPE])
 	_key("free_look", [KEY_ALT])
 	_key("scoreboard", [KEY_TAB])

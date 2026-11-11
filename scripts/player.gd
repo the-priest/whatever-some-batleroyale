@@ -240,6 +240,9 @@ var crouch_toggle := false
 var sprint_toggle := false
 var _sprint_on := false
 var _tuck := 0.0
+## Weapon inspect (I): 0..1 through the look, -1 when not.
+var _inspect := -1.0
+const INSPECT_TIME := 2.6
 var bob_scale := 1.0
 var shake_scale := 1.0
 var vm_offset := Vector3.ZERO
@@ -1241,6 +1244,24 @@ func _update_weapon(delta: float) -> void:
 	pos += kick * (1.0 - ads_e * 0.45)
 	rot += kick_rot * (1.0 - ads_e * 0.5)
 
+	# Inspect: turn the gun over to look at its left side, then the top.
+	if _ajp("inspect") and _inspect < 0.0 and not reloading and not aiming and not healing and _throw_t < 0.0 and bolt_t < 0.0:
+		_inspect = 0.0
+		_sfx("gear_rattle", -12.0)
+	if _inspect >= 0.0:
+		if aiming or reloading or healing or sprinting or _throw_t >= 0.0 or fire_timer > 0.0:
+			_inspect = -1.0
+		else:
+			_inspect += delta / INSPECT_TIME
+			if _inspect >= 1.0:
+				_inspect = -1.0
+	if _inspect >= 0.0:
+		var t := _inspect
+		var a := _seg(t, 0.0, 0.18) * (1.0 - _seg(t, 0.45, 0.6))
+		var b := _seg(t, 0.45, 0.6) * (1.0 - _seg(t, 0.85, 1.0))
+		pos += Vector3(-0.1, 0.05, 0.05) * a + Vector3(-0.07, 0.03, 0.03) * b
+		rot += Vector3(0.12, 0.95, 0.35) * a + Vector3(0.2, 0.5, -1.15) * b
+		pos.y += sin(t * TAU * 2.0) * 0.004 * (a + b)
 	# Up against a wall the gun comes back and up to high ready instead of
 	# poking through it.
 	var tuck_want := 0.0

@@ -288,9 +288,11 @@ static func build_irons(id: String) -> Node3D:
 		# A shotgun is pointed, not aimed: a brass bead at the muzzle and a
 		# smaller one halfway, on a raised rib along the barrel.
 		var bz := -s * 0.45
+		var bt: float = minf(float(model(id).get("muzzle_y", 0.0)) * s, top)
+		var rib_top := h - 0.0022
 		var rib := BoxMesh.new()
-		rib.size = Vector3(0.006, h - top - 0.0022, s * 0.7)
-		_opart(root, rib, body, Vector3(0, top + (h - top - 0.0022) * 0.5, -s * 0.1))
+		rib.size = Vector3(0.006, rib_top - bt + 0.002, s * 0.7)
+		_opart(root, rib, body, Vector3(0, (rib_top + bt) * 0.5 - 0.001, -s * 0.1))
 		var brass := _omat("bead")
 		for k: float in [1.0, 0.5]:
 			var bead := SphereMesh.new()
@@ -300,6 +302,11 @@ static func build_irons(id: String) -> Node3D:
 		return root
 	var rz := minf(eye_z - 0.1, s * 0.3)
 	var fz := -s * 0.44
+	# A gun with its own front sight post standing up off the barrel: ours
+	# goes on top of it rather than a second one at the muzzle.
+	var mdl := model(id)
+	if float(mdl.get("front_y", 0.0)) - float(mdl.get("muzzle_y", 0.0)) > 0.02:
+		fz = float(mdl.get("front_z", -0.44)) * s
 	# Rear sight: a base on the receiver, a ring, two wings guarding it.
 	var base := BoxMesh.new()
 	base.size = Vector3(0.016, 0.004, 0.014)
@@ -318,9 +325,12 @@ static func build_irons(id: String) -> Node3D:
 		wing.size = Vector3(0.0022, h - top + 0.005, 0.009)
 		_opart(root, wing, body, Vector3(sx * 0.0078, top + (h - top + 0.005) * 0.5, rz), Vector3(0, 0, -sx * 0.12))
 	# Front sight: a post on a block, inside a round hood.
+	# The front sight block stands on the barrel, however far below the
+	# receiver's top line that is.
+	var bt: float = minf(float(model(id).get("muzzle_y", 0.0)) * s, top)
 	var fbase := BoxMesh.new()
-	fbase.size = Vector3(0.011, 0.005, 0.01)
-	_opart(root, fbase, body, Vector3(0, top + 0.0025, fz))
+	fbase.size = Vector3(0.011, top + 0.005 - bt + 0.003, 0.01)
+	_opart(root, fbase, body, Vector3(0, (top + 0.005 + bt - 0.003) * 0.5, fz))
 	var fpost := BoxMesh.new()
 	fpost.size = Vector3(0.0018, h - top - 0.002, 0.0028)
 	_opart(root, fpost, body, Vector3(0, top + 0.002 + (h - top - 0.002) * 0.5 - 0.0008, fz))
@@ -663,6 +673,8 @@ static func model(id: String) -> Dictionary:
 	var mag_center := box.get_center() if has_mag else Vector3.ZERO
 	var sight_y := -1e9
 	var front_y := -1e9
+	var muzzle_y := -1e9
+	var front_z := -0.44
 	for t in tris:
 		var v: PackedVector3Array = t["v"]
 		var n: PackedVector3Array = t["n"]
@@ -686,7 +698,12 @@ static func model(id: String) -> Dictionary:
 					if v[i + j].z > -0.2:
 						sight_y = maxf(sight_y, v[i + j].y)
 					elif v[i + j].z < -0.3:
-						front_y = maxf(front_y, v[i + j].y)
+						if v[i + j].y > front_y:
+							front_y = v[i + j].y
+							front_z = v[i + j].z
+					# Top of the barrel where the front sight stands.
+					if v[i + j].z < -0.38 and v[i + j].z > -0.5:
+						muzzle_y = maxf(muzzle_y, v[i + j].y)
 		_add_surface(body, bv, bn, t["mat"])
 		_add_surface(mag, mv, mn, t["mat"])
 	var hands := _hand_points(tris, low_cut, all_y_min, mag_mode, mag_center if has_mag else Vector3.INF)
@@ -699,6 +716,8 @@ static func model(id: String) -> Dictionary:
 		"mag_center": mag_center,
 		"sight_y": sight_y if sight_y > -1e8 else all_y_max,
 		"front_y": front_y if front_y > -1e8 else all_y_max,
+		"muzzle_y": muzzle_y if muzzle_y > -1e8 else (front_y if front_y > -1e8 else all_y_max),
+		"front_z": front_z,
 	}
 	_models[id] = out
 	return out
