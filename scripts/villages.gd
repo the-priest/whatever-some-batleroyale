@@ -25,19 +25,37 @@ const LOTS := [
 var terrain: Terrain
 var rng := RandomNumberGenerator.new()
 var houses: Array[Dictionary] = []
-static var _roof_mat: ShaderMaterial = null
+static var _recolor_mats: Dictionary = {}
 
 
-static func _roof_tile_material(src: BaseMaterial3D) -> ShaderMaterial:
-	if _roof_mat == null:
-		_roof_mat = ShaderMaterial.new()
-		_roof_mat.shader = load("res://shaders/roof_tiles.gdshader")
-		_roof_mat.set_shader_parameter("albedo_tex", src.albedo_texture)
-		_roof_mat.set_shader_parameter("normal_tex", src.normal_texture)
-		_roof_mat.set_shader_parameter("rough_tex", src.roughness_texture)
-		_roof_mat.set_shader_parameter("rough", src.roughness)
-		_roof_mat.set_shader_parameter("tint", Color(1, 1, 1))
-	return _roof_mat
+## A kit material (roof tiles, plaster) as the recolour shader, one shared
+## per kit material and mapping.
+static func _recolor_material(src: BaseMaterial3D, ref_lum: float, tri := false) -> ShaderMaterial:
+	var key := "%s|%s" % [src.resource_name, tri]
+	if _recolor_mats.has(key):
+		return _recolor_mats[key]
+	var m := ShaderMaterial.new()
+	m.shader = load("res://shaders/recolor.gdshader")
+	m.set_shader_parameter("albedo_tex", src.albedo_texture)
+	m.set_shader_parameter("normal_tex", src.normal_texture)
+	m.set_shader_parameter("use_normal", src.normal_texture != null)
+	m.set_shader_parameter("rough_tex", src.roughness_texture)
+	m.set_shader_parameter("use_rough_tex", src.roughness_texture != null)
+	m.set_shader_parameter("rough", src.roughness)
+	m.set_shader_parameter("tint", Color(1, 1, 1))
+	m.set_shader_parameter("ref_lum", ref_lum)
+	m.set_shader_parameter("triplanar", tri)
+	_recolor_mats[key] = m
+	return m
+
+
+## Plaster colours, house by house: limewash white (three in eight),
+## cream, ochre, pale lime, rose, blue-grey.
+const PLASTER_TINTS := [Color(1, 1, 1, 0), Color(1, 1, 1, 0), Color(1, 1, 1, 0), Color(0.98, 0.86, 0.6, 0.8), Color(0.96, 0.7, 0.4, 0.75), Color(0.78, 0.88, 0.62, 0.65), Color(0.98, 0.72, 0.64, 0.65), Color(0.76, 0.81, 0.88, 0.45)]
+## The house being built now (an index into the tint tables), -1 for none.
+var _tint := -1
+var _batch_tints: Dictionary = {}
+var _gable_tints: Dictionary = {}
 
 
 ## Roof tile colours, house by house (rgb the hue, a how far from the
@@ -68,7 +86,11 @@ func build(p_terrain: Terrain, p_seed: int) -> void:
 	_plan_villages()
 	_clear_roads_of_houses()
 	for h in houses:
+		# One colour scheme per house, the same on every machine.
+		var hc: Vector2 = h.center
+		_tint = int(absf(sin(hc.x * 12.9898 + hc.y * 78.233)) * 43758.5453)
 		_build_house(h)
+	_tint = -1
 	_build_village_extras()
 	_plan_towers()
 	_plan_ruins()
@@ -1466,7 +1488,9 @@ func _place(key: String, bottom_center: Vector3, yaw: float, _align := true, piv
 	var bkey := "%s|%d_%d" % [key, int(floor(bottom_center.x / BATCH_CELL)), int(floor(bottom_center.z / BATCH_CELL))]
 	if not _batches.has(bkey):
 		_batches[bkey] = []
+		_batch_tints[bkey] = []
 	_batches[bkey].append(xform)
+	_batch_tints[bkey].append(_tint)
 	_stat.pieces += 1
 
 
@@ -1572,7 +1596,10 @@ func _model(key: String) -> Dictionary:
 			copy.cull_mode = BaseMaterial3D.CULL_DISABLED
 			# Roof tiles take each house's own colour (see ROOF_TINTS).
 			if key.begins_with("Roof_RoundTiles") and mat.resource_name.contains("Tiles"):
-				mesh.surface_set_material(s, _roof_tile_material(copy))
+				mesh.surface_set_material(s, _recolor_material(copy, 0.32))
+				continue
+			if mat.resource_name == "MI_Plaster":
+				mesh.surface_set_material(s, _recolor_material(copy, 0.72))
 				continue
 			mesh.surface_set_material(s, copy)
 	var aabb: AABB = mi.transform * mesh.get_aabb()
@@ -1632,8 +1659,10 @@ func _add_gables(top_center: Vector3, roof_yaw: float, span: float, length: floa
 	var key := "%d|%s" % [k, style]
 	if not _gables.has(key):
 		_gables[key] = []
+		_gable_tints[key] = []
 	for sz in [-1.0, 1.0]:
 		_gables[key].append(Transform3D(rb, top_center + rb * Vector3(0, 0, float(sz) * length * 0.5)))
+		_gable_tints[key].append(_tint)
 
 
 func _gable_mesh(span: int) -> ArrayMesh:
@@ -1674,10 +1703,14 @@ func _commit_gables() -> void:
 		var list: Array = _gables[key]
 		var mm := MultiMesh.new()
 		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.use_colors = true
 		mm.mesh = _gable_mesh(int(parts[0]))
 		mm.instance_count = list.size()
+		var gt: Array = _gable_tints.get(key, [])
 		for i in list.size():
 			mm.set_instance_transform(i, list[i])
+			var ti: int = gt[i] if i < gt.size() else -1
+			mm.set_instance_color(i, PLASTER_TINTS[(ti / 7) % PLASTER_TINTS.size()] if ti >= 0 and parts[1] == "Plaster" else Color(1, 1, 1, 0))
 		var mmi := MultiMeshInstance3D.new()
 		mmi.name = "G_" + (key as String).replace("|", "_")
 		mmi.multimesh = mm
@@ -1727,6 +1760,8 @@ func _proc_material(key: String) -> Material:
 			for si in wm.get_surface_count():
 				var km := wm.surface_get_material(si) as BaseMaterial3D
 				if km != null and km.resource_name == ("MI_Plaster" if key == "gable_Plaster" else "MI_UnevenBrick"):
+					if key == "gable_Plaster":
+						return _recolor_material(km, 0.72, true)
 					var g := km.duplicate() as BaseMaterial3D
 					g.uv1_triplanar = true
 					g.uv1_world_triplanar = true
@@ -1787,16 +1822,20 @@ func _commit_batches() -> void:
 		var transforms: Array = _batches[bkey]
 		var mm := MultiMesh.new()
 		mm.transform_format = MultiMesh.TRANSFORM_3D
-		var tinted := key.begins_with("Roof_RoundTiles")
+		var roof := key.begins_with("Roof_RoundTiles")
+		var tinted := roof or key.contains("Plaster")
 		mm.use_colors = tinted
+		var bt: Array = _batch_tints.get(bkey, [])
 		mm.mesh = data.mesh
 		mm.instance_count = transforms.size()
 		for i in transforms.size():
 			mm.set_instance_transform(i, transforms[i])
 			if tinted:
-				var o: Vector3 = (transforms[i] as Transform3D).origin
-				var hsh := int(absf(sin(o.x * 12.9898 + o.z * 78.233)) * 43758.5453)
-				mm.set_instance_color(i, ROOF_TINTS[hsh % ROOF_TINTS.size()])
+				var ti: int = bt[i] if i < bt.size() else -1
+				var pal: Array = ROOF_TINTS if roof else PLASTER_TINTS
+				# Plaster from other bits of the house's number than the roof.
+				var pick := ti if roof else ti / 7
+				mm.set_instance_color(i, pal[pick % pal.size()] if ti >= 0 else Color(1, 1, 1, 0))
 		var mmi := MultiMeshInstance3D.new()
 		mmi.name = "V_" + bkey.replace("|", "_")
 		mmi.multimesh = mm
