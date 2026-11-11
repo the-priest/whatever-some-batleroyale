@@ -918,6 +918,11 @@ func _cleanup_match() -> void:
 		if is_instance_valid(i):
 			i.queue_free()
 	impacts.clear()
+	for h in _holes:
+		if is_instance_valid(h):
+			h.queue_free()
+	_holes.clear()
+	_hole_i = 0
 	for g in get_tree().get_nodes_in_group("grenades"):
 		g.queue_free()
 	if player != null:
@@ -1992,8 +1997,180 @@ func on_airdrop_landed(drop: Airdrop) -> void:
 
 
 # ------------------------------------------------------------------- effects --
-func spawn_impact(pos: Vector3, normal: Vector3, _col: Object, big := false) -> void:
-	_puff(pos + normal * 0.04, Color(0.62, 0.58, 0.50, 0.8), 0.9 if big else 0.6, 4.0 if big else 2.2)
+## What a round hit, from the body it struck: "dirt", "wood", "stone",
+## "plaster" or "metal". Sets the dust colour, the chips and the hole.
+static func impact_surface(col: Object) -> String:
+	if col is Vehicle:
+		return "metal"
+	if not (col is Node):
+		return "stone"
+	var nm := String((col as Node).name)
+	if nm.begins_with("Terrain"):
+		return "dirt"
+	if nm.begins_with("Tree"):
+		return "wood"
+	if nm.begins_with("Rock"):
+		return "stone"
+	if nm.begins_with("Village"):
+		return "plaster"
+	return "stone"
+
+
+const IMPACT_DUST := {
+	"dirt": Color(0.42, 0.34, 0.24, 0.85), "wood": Color(0.66, 0.52, 0.36, 0.8),
+	"stone": Color(0.62, 0.61, 0.58, 0.8), "plaster": Color(0.82, 0.79, 0.72, 0.8),
+	"metal": Color(0.55, 0.55, 0.55, 0.5),
+}
+const IMPACT_CHIP := {
+	"wood": Color(0.72, 0.56, 0.36), "stone": Color(0.5, 0.49, 0.47),
+	"plaster": Color(0.88, 0.85, 0.78), "dirt": Color(0.3, 0.24, 0.17),
+}
+const MAX_HOLES := 96
+var _holes: Array[Decal] = []
+var _hole_i := 0
+var _hole_tex: Texture2D = null
+var _chip_mesh: BoxMesh = null
+var _chip_mats: Dictionary = {}
+
+
+func spawn_impact(pos: Vector3, normal: Vector3, col: Object, big := false) -> void:
+	var surf := impact_surface(col)
+	var n := normal.normalized() if normal.length() > 0.01 else Vector3.UP
+	_puff(pos + n * 0.04, IMPACT_DUST[surf], 0.9 if big else 0.6, 4.0 if big else 2.2)
+	if player == null or pos.distance_to(player.global_position) > 70.0:
+		return
+	_bullet_hole(pos, n, surf, big)
+	if IMPACT_CHIP.has(surf):
+		_chips(pos + n * 0.02, n, IMPACT_CHIP[surf], 5 if big else 3)
+	elif surf == "metal":
+		_sparks(pos + n * 0.02, n)
+
+
+## A hole left in whatever was hit: a pooled decal, so the oldest of the
+## last few dozen give way to new ones.
+func _bullet_hole(pos: Vector3, n: Vector3, surf: String, big: bool) -> void:
+	if _hole_tex == null:
+		_hole_tex = _make_hole_texture()
+	var d: Decal
+	if _holes.size() < MAX_HOLES:
+		d = Decal.new()
+		d.texture_albedo = _hole_tex
+		d.cull_mask = 1
+		d.distance_fade_enabled = true
+		d.distance_fade_begin = 35.0
+		d.distance_fade_length = 15.0
+		d.upper_fade = 0.2
+		d.lower_fade = 0.2
+		d.normal_fade = 0.3
+		add_child(d)
+		_holes.append(d)
+	else:
+		d = _holes[_hole_i % MAX_HOLES]
+		_hole_i += 1
+		if not is_instance_valid(d):
+			return
+	var r := (0.12 if surf != "dirt" else 0.16) * (1.4 if big else 1.0)
+	d.size = Vector3(r, 0.4, r)
+	d.modulate = {"wood": Color(0.55, 0.42, 0.3), "dirt": Color(0.45, 0.38, 0.3), "plaster": Color(0.85, 0.82, 0.78)}.get(surf, Color(0.8, 0.8, 0.8))
+	var side := n.cross(Vector3.UP if absf(n.y) < 0.95 else Vector3.RIGHT).normalized()
+	side = side.rotated(n, randf() * TAU)
+	d.global_transform = Transform3D(Basis(side, n, side.cross(n)), pos)
+	d.visible = true
+
+
+## A small soft-edged hole: black core, a dark scorched rim, chipped edge.
+func _make_hole_texture() -> Texture2D:
+	var sz := 64
+	var img := Image.create(sz, sz, false, Image.FORMAT_RGBA8)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 4242
+	var jag: Array[float] = []
+	for i in 24:
+		jag.append(rng.randf_range(0.85, 1.15))
+	for y in sz:
+		for x in sz:
+			var dx := (x + 0.5) / sz * 2.0 - 1.0
+			var dy := (y + 0.5) / sz * 2.0 - 1.0
+			var r := sqrt(dx * dx + dy * dy)
+			var a := fposmod(atan2(dy, dx) / TAU, 1.0) * 24.0
+			var j := lerpf(jag[int(a) % 24], jag[(int(a) + 1) % 24], a - floor(a))
+			var rr := r / j
+			var core := 1.0 - smoothstep(0.24, 0.32, rr)
+			var rim := 1.0 - smoothstep(0.3, 0.7, rr)
+			var chip := (1.0 - smoothstep(0.6, 0.98, rr)) * 0.3
+			var alpha := clampf(core + rim * 0.85 + chip, 0.0, 1.0)
+			var v := lerpf(lerpf(0.55, 0.22, rim), 0.02, core)
+			img.set_pixel(x, y, Color(v, v * 0.97, v * 0.94, alpha))
+	img.generate_mipmaps()
+	return ImageTexture.create_from_image(img)
+
+
+## Chips of wood, stone or plaster knocked off the surface.
+func _chips(pos: Vector3, n: Vector3, col: Color, count: int) -> void:
+	if _chip_mesh == null:
+		_chip_mesh = BoxMesh.new()
+		_chip_mesh.size = Vector3(0.018, 0.01, 0.024)
+	var key := col.to_html()
+	if not _chip_mats.has(key):
+		var m := StandardMaterial3D.new()
+		m.albedo_color = col
+		m.roughness = 0.9
+		_chip_mats[key] = m
+	for i in count:
+		var c := MeshInstance3D.new()
+		c.mesh = _chip_mesh
+		c.material_override = _chip_mats[key]
+		c.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(c)
+		c.global_position = pos
+		var v := (n * randf_range(1.6, 3.2) + Vector3(randf_range(-1, 1), randf_range(0.2, 1.4), randf_range(-1, 1)) * 1.3)
+		var spin := Vector3(randf_range(-20, 20), randf_range(-20, 20), randf_range(-20, 20))
+		var life := randf_range(0.45, 0.7)
+		var tw := c.create_tween()
+		tw.tween_method(func(t: float) -> void:
+			if is_instance_valid(c):
+				c.global_position = pos + v * t + Vector3.DOWN * 4.9 * t * t
+				c.rotation = spin * t
+				c.scale = Vector3.ONE * (1.0 - smoothstep(0.7, 1.0, t / life))
+		, 0.0, life, life)
+		tw.tween_callback(c.queue_free)
+		impacts.append(c)
+	while impacts.size() > 60:
+		var o: Variant = impacts.pop_front()
+		if is_instance_valid(o) and o is Node and not (o as Node).is_queued_for_deletion():
+			(o as Node).queue_free()
+
+
+## Hot sparks off metal.
+func _sparks(pos: Vector3, n: Vector3) -> void:
+	var col := Color(1.0, 0.75, 0.35)
+	var key := "spark"
+	if not _chip_mats.has(key):
+		var m := StandardMaterial3D.new()
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.albedo_color = col
+		m.emission_enabled = true
+		m.emission = col
+		m.emission_energy_multiplier = 4.0
+		_chip_mats[key] = m
+	if _chip_mesh == null:
+		_chip_mesh = BoxMesh.new()
+		_chip_mesh.size = Vector3(0.018, 0.01, 0.024)
+	for i in 5:
+		var c := MeshInstance3D.new()
+		c.mesh = _chip_mesh
+		c.material_override = _chip_mats[key]
+		c.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(c)
+		c.global_position = pos
+		c.scale = Vector3(0.4, 0.4, 1.4)
+		var v := (n * randf_range(2.0, 4.0) + Vector3(randf_range(-1, 1), randf_range(0, 1), randf_range(-1, 1)) * 2.0)
+		var tw := c.create_tween()
+		tw.tween_method(func(t: float) -> void:
+			if is_instance_valid(c):
+				c.global_position = pos + v * t + Vector3.DOWN * 4.9 * t * t
+		, 0.0, 0.25, 0.25)
+		tw.tween_callback(c.queue_free)
 
 
 func spawn_explosion(pos: Vector3) -> void:
@@ -2857,6 +3034,19 @@ func _run_shot() -> void:
 		for i in kinds.size():
 			var lp := p.global_position + fwd * (4.0 + float(i / 4) * 2.2) + right * (float(i % 4) - 1.5) * 1.6
 			_spawn_loot(kinds[i][0], kinds[i][1], ground_at(lp) + Vector3(0, 0.08, 0)).label.visible = true
+	# --holes=N: N rounds into whatever is in front of the camera.
+	for a in args:
+		if a.begins_with("--holes="):
+			await get_tree().physics_frame
+			var cam := p.camera
+			var space := p.get_world_3d().direct_space_state
+			for i in int(a.substr(8)):
+				var dir := -cam.global_basis.z + cam.global_basis.x * randf_range(-0.3, 0.3) + cam.global_basis.y * randf_range(-0.15, 0.25)
+				var q := PhysicsRayQueryParameters3D.create(cam.global_position, cam.global_position + dir.normalized() * 80.0)
+				q.exclude = [p.get_rid()]
+				var hit := space.intersect_ray(q)
+				if not hit.is_empty():
+					spawn_impact(hit.position, hit.normal, hit.collider, i % 5 == 0)
 	# --reload=F: hold a reload at that point (0..1) for the picture.
 	var rl_at := -1.0
 	for a in args:
