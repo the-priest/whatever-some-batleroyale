@@ -930,6 +930,8 @@ func _build_house(h: Dictionary) -> void:
 			_place("Prop_Crate", crate_pos, yaw_house + rng.randf_range(-0.3, 0.3))
 			_add_box_collider(crate_pos + Vector3(0, 0.53, 0), Vector3(1.06, 1.06, 1.06), yaw_house)
 
+	_furnish(origin, house_basis, w, d, levels)
+
 	# Loot spots inside; at least one gun guaranteed per house by the loot manager.
 	var gun_spots := rng.randi_range(2, 3)
 	for i in gun_spots:
@@ -947,6 +949,35 @@ func _build_house(h: Dictionary) -> void:
 		})
 
 	_stat.houses += 1
+
+
+## Lived-in touches that never get in the way: a rug in the middle of the
+## floor and a lantern hanging from each ceiling. Chosen from the house's own
+## number (_tint), not the village rng.
+func _furnish(origin: Vector3, hb: Basis, w: float, d: float, levels: int) -> void:
+	if _tint < 0:
+		return
+	var rugs := ["cloth_red", "cloth_blue", "cloth_green", "cloth_yellow"]
+	if _tint % 3 != 0:
+		var rw := clampf(w * 0.42, 1.6, 3.0)
+		var rd := clampf(d * 0.36, 1.2, 2.2)
+		var rc := origin + hb * Vector3(0, 0.046, 0)
+		var col: String = rugs[(_tint / 3) % rugs.size()]
+		# A border, then the field inside it.
+		_proc_box(Transform3D(hb.scaled_local(Vector3(rw, 0.012, rd)), rc), "cloth_white" if col != "cloth_yellow" else "cloth_red")
+		_proc_box(Transform3D(hb.scaled_local(Vector3(rw - 0.22, 0.014, rd - 0.22)), rc + Vector3(0, 0.004, 0)), col)
+		# Woven bands across each end and a medallion in the middle.
+		var band := "cloth_yellow" if col != "cloth_yellow" else "cloth_blue"
+		for e: float in [-1.0, 1.0]:
+			_proc_box(Transform3D(hb.scaled_local(Vector3(0.08, 0.016, rd - 0.4)), rc + hb * Vector3(e * (rw * 0.5 - 0.32), 0.006, 0)), band)
+		_proc_box(Transform3D(Basis(hb.get_rotation_quaternion() * Quaternion(Vector3.UP, PI * 0.25)).scaled_local(Vector3(0.5, 0.016, 0.5)), rc + Vector3(0, 0.006, 0)), band)
+	for lv in levels:
+		var top := WALL_HEIGHT * float(lv + 1) - 0.08
+		var lc := origin + hb * Vector3(0, top, 0)
+		# Chain, a hood and the glowing lantern.
+		_proc_box(Transform3D(hb.scaled_local(Vector3(0.025, 0.5, 0.025)), lc - Vector3(0, 0.25, 0)), "iron")
+		_proc_box(Transform3D(hb.scaled_local(Vector3(0.26, 0.06, 0.26)), lc - Vector3(0, 0.52, 0)), "iron")
+		_proc_box(Transform3D(hb.scaled_local(Vector3(0.18, 0.24, 0.18)), lc - Vector3(0, 0.67, 0)), "lamp")
 
 
 ## Market square: fountain, stalls with awnings, and a bell tower.
