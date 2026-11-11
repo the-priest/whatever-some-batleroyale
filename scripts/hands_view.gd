@@ -69,6 +69,31 @@ var _drops: Array[MeshInstance3D] = []
 var _gun: Dictionary = {}
 ## Reload in progress (see player._hand_reload), {} when not reloading.
 var reload: Dictionary = {}
+## Picking something up: the left hand reaches down for it (msec it began).
+var _grab := -1.0
+const GRAB_TIME := 0.42
+## The arm reaches out from the shoulder, behind and below the eye.
+const GRAB_ELBOW := Vector3(-0.48, -0.36, -0.12)
+## Left hand reaching down and forward, palm down, fingers spread.
+const REACH_AT := Vector3(-0.1, -0.3, -0.42)
+
+
+## Hand at the end of the reaching arm: fingers carrying on from the
+## forearm, tipped down a little, palm to the ground.
+static func _reach_xf(scale: float) -> Transform3D:
+	var z := (GRAB_ELBOW - REACH_AT).normalized()
+	var y := (Vector3.UP - z * Vector3.UP.dot(z)).normalized()
+	var b := Basis(y.cross(z), y, z).rotated(y.cross(z), 0.0)
+	b = b * Basis(Vector3.RIGHT, -0.35)
+	return Transform3D(b.scaled(Vector3.ONE * scale), REACH_AT)
+
+
+func grab() -> void:
+	_grab = 0.0
+
+
+func _grab_t() -> float:
+	return _grab
 var _debris: Dictionary = {}
 
 
@@ -391,6 +416,10 @@ func reset() -> void:
 
 ## active: an item is in use right now; t: its progress 0..1.
 func update(active: bool, p_item: String, t: float, delta: float) -> void:
+	if _grab >= 0.0:
+		_grab += delta / GRAB_TIME
+		if _grab >= 1.0 or active:
+			_grab = -1.0
 	if active and (p_item != item or (t < _t - 0.2) or _show <= 0.0):
 		item = p_item
 		reset()
@@ -399,11 +428,32 @@ func update(active: bool, p_item: String, t: float, delta: float) -> void:
 	var t_in: float = {"vault": 0.06, "grenade": 0.12, "swim": 0.3}.get(item, 0.2)
 	_show = move_toward(_show, 1.0 if active else 0.0, delta / (t_in if active else 0.17))
 	if _show <= 0.0:
-		cam_pitch = lerpf(cam_pitch, 0.0, clampf(delta * 10.0, 0.0, 1.0))
+		# A glance down at what you are picking up.
+		var look := -0.1 * _bump(_grab, 0.0, 1.0) if _grab >= 0.0 else 0.0
+		cam_pitch = lerpf(cam_pitch, look, clampf(delta * 10.0, 0.0, 1.0))
 		item = ""
 		if not _gun.is_empty():
 			visible = true
 			_pose_gun()
+			return
+		var gt := _grab_t()
+		if gt >= 0.0:
+			# Bare-handed: the left arm comes up from below for it.
+			visible = true
+			_sleeves(true)
+			position = Vector3.ZERO
+			rotation = Vector3.ZERO
+			arm_r.visible = false
+			arm_l.visible = true
+			for n: Node3D in [roll, kit, syringe, can, grenade]:
+				n.visible = false
+			strip.visible = false
+			var k := _bump(gt, 0.0, 1.0)
+			var reach := _reach_xf(0.8)
+			var low := Transform3D(reach.basis, Vector3(-0.3, -0.7, -0.2))
+			arm_l.transform = low.interpolate_with(reach, k)
+			_aim_fore(arm_l, GRAB_ELBOW)
+			_curl(arm_l, lerpf(0.25, 1.2, _s(gt, 0.4, 0.55)))
 			return
 		visible = false
 		return
@@ -596,6 +646,15 @@ func _place_left(home: Transform3D, elbow: Vector3, curl: float, thumb: float) -
 			at_port.origin += Vector3(-0.05, -0.2, 0.08) * dip
 			xf = home.interpolate_with(at_port, on)
 			c = lerpf(curl, lerpf(0.9, 0.5, dip), on)
+	var gt := _grab_t()
+	if gt >= 0.0:
+		var hs: float = _gun.hand
+		var k := _bump(gt, 0.0, 1.0)
+		var reach := _reach_xf(hs)
+		xf = xf.interpolate_with(reach, minf(1.0, k * 1.3))
+		# Open on the way down, closed round it at the bottom.
+		c = lerpf(c, lerpf(0.25, 1.2, _s(gt, 0.4, 0.55)), minf(1.0, k * 1.5))
+		elbow = elbow.lerp(GRAB_ELBOW, k)
 	arm_l.transform = xf
 	_aim_fore(arm_l, elbow)
 	_curl(arm_l, c, thumb)

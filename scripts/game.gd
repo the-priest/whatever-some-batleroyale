@@ -1947,6 +1947,8 @@ func try_pickup(p: Player) -> void:
 		sfx.play_at(snd, best.global_position, -4.0)
 		loot_pool.erase(best)
 		hud.set_prompt("")
+		if p.hands != null:
+			p.hands.grab()
 
 
 func drop_item(kind: String, id: String, pos: Vector3) -> void:
@@ -3063,7 +3065,13 @@ func _run_shot() -> void:
 			p.mags[p.current_id()] = 0
 			p.ammo[Weapons.caliber(p.current_id())] = 90
 			p.start_reload()
+	var grab_at := -1.0
+	for a in args:
+		if a.begins_with("--grab="):
+			grab_at = float(a.substr(7))
 	for i in wait:
+		if grab_at >= 0.0:
+			p.hands._grab = grab_at
 		if rl_at >= 0.0 and p.reloading:
 			p.reload_timer = p._reload_dur * (1.0 - rl_at)
 			p._reload_events.clear()
@@ -3261,6 +3269,7 @@ func _run_shot() -> void:
 			await _shot_state(a2.substr(8))
 	print("[shot] frames waited")
 	if OS.get_environment("DBG_ADS") != "" and player != null:
+		print("[dbgads] grab_t=", player.hands._grab_t(), " vis=", player.hands.visible, " arm_l=", player.hands.arm_l.position, " gun=", not player.hands._gun.is_empty())
 		print("[dbgads] holder=", player.gun_holder.position, " rot=", player.gun_holder.rotation, " view=", player.view.position, " ads=", Weapons.ads_pos(player.current_id(), player._optic_id), " blend=", player.aim_blend, " equip=", player.equip_t)
 		if player._mag_node != null:
 			print("[dbgads] magview=", player.view.global_transform.affine_inverse() * player._mag_node.global_position, " reload=", player.hands.reload, " arm_l=", player.hands.arm_l.position, " hands=", player.hands.transform)
