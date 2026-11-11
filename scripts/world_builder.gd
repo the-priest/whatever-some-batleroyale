@@ -575,6 +575,52 @@ func _build_inland_water() -> void:
 const WEATHERS := ["clear", "golden", "misty", "overcast", "clear", "rain"]
 
 
+## Rain on the buildings: every surface a little darker and much glossier.
+## Each material keeps its dry values in metadata, so this can go both ways.
+func _wet_buildings(k: float) -> void:
+	if villages == null or DisplayServer.get_name() == "headless":
+		return
+	var seen := {}
+	for n in villages.find_children("*", "GeometryInstance3D", true, false):
+		var mats: Array = []
+		var gi := n as GeometryInstance3D
+		if gi.material_override != null:
+			mats.append(gi.material_override)
+		var mesh: Mesh = null
+		if gi is MeshInstance3D:
+			mesh = (gi as MeshInstance3D).mesh
+		elif gi is MultiMeshInstance3D and (gi as MultiMeshInstance3D).multimesh != null:
+			mesh = (gi as MultiMeshInstance3D).multimesh.mesh
+		if mesh != null and gi.material_override == null:
+			for si in mesh.get_surface_count():
+				var sm := mesh.surface_get_material(si)
+				if sm != null:
+					mats.append(sm)
+		for m in mats:
+			if seen.has(m):
+				continue
+			seen[m] = true
+			if m is BaseMaterial3D:
+				var bm := m as BaseMaterial3D
+				if bm.transparency != BaseMaterial3D.TRANSPARENCY_DISABLED or bm.emission_enabled:
+					continue
+				if not bm.has_meta("dry"):
+					bm.set_meta("dry", [bm.roughness, bm.albedo_color])
+				var dry: Array = bm.get_meta("dry")
+				bm.roughness = lerpf(float(dry[0]), float(dry[0]) * 0.45, k)
+				bm.albedo_color = (dry[1] as Color).darkened(0.18 * k)
+			elif m is ShaderMaterial:
+				var sh := m as ShaderMaterial
+				if sh.get_shader_parameter("rough") == null:
+					continue
+				if not sh.has_meta("dry"):
+					sh.set_meta("dry", [float(sh.get_shader_parameter("rough")), sh.get_shader_parameter("tint")])
+				var d2: Array = sh.get_meta("dry")
+				sh.set_shader_parameter("rough", lerpf(float(d2[0]), float(d2[0]) * 0.5, k))
+				if d2[1] is Color:
+					sh.set_shader_parameter("tint", (d2[1] as Color).darkened(0.2 * k))
+
+
 func set_weather(kind: String) -> void:
 	weather = kind
 	if sun == null or environment == null or sky_material == null:
@@ -608,9 +654,11 @@ func set_weather(kind: String) -> void:
 	env.volumetric_fog_albedo = (p[8] as Color).lightened(0.25)
 	env.ambient_light_energy = float(p[10])
 	env.tonemap_exposure = float(p[11])
-	# Wet ground in the rain.
+	# Wet ground and buildings in the rain.
+	var wet := 1.0 if kind == "rain" else (0.25 if kind == "misty" else 0.0)
 	if _terrain_material != null:
-		_terrain_material.set_shader_parameter("wetness", 1.0 if kind == "rain" else (0.25 if kind == "misty" else 0.0))
+		_terrain_material.set_shader_parameter("wetness", wet)
+	_wet_buildings(wet)
 	# Rain: falling streaks, splashes, the rain bed and thunder.
 	var old := get_node_or_null("Rain")
 	if old != null:
