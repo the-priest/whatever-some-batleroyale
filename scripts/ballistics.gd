@@ -133,6 +133,19 @@ func _physics_process_body(delta: float) -> void:
 		var hit := space.intersect_ray(q)
 		if not b["mine"] and player != null and not b["cracked"]:
 			_near_miss(b, pos, to, player)
+		# Crossing the water surface: a splash where it goes in. Rounds that
+		# hit the bed below a few centimetres of water still splash first.
+		if game != null and game.terrain != null and not bool(b.get("wet", false)):
+			var wl: float = game.terrain.water_surface_at(to.x, to.z)
+			if pos.y >= wl and to.y < wl:
+				var k := (pos.y - wl) / maxf(0.0001, pos.y - to.y)
+				var wp := pos.lerp(to, k)
+				var hit_first := not hit.is_empty() and (hit["position"] as Vector3).y > wl
+				if not hit_first and game.terrain.is_water(wp.x, wp.z):
+					b["wet"] = true
+					game.spawn_splash(Vector3(wp.x, wl + 0.02, wp.z))
+					# Water stops a bullet within a metre or two.
+					b["max"] = float(b["dist"]) + pos.distance_to(wp) + 1.5
 		if not hit.is_empty():
 			b["dist"] = float(b["dist"]) + pos.distance_to(hit["position"])
 			_resolve_hit(b, hit)

@@ -2230,6 +2230,41 @@ func drop_casing(at: Vector3, mesh: Mesh, mat: Material, vel: Vector3) -> void:
 	tw.chain().tween_property(mi, "global_position", land + flat * 0.3, 0.15)
 
 
+## A bullet going into the water: a white spout and a ring.
+func spawn_splash(at: Vector3) -> void:
+	if player == null or at.distance_to(player.global_position) > 160.0:
+		return
+	_puff(at + Vector3(0, 0.15, 0), Color(0.92, 0.96, 1.0, 0.75), 0.8, 3.2)
+	var spout := MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = 0.02
+	cm.bottom_radius = 0.09
+	cm.height = 1.0
+	cm.radial_segments = 6
+	spout.mesh = cm
+	if _splash_mat == null:
+		_splash_mat = StandardMaterial3D.new()
+		_splash_mat.albedo_color = Color(0.92, 0.96, 1.0, 0.8)
+		_splash_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_splash_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	spout.material_override = _splash_mat
+	spout.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(spout)
+	spout.global_position = at
+	spout.scale = Vector3(1, 0.05, 1)
+	var tw := spout.create_tween()
+	tw.tween_property(spout, "scale", Vector3(1.2, 0.9, 1.2), 0.12).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(spout, "position:y", at.y + 0.45, 0.12)
+	tw.tween_property(spout, "scale", Vector3(1.5, 0.02, 1.5), 0.3).set_ease(Tween.EASE_IN)
+	tw.parallel().tween_property(spout, "position:y", at.y, 0.3)
+	tw.tween_callback(spout.queue_free)
+	if at.distance_to(player.global_position) < 50.0:
+		play_sfx_at("splash_small", at, -10.0)
+
+
+var _splash_mat: StandardMaterial3D = null
+
+
 ## A footstep's puff of dust, or a splash in the shallows.
 func step_puff(pos: Vector3, wet: bool) -> void:
 	if player == null or pos.distance_to(player.global_position) > 60.0:
@@ -3134,6 +3169,12 @@ func _run_shot() -> void:
 			var kv := a.substr(6).split(":")
 			options[kv[0]] = int(kv[1])
 			_apply_options()
+	# --splash: rounds into the water in front of the camera.
+	if args.has("--splash"):
+		var fwd2 := Basis(Vector3.UP, p.yaw) * Vector3(0, 0, -1)
+		for i in 5:
+			var wp := p.global_position + fwd2 * (6.0 + i * 2.0) + Basis(Vector3.UP, p.yaw) * Vector3(randf_range(-2, 2), 0, 0)
+			spawn_splash(Vector3(wp.x, maxf(terrain.water_surface_at(wp.x, wp.z), terrain.height_at(wp.x, wp.z)) + 0.02, wp.z))
 	# --holes=N: N rounds into whatever is in front of the camera.
 	for a in args:
 		if a.begins_with("--holes="):
