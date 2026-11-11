@@ -52,6 +52,9 @@ static func _recolor_material(src: BaseMaterial3D, ref_lum: float, tri := false)
 ## Plaster colours, house by house: limewash white (three in eight),
 ## cream, ochre, pale lime, rose, blue-grey.
 const PLASTER_TINTS := [Color(1, 1, 1, 0), Color(1, 1, 1, 0), Color(1, 1, 1, 0), Color(0.98, 0.86, 0.6, 0.8), Color(0.96, 0.7, 0.4, 0.75), Color(0.78, 0.88, 0.62, 0.65), Color(0.98, 0.72, 0.64, 0.65), Color(0.76, 0.81, 0.88, 0.45)]
+## Shutter and door paint: bare wood (three in eight), sage, blue, oxblood,
+## bottle green, mustard.
+const PAINT_TINTS := [Color(1, 1, 1, 0), Color(1, 1, 1, 0), Color(1, 1, 1, 0), Color(0.45, 0.58, 0.44, 0.8), Color(0.34, 0.46, 0.62, 0.8), Color(0.56, 0.2, 0.18, 0.8), Color(0.22, 0.38, 0.27, 0.8), Color(0.78, 0.6, 0.26, 0.7)]
 ## The house being built now (an index into the tint tables), -1 for none.
 var _tint := -1
 var _batch_tints: Dictionary = {}
@@ -1588,6 +1591,7 @@ func _model(key: String) -> Dictionary:
 		_cache[key] = {}
 		return {}
 	var mesh: Mesh = mi.mesh.duplicate()
+	var recol := false
 	# Double-sided: modular walls/roofs must be visible from inside.
 	for s in mesh.get_surface_count():
 		var mat := mesh.surface_get_material(s)
@@ -1597,13 +1601,20 @@ func _model(key: String) -> Dictionary:
 			# Roof tiles take each house's own colour (see ROOF_TINTS).
 			if key.begins_with("Roof_RoundTiles") and mat.resource_name.contains("Tiles"):
 				mesh.surface_set_material(s, _recolor_material(copy, 0.32))
+				recol = true
 				continue
 			if mat.resource_name == "MI_Plaster":
 				mesh.surface_set_material(s, _recolor_material(copy, 0.72))
+				recol = true
+				continue
+			# Shutters and doors are painted, house by house.
+			if (key.begins_with("WindowShutters") or key.begins_with("Door_")) and mat.resource_name == "MI_WoodTrim_Wear":
+				mesh.surface_set_material(s, _recolor_material(copy, 0.38))
+				recol = true
 				continue
 			mesh.surface_set_material(s, copy)
 	var aabb: AABB = mi.transform * mesh.get_aabb()
-	var data := {"mesh": mesh, "aabb": aabb}
+	var data := {"mesh": mesh, "aabb": aabb, "recolor": recol}
 	inst.free()
 	_cache[key] = data
 	return data
@@ -1823,7 +1834,10 @@ func _commit_batches() -> void:
 		var mm := MultiMesh.new()
 		mm.transform_format = MultiMesh.TRANSFORM_3D
 		var roof := key.begins_with("Roof_RoundTiles")
-		var tinted := roof or key.contains("Plaster")
+		var paint := key.begins_with("WindowShutters") or key.begins_with("Door_")
+		# Any mesh with a recoloured surface needs the colours, even if only
+		# to say "as it is" (alpha 0).
+		var tinted := bool(data.get("recolor", false))
 		mm.use_colors = tinted
 		var bt: Array = _batch_tints.get(bkey, [])
 		mm.mesh = data.mesh
@@ -1832,9 +1846,9 @@ func _commit_batches() -> void:
 			mm.set_instance_transform(i, transforms[i])
 			if tinted:
 				var ti: int = bt[i] if i < bt.size() else -1
-				var pal: Array = ROOF_TINTS if roof else PLASTER_TINTS
-				# Plaster from other bits of the house's number than the roof.
-				var pick := ti if roof else ti / 7
+				var pal: Array = ROOF_TINTS if roof else (PAINT_TINTS if paint else PLASTER_TINTS)
+				# Plaster and paint from other bits of the house's number.
+				var pick := ti if roof else (ti / 49 if paint else ti / 7)
 				mm.set_instance_color(i, pal[pick % pal.size()] if ti >= 0 else Color(1, 1, 1, 0))
 		var mmi := MultiMeshInstance3D.new()
 		mmi.name = "V_" + bkey.replace("|", "_")
