@@ -643,6 +643,20 @@ func _build_castle() -> void:
 	var c: Vector2 = terrain.castle_c
 	var gy: float = terrain.castle_h
 	var yaw := rng.randf() * TAU
+	# The gate (+z) faces the track that comes up to the castle, so the road
+	# runs in through the gate and not into a curtain wall.
+	for r in villages.roads:
+		var ra: Vector2 = r.a
+		var rb: Vector2 = r.b
+		var other := Vector2.INF
+		if rb.distance_to(c) < 0.5:
+			other = ra
+		elif ra.distance_to(c) < 0.5:
+			other = rb
+		if other != Vector2.INF:
+			var d := other - c
+			yaw = atan2(d.x, d.y)
+			break
 	var bs := Basis(Vector3.UP, yaw)
 	var o := Vector3(c.x, gy, c.y)
 	var L := func(x: float, y: float, z: float) -> Vector3:

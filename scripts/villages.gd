@@ -1162,7 +1162,7 @@ func _build_village_extras() -> void:
 					if _on_road(c2, 1.2) or not house_at(c2, 1.2).is_empty():
 						break
 					pieces.append(c2)
-				if pieces.size() < 2:
+				if pieces.size() < 3:
 					continue
 				for i in pieces.size():
 					var ang := a0 + step * (float(i) + 0.5)
