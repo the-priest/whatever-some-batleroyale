@@ -3050,6 +3050,12 @@ func _run_shot() -> void:
 		if a2.begins_with("--state="):
 			await _shot_state(a2.substr(8))
 	print("[shot] frames waited")
+	if OS.get_environment("DBG_SHADOW") != "" and player != null:
+		var cp := player.camera.global_position
+		for n in get_tree().root.find_children("*", "GeometryInstance3D", true, false):
+			var gi := n as GeometryInstance3D
+			if gi.is_visible_in_tree() and gi.cast_shadow != GeometryInstance3D.SHADOW_CASTING_SETTING_OFF and gi.global_position.distance_to(cp) < 3.0:
+				print("[dbgshadow] ", gi.get_path(), " at ", (gi.global_position - cp).snapped(Vector3.ONE * 0.01))
 	await RenderingServer.frame_post_draw
 	print("[shot] post draw")
 	var img := get_viewport().get_texture().get_image()
@@ -7355,6 +7361,21 @@ func _run_corpse_test() -> void:
 		if not ok:
 			fails += 1
 		print("[corpse] %s: above ground %.2f m after 5 s (highest %.1f m over the ground) %s" % [c[0], dy, top - g, "ok" if ok else "FAIL"])
+		if not ok:
+			# What is the body lying on?
+			var sp := get_world_3d().direct_space_state
+			var bq := PhysicsShapeQueryParameters3D.new()
+			var ball := SphereShape3D.new()
+			ball.radius = 0.6
+			bq.shape = ball
+			bq.transform = Transform3D(Basis.IDENTITY, b.global_position)
+			bq.collision_mask = 1 | 4
+			bq.exclude = [b.get_rid()]
+			for hit in sp.intersect_shape(bq, 8):
+				var co: Object = hit["collider"]
+				var sn = _shape_node(co as CollisionObject3D, int(hit["shape"])) if co is CollisionObject3D else null
+				print("[corpse]   touching %s %s near %s" % [co.name if co is Node else str(co), str((sn as CollisionShape3D).shape) if sn is CollisionShape3D else "", _place_name(b.global_position)])
+			print("[corpse]   at %s" % str(b.global_position.snapped(Vector3.ONE * 0.01)))
 	print("[corpse] ", "ALL GOOD" if fails == 0 else "%d FAILED" % fails)
 	get_tree().quit()
 

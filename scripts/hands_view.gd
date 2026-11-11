@@ -499,7 +499,7 @@ func _sleeves(down: bool) -> void:
 	for a: Node3D in [arm_l, arm_r]:
 		var bare: MeshInstance3D = a.get_meta("bare")
 		bare.material_override = m
-		bare.scale = Vector3(1.22, 1.0, 1.22) if down else Vector3.ONE
+		bare.scale = Vector3(1.08, 1.0, 1.08) if down else Vector3.ONE
 
 
 func _pose_gun() -> void:
@@ -537,7 +537,7 @@ func _pose_gun() -> void:
 	var wf: Transform3D = pf * sc.call(_grip_cyl(0.024, true))
 	arm_l.transform = Transform3D(wf.basis.scaled(Vector3.ONE * hs), wf.origin)
 	_aim_fore(arm_l, ELBOW_L)
-	_curl(arm_l, 0.9, 0.55)
+	_curl(arm_l, 1.25, 0.7)
 
 
 func _place(arm: Node3D, xf: Transform3D, elbow: Vector3) -> void:
