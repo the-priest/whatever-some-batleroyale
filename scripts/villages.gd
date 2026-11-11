@@ -25,6 +25,8 @@ const LOTS := [
 var terrain: Terrain
 var rng := RandomNumberGenerator.new()
 var houses: Array[Dictionary] = []
+## Where the chimney stacks open, for the smoke.
+var chimney_tops: Array[Vector3] = []
 var village_pads: Array[Dictionary] = []
 var roads: Array[Dictionary] = []
 var loot_points: Array[Dictionary] = []
@@ -506,9 +508,77 @@ func _gable_chimney(h: Dictionary, origin: Vector3, hb: Basis, swapped: bool, sp
 			_proc_box(Transform3D(hb.scaled_local(Vector3(0.96, stack_h + 0.12, 1.0)), wp + Vector3(0, stack_h * 0.5, 0)), "stone")
 			# A broader stepped base and a little hearth plinth.
 			_proc_box(Transform3D(hb.scaled_local(Vector3(1.25, 0.9, 1.15)), wp + Vector3(0, 0.45, 0)), "stone")
-			_place("Prop_Chimney" if rng.randf() < 0.5 else "Prop_Chimney2", wp + Vector3(0, stack_h - 0.02, 0), yaw, false, Vector3.ZERO)
+			var ck := "Prop_Chimney" if rng.randf() < 0.5 else "Prop_Chimney2"
+			_place(ck, wp + Vector3(0, stack_h - 0.02, 0), yaw, false, Vector3.ZERO)
+			var cd := _model(ck)
+			if not cd.is_empty():
+				var ab: AABB = cd.aabb
+				chimney_tops.append(wp + Vector3(0, stack_h - 0.02, 0) + Basis(Vector3.UP, yaw) * Vector3(ab.get_center().x, ab.end.y, ab.get_center().z))
 			_add_box_collider(wp + Vector3(0, top * 0.5, 0), Vector3(1.0, top, 1.05), yaw)
 			return
+
+
+## A thin wisp of wood smoke from some of the chimneys: somebody's at home.
+func _chimney_smoke() -> void:
+	if chimney_tops.is_empty() or DisplayServer.get_name() == "headless":
+		return
+	var pm := ParticleProcessMaterial.new()
+	pm.direction = Vector3(0, 1, 0)
+	pm.spread = 8.0
+	pm.initial_velocity_min = 0.6
+	pm.initial_velocity_max = 1.0
+	# Drifting off downwind and rising, slowing as it cools.
+	pm.gravity = Vector3(0.45, 0.25, 0.15)
+	pm.damping_min = 0.1
+	pm.damping_max = 0.2
+	pm.angle_min = -180.0
+	pm.angle_max = 180.0
+	pm.scale_min = 0.6
+	pm.scale_max = 1.0
+	var curve := Curve.new()
+	curve.add_point(Vector2(0, 0.35))
+	curve.add_point(Vector2(1, 2.6))
+	var ct := CurveTexture.new()
+	ct.curve = curve
+	pm.scale_curve = ct
+	var grad := Gradient.new()
+	grad.set_color(0, Color(0.72, 0.71, 0.70, 0.0))
+	grad.add_point(0.1, Color(0.66, 0.65, 0.64, 0.5))
+	grad.set_color(grad.get_point_count() - 1, Color(0.82, 0.82, 0.82, 0.0))
+	var gt := GradientTexture1D.new()
+	gt.gradient = grad
+	pm.color_ramp = gt
+	var q := QuadMesh.new()
+	q.size = Vector2(1.5, 1.5)
+	var qm := StandardMaterial3D.new()
+	qm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	qm.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	qm.vertex_color_use_as_albedo = true
+	qm.albedo_texture = load("res://assets/textures/tex_cloud.png")
+	qm.roughness = 1.0
+	qm.disable_receive_shadows = true
+	q.material = qm
+	var lit := 0
+	for i in chimney_tops.size():
+		# About two houses in five have the fire going.
+		# (A fixed hash, not the village rng: nothing generated later may shift.)
+		if (i * 7919 + 13) % 5 >= 2:
+			continue
+		var p := GPUParticles3D.new()
+		p.amount = 16
+		p.lifetime = 8.0
+		p.preprocess = 8.0
+		p.process_material = pm
+		p.draw_pass_1 = q
+		p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		p.visibility_aabb = AABB(Vector3(-4, -1, -4), Vector3(14, 14, 14))
+		p.visibility_range_end = 260.0
+		p.visibility_range_end_margin = 30.0
+		p.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+		p.position = chimney_tops[i] + Vector3(0, 0.15, 0)
+		add_child(p)
+		lit += 1
+	print("[villages] chimney smoke from %d of %d chimneys" % [lit, chimney_tops.size()])
 
 
 ## Separating-axis test for two house footprints grown by `margin`.
@@ -1079,12 +1149,24 @@ func _build_village_extras() -> void:
 					continue
 				_fence_piece(c2, -ang - PI * 0.5)
 		else:
-			for i in rng.randi_range(6, 12):
-				var ang := rng.randf() * TAU
-				var c2 := site + Vector2(cos(ang), sin(ang)) * rng.randf_range(vr - 6.0, vr - 2.0)
-				if _on_road(c2, 1.2) or not house_at(c2, 1.2).is_empty():
+			# A few runs of old fence along the edge of town, each length
+			# meeting the next, never one lost piece standing in a field.
+			for run in rng.randi_range(2, 3):
+				var fr := rng.randf_range(vr - 5.0, vr - 2.5)
+				var step := (FENCE_LEN - 0.04) / fr
+				var a0 := rng.randf() * TAU
+				var pieces: Array[Vector2] = []
+				for i in rng.randi_range(3, 6):
+					var ang := a0 + step * (float(i) + 0.5)
+					var c2 := site + Vector2(cos(ang), sin(ang)) * fr * cos(step * 0.5)
+					if _on_road(c2, 1.2) or not house_at(c2, 1.2).is_empty():
+						break
+					pieces.append(c2)
+				if pieces.size() < 2:
 					continue
-				_fence_piece(c2, -ang - PI * 0.5 + rng.randf_range(-0.12, 0.12))
+				for i in pieces.size():
+					var ang := a0 + step * (float(i) + 0.5)
+					_fence_piece(pieces[i], -ang - PI * 0.5)
 
 		# Vines climbing a couple of house walls.
 		for h in houses:
@@ -1672,6 +1754,7 @@ func _commit_proc() -> void:
 func _commit_batches() -> void:
 	_commit_proc()
 	_commit_barrels()
+	_chimney_smoke()
 	_commit_gables()
 	for bkey in _batches:
 		var key: String = bkey.split("|")[0]
