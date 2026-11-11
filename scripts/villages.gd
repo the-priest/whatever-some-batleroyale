@@ -25,6 +25,25 @@ const LOTS := [
 var terrain: Terrain
 var rng := RandomNumberGenerator.new()
 var houses: Array[Dictionary] = []
+static var _roof_mat: ShaderMaterial = null
+
+
+static func _roof_tile_material(src: BaseMaterial3D) -> ShaderMaterial:
+	if _roof_mat == null:
+		_roof_mat = ShaderMaterial.new()
+		_roof_mat.shader = load("res://shaders/roof_tiles.gdshader")
+		_roof_mat.set_shader_parameter("albedo_tex", src.albedo_texture)
+		_roof_mat.set_shader_parameter("normal_tex", src.normal_texture)
+		_roof_mat.set_shader_parameter("rough_tex", src.roughness_texture)
+		_roof_mat.set_shader_parameter("rough", src.roughness)
+		_roof_mat.set_shader_parameter("tint", Color(1, 1, 1))
+	return _roof_mat
+
+
+## Roof tile colours, house by house (rgb the hue, a how far from the
+## terracotta): terracotta three in eight, slate, dark brown, moss, faded
+## red, old grey.
+const ROOF_TINTS := [Color(1, 1, 1, 0), Color(1, 1, 1, 0), Color(1, 1, 1, 0), Color(0.4, 0.42, 0.45, 0.9), Color(0.44, 0.31, 0.23, 0.85), Color(0.4, 0.43, 0.3, 0.75), Color(0.66, 0.33, 0.24, 0.4), Color(0.47, 0.46, 0.44, 0.8)]
 ## Where the chimney stacks open, for the smoke.
 var chimney_tops: Array[Vector3] = []
 var village_pads: Array[Dictionary] = []
@@ -1551,6 +1570,10 @@ func _model(key: String) -> Dictionary:
 		if mat is BaseMaterial3D:
 			var copy := (mat as BaseMaterial3D).duplicate() as BaseMaterial3D
 			copy.cull_mode = BaseMaterial3D.CULL_DISABLED
+			# Roof tiles take each house's own colour (see ROOF_TINTS).
+			if key.begins_with("Roof_RoundTiles") and mat.resource_name.contains("Tiles"):
+				mesh.surface_set_material(s, _roof_tile_material(copy))
+				continue
 			mesh.surface_set_material(s, copy)
 	var aabb: AABB = mi.transform * mesh.get_aabb()
 	var data := {"mesh": mesh, "aabb": aabb}
@@ -1764,10 +1787,16 @@ func _commit_batches() -> void:
 		var transforms: Array = _batches[bkey]
 		var mm := MultiMesh.new()
 		mm.transform_format = MultiMesh.TRANSFORM_3D
+		var tinted := key.begins_with("Roof_RoundTiles")
+		mm.use_colors = tinted
 		mm.mesh = data.mesh
 		mm.instance_count = transforms.size()
 		for i in transforms.size():
 			mm.set_instance_transform(i, transforms[i])
+			if tinted:
+				var o: Vector3 = (transforms[i] as Transform3D).origin
+				var hsh := int(absf(sin(o.x * 12.9898 + o.z * 78.233)) * 43758.5453)
+				mm.set_instance_color(i, ROOF_TINTS[hsh % ROOF_TINTS.size()])
 		var mmi := MultiMeshInstance3D.new()
 		mmi.name = "V_" + bkey.replace("|", "_")
 		mmi.multimesh = mm
