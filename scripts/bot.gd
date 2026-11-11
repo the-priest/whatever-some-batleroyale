@@ -1354,6 +1354,15 @@ func _wrap_route(pts: Array) -> Array:
 
 
 ## Walk up small ledges (stair edges, floor lips, kerbs) like the player does.
+## A footstep you can hear, and see: dust off a dirt road at a run, a splash
+## in the shallows.
+func _step_fx(planar: float) -> void:
+	var surf: String = game.surface_at(global_position)
+	game.play_sfx_at("step_%s_%d" % [surf, randi() % 4 + 1], global_position, 1.0 if planar > 5.5 else -3.0)
+	if (surf == "dirt" and planar > 5.5) or surf == "water":
+		game.step_puff(global_position, surf == "water")
+
+
 func _step_up(wish: Vector3, grounded: bool) -> void:
 	if not grounded or wish.length() < 0.5:
 		return
@@ -1448,7 +1457,7 @@ func _animate_ground() -> void:
 		if _step > 2.9:
 			_step = 0.0
 			if game != null and game.player != null and game.player.global_position.distance_to(global_position) < 42.0:
-				game.play_sfx_at("step_%s_%d" % [game.surface_at(global_position), randi() % 4 + 1], global_position, 1.0 if planar > 5.5 else -3.0)
+				_step_fx(planar)
 	if is_on_floor() and planar > 0.4:
 		var want := "Sprint" if planar > 5.6 else ("Jog_Fwd" if planar > 2.6 else "Walk")
 		if crouched:
@@ -1606,7 +1615,7 @@ func _puppet_tick(delta: float) -> void:
 				if _step > 2.9:
 					_step = 0.0
 					if game != null and game.player != null and game.player.global_position.distance_to(global_position) < 42.0:
-						game.play_sfx_at("step_%s_%d" % [game.surface_at(global_position), randi() % 4 + 1], global_position, 1.0 if planar > 5.5 else -3.0)
+						_step_fx(planar)
 			else:
 				_play("Crouch_Idle" if crouched else "Idle")
 	if body != null:

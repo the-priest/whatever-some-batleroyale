@@ -2191,6 +2191,18 @@ func _sparks(pos: Vector3, n: Vector3) -> void:
 		tw.tween_callback(c.queue_free)
 
 
+## A footstep's puff of dust, or a splash in the shallows.
+func step_puff(pos: Vector3, wet: bool) -> void:
+	if player == null or pos.distance_to(player.global_position) > 60.0:
+		return
+	var at := pos + Vector3(randf_range(-0.15, 0.15), 0.08, randf_range(-0.15, 0.15))
+	if wet:
+		at.y = terrain.water_surface_at(pos.x, pos.z) + 0.04
+		_puff(at, Color(0.85, 0.92, 0.95, 0.55), 1.2, 5.0)
+	else:
+		_puff(at, Color(0.55, 0.47, 0.36, 0.32), 1.6, 6.5)
+
+
 func spawn_explosion(pos: Vector3) -> void:
 	sfx.play_at("explosion", pos, 4.0, 0.1)
 	var light := OmniLight3D.new()

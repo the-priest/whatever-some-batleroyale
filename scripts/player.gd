@@ -2200,6 +2200,12 @@ func _footstep() -> void:
 	elif _ap("crouch"):
 		db = -18.0
 	game.sfx.play_2d("step_%s_%d" % [surf, randi() % 4 + 1], db, 0.07)
+	# Dust off a dirt road when you run, a splash when you wade. Seen by
+	# looking down, and by whoever is watching you.
+	if sprinting and surf == "dirt" and game.has_method("step_puff"):
+		game.step_puff(global_position, false)
+	elif surf == "water" and game.has_method("step_puff"):
+		game.step_puff(global_position, true)
 	if sprinting and randf() < 0.45:
 		game.sfx.play_2d("gear_rattle", db - 9.0, 0.1)
 
