@@ -236,8 +236,91 @@ static func ads_pos(id: String, optic: String = "") -> Vector3:
 	if optic != "" and optic_kind(optic) != "":
 		var oy := optic_center_y(id, optic)
 		return Vector3(0.0, -oy, z - 0.02)
-	var top: float = maxf(float(m.get("sight_y", 0.08)), float(m.get("front_y", 0.0)))
-	return Vector3(0.0, -top * s - 0.003, z)
+	# Iron sights: the line through the rear aperture and the front post.
+	return Vector3(0.0, -iron_line(id), z)
+
+
+## Height of the iron sight line above the gun's centre line (view metres):
+## just over the highest point of the gun.
+static func iron_line(id: String) -> float:
+	var s := view_scale(id)
+	var m := model(id)
+	var top: float = maxf(float(m.get("sight_y", 0.08)), float(m.get("front_y", 0.0))) * s
+	return top + (0.006 if cls(id) == "pistol" else 0.011)
+
+
+## Iron sights for a gun with no optic on it. Rifles, SMGs, shotguns and
+## sniper rifles: a rear aperture ring between protective wings and a hooded
+## front post with a glowing dot. Pistols: a notch, a post, three white dots.
+## Built in the gun holder's space, on the sight line ads_pos aims along.
+static func build_irons(id: String) -> Node3D:
+	var root := Node3D.new()
+	root.name = "Irons"
+	var s := view_scale(id)
+	var h := iron_line(id)
+	var top := h - (0.006 if cls(id) == "pistol" else 0.011)
+	var body := _omat("body")
+	var along := Vector3(PI * 0.5, 0, 0)
+	# Where the eye is when aiming, along the gun (see ads_pos).
+	var eye_z := (0.27 if cls(id) == "pistol" else s * 0.5 - 0.06)
+	if cls(id) == "pistol":
+		var rz := minf(eye_z - 0.17, s * 0.42)
+		var fz := -s * 0.44
+		# Rear: a block with a square notch, a white dot each side of it.
+		for sx: float in [-1.0, 1.0]:
+			var w := BoxMesh.new()
+			w.size = Vector3(0.0045, h - top + 0.0035, 0.006)
+			_opart(root, w, body, Vector3(sx * 0.0043, (h + top) * 0.5 - 0.0005, rz))
+			var dot := SphereMesh.new()
+			dot.radius = 0.0009
+			dot.height = 0.0018
+			_opart(root, dot, _omat("irondot"), Vector3(sx * 0.0043, h - 0.0012, rz - 0.0031))
+		# Front: a thin post with a dot on its face.
+		var post := BoxMesh.new()
+		post.size = Vector3(0.0028, h - top + 0.0008, 0.005)
+		_opart(root, post, body, Vector3(0, (h + top) * 0.5 - 0.0004, fz))
+		var fdot := SphereMesh.new()
+		fdot.radius = 0.001
+		fdot.height = 0.002
+		_opart(root, fdot, _omat("irondot"), Vector3(0, h - 0.0011, fz + 0.0026))
+		return root
+	var rz := minf(eye_z - 0.1, s * 0.3)
+	var fz := -s * 0.44
+	# Rear sight: a base on the receiver, a ring, two wings guarding it.
+	var base := BoxMesh.new()
+	base.size = Vector3(0.016, 0.004, 0.014)
+	_opart(root, base, body, Vector3(0, top + 0.002, rz))
+	var ring := TorusMesh.new()
+	ring.inner_radius = 0.0034
+	ring.outer_radius = 0.0052
+	ring.rings = 20
+	ring.ring_segments = 8
+	_opart(root, ring, body, Vector3(0, h, rz), along)
+	var stem := BoxMesh.new()
+	stem.size = Vector3(0.003, h - top - 0.004, 0.004)
+	_opart(root, stem, body, Vector3(0, top + 0.002 + (h - top - 0.004) * 0.5, rz))
+	for sx: float in [-1.0, 1.0]:
+		var wing := BoxMesh.new()
+		wing.size = Vector3(0.0022, h - top + 0.005, 0.009)
+		_opart(root, wing, body, Vector3(sx * 0.0078, top + (h - top + 0.005) * 0.5, rz), Vector3(0, 0, -sx * 0.12))
+	# Front sight: a post on a block, inside a round hood.
+	var fbase := BoxMesh.new()
+	fbase.size = Vector3(0.011, 0.005, 0.01)
+	_opart(root, fbase, body, Vector3(0, top + 0.0025, fz))
+	var fpost := BoxMesh.new()
+	fpost.size = Vector3(0.0018, h - top - 0.002, 0.0028)
+	_opart(root, fpost, body, Vector3(0, top + 0.002 + (h - top - 0.002) * 0.5 - 0.0008, fz))
+	var hood := TorusMesh.new()
+	hood.inner_radius = 0.0062
+	hood.outer_radius = 0.0074
+	hood.rings = 22
+	hood.ring_segments = 6
+	_opart(root, hood, body, Vector3(0, h - 0.0005, fz), along)
+	var tip := SphereMesh.new()
+	tip.radius = 0.0009
+	tip.height = 0.0018
+	_opart(root, tip, _omat("tritium"), Vector3(0, h - 0.0005, fz + 0.0016))
+	return root
 
 
 # --------------------------------------------------------------- optics ----
@@ -272,6 +355,21 @@ static func _omat(key: String) -> Material:
 		return _optic_mats[key]
 	var m := StandardMaterial3D.new()
 	match key:
+		"irondot":
+			m.albedo_color = Color(0.95, 0.95, 0.9)
+			m.emission_enabled = true
+			m.emission = Color(1, 1, 0.95)
+			m.emission_energy_multiplier = 0.4
+			_optic_mats[key] = m
+			return m
+		"tritium":
+			m.albedo_color = Color(0.5, 1.0, 0.45)
+			m.emission_enabled = true
+			m.emission = Color(0.45, 1.0, 0.4)
+			m.emission_energy_multiplier = 1.6
+			m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			_optic_mats[key] = m
+			return m
 		"body":
 			m.albedo_color = Color(0.075, 0.078, 0.085)
 			m.roughness = 0.42
@@ -572,6 +670,7 @@ static func model(id: String) -> Dictionary:
 	var out := {
 		"grip": hands[0],
 		"fore": hands[1],
+		"fore_vertical": hands[2],
 		"body": body,
 		"mag": mag if has_mag and mag.get_surface_count() > 0 else null,
 		"mag_center": mag_center,
@@ -602,6 +701,13 @@ static func _hand_points(tris: Array, low_cut: float, y_min: float, mag_mode: St
 			groups[-1].append(k)
 	groups = groups.filter(func(g): return g.size() >= 2)
 	var gz := func(g: Array) -> float: return (float(g[0]) + float(g[-1]) + 1.0) * 0.01
+	if OS.get_environment("DBG_GRIPS") != "":
+		for g in groups:
+			var lo := 1e9
+			for k in g:
+				lo = minf(lo, float(bins[k]))
+			print("  group z %.2f..%.2f depth %.2f" % [float(g[0]) * 0.02, (float(g[-1]) + 1.0) * 0.02, low_cut - lo])
+		print("  mag ", mag_c, " low_cut ", low_cut)
 	var gl := func(g: Array) -> float:
 		var lo := 1e9
 		for k in g:
@@ -647,7 +753,25 @@ static func _hand_points(tris: Array, low_cut: float, y_min: float, mag_mode: St
 		for wv in (t["v"] as PackedVector3Array):
 			if absf(wv.z - fz) < 0.03 and wv.y < under:
 				under = minf(under, wv.y) if wv.y > low_cut - 0.08 else under
-	return [grip, Vector3(0, under, fz)]
+	# A vertical foregrip: something deep hanging ahead of the grip that is
+	# not the magazine. The support hand closes round it instead.
+	if mag_mode == "rear":
+		# Bullpups: the front-most thing hanging well ahead of the grip.
+		for g in groups:
+			var z: float = gz.call(g)
+			var depth: float = low_cut - float(gl.call(g))
+			if z < grip.z - 0.2 and z > -0.46 and depth > 0.02:
+				return [grip, Vector3(0, low_cut - depth * 0.35, z), true]
+	if mag_mode == "front":
+		var best_depth := 0.07
+		for g in groups:
+			var z: float = gz.call(g)
+			if z < grip.z - 0.12 and z > -0.46 and (mag_c == Vector3.INF or absf(z - mag_c.z) > 0.07):
+				var depth: float = low_cut - float(gl.call(g))
+				if depth > best_depth:
+					best_depth = depth
+					return [grip, Vector3(0, low_cut - depth * 0.5, z), true]
+	return [grip, Vector3(0, under, fz), false]
 
 
 static func _add_surface(m: ArrayMesh, v: PackedVector3Array, n: PackedVector3Array, mat: Material) -> void:
@@ -692,6 +816,9 @@ static func _gun_material(src: Material) -> Material:
 		col = (src as BaseMaterial3D).albedo_color
 		name = src.resource_name.to_lower()
 	var m := StandardMaterial3D.new()
+	if name.begins_with("main") and col.r * 0.3 + col.g * 0.59 + col.b * 0.11 < 0.06:
+		# The same part names on an all-black gun: keep it black.
+		name = "black" if name != "mainlight" else "grey"
 	if GUN_FINISH.has(name):
 		# A proper finish for each part: walnut, blued and parkerised steel,
 		# polymer, a tan furniture set, glass.

@@ -1105,7 +1105,8 @@ func _update_hands(delta: float) -> void:
 		if md.has("grip"):
 			var gl := float(Weapons.def(current_id()).get("len", 0.8))
 			hands.set_gun({"xf": gun_holder.transform, "grip": md["grip"], "fore": md["fore"], "scale": _gun_scale,
-				"hand": clampf(_gun_scale / maxf(gl * 1.1, 0.2), 0.5, 0.95), "pistol": Weapons.cls(current_id()) == "pistol"})
+				"hand": clampf(_gun_scale / maxf(gl * 1.1, 0.2), 0.5, 0.95), "pistol": Weapons.cls(current_id()) == "pistol",
+				"fore_vertical": bool(md.get("fore_vertical", false))})
 		else:
 			hands.set_gun({})
 	else:
@@ -1164,9 +1165,10 @@ func _update_weapon(delta: float) -> void:
 	rot.x -= (1.0 - e) * 0.9
 	rot.z += (1.0 - e) * 0.4
 
-	# Landing dip.
-	pos.y -= land_dip * 0.05
-	rot.x -= land_dip * 0.15
+	# Landing dip (much smaller on the sights, so they stay on the target).
+	var ld := land_dip * (1.0 - ads_e * 0.8)
+	pos.y -= ld * 0.05
+	rot.x -= ld * 0.15
 
 	# Healing, throwing, vaulting: the gun drops out of the way of the hands.
 	var hb := heal_blend * heal_blend * (3.0 - 2.0 * heal_blend)
@@ -1221,6 +1223,7 @@ func _update_weapon(delta: float) -> void:
 	gun_holder.rotation = rot
 	# Where the gun sits on screen (Settings); aimed, it is on the sights.
 	view.position = vm_offset * (1.0 - ads_e)
+	hands.reload = _hand_reload(id)
 	hands.refresh_gun(gun_holder.transform)
 
 	# Sniper scope: hide the gun and let the HUD draw the scope.
@@ -1240,8 +1243,8 @@ func _reload_pose(t: float, id: String) -> Array:
 	var tilt := _seg(t, 0.0, 0.14) * (1.0 - _seg(t, 0.84, 1.0))
 	if Weapons.cls(id) == "shotgun":
 		# Roll the gun over, feed shells one by one, then rack the pump.
-		pos += Vector3(-0.02, -0.035, 0.02) * tilt
-		rot += Vector3(0.22, 0.10, -0.55) * tilt
+		pos += Vector3(-0.04, 0.06, -0.08) * tilt
+		rot += Vector3(0.1, 0.35, -0.9) * tilt
 		var shells := clampi(_reload_need, 1, 8)
 		var span := 0.62 / float(shells)
 		for i in shells:
@@ -1256,8 +1259,14 @@ func _reload_pose(t: float, id: String) -> Array:
 		return [pos, rot]
 
 	# Magazine weapons: tilt, mag out, new mag in, slap, charge.
-	pos += Vector3(-0.045, -0.015, 0.015) * tilt
-	rot += Vector3(0.22, 0.18, 0.26) * tilt
+	# Brought up and in, rolled over so the magazine well faces the eye.
+	var tp := Vector3(-0.05, 0.07, -0.1)
+	var tr := Vector3(0.12, 0.4, -0.55)
+	if Weapons.cls(id) == "pistol":
+		tp = Vector3(-0.03, 0.05, -0.06)
+		tr = Vector3(0.25, 0.3, -0.4)
+	pos += tp * tilt
+	rot += tr * tilt
 	if _mag_node != null:
 		var out := _seg(t, 0.16, 0.30)
 		var back_in := _seg(t, 0.40, 0.58)
@@ -1283,6 +1292,30 @@ func _reload_pose(t: float, id: String) -> Array:
 		rot.y += rack * 0.12
 		_reload_event("rack", t >= 0.72, rs + "rack", -1.0)
 	return [pos, rot]
+
+
+## What the support hand does during a reload (hands_view._place_left).
+func _hand_reload(id: String) -> Dictionary:
+	if not reloading or _gun_scale <= 0.0:
+		return {}
+	var md := Weapons.model(id)
+	if not md.has("grip"):
+		return {}
+	var rt := 1.0 - clampf(reload_timer / maxf(0.01, _reload_dur), 0.0, 1.0)
+	var grip: Vector3 = md["grip"]
+	var fore: Vector3 = md["fore"]
+	var top := float(md.get("sight_y", 0.08))
+	if _mag_node != null and Weapons.cls(id) != "shotgun":
+		var ab := _mag_node.mesh.get_aabb()
+		var low := Vector3(ab.get_center().x, ab.position.y + ab.size.y * 0.22, ab.get_center().z)
+		var mx := gun_holder.transform * (_mag_node.get_parent() as Node3D).transform * _mag_node.transform
+		return {"t": rt, "kind": "mag", "empty": _reload_was_empty, "mag": mx, "mag_low": low,
+			"rack": Vector3(-0.06, top * 0.85, grip.z - 0.1)}
+	# Tube or internal magazine: rounds go in one at a time.
+	var port := Vector3(0.0, fore.y - 0.01, lerpf(grip.z, fore.z, 0.3))
+	if Weapons.cls(id) != "shotgun":
+		port = Vector3(-0.02, top * 0.3, grip.z - 0.12)
+	return {"t": rt, "kind": "shell", "shells": clampi(_reload_need, 1, 8 if Weapons.cls(id) == "shotgun" else 5), "port": port}
 
 
 ## Reload sound set for a gun: "rl_<type>_" + out/grab/in/slap/rack.
@@ -1974,6 +2007,8 @@ func _rebuild_viewmodel() -> void:
 		var optic := Weapons.build_optic(_optic_id, oy - top)
 		optic.position = Vector3(0.0, oy, -0.02 if Weapons.cls(id) != "pistol" else 0.01)
 		gun_holder.add_child(optic)
+	else:
+		gun_holder.add_child(Weapons.build_irons(id))
 	equip_t = 0.0
 	aim_blend = 0.0
 	bolt_t = -1.0

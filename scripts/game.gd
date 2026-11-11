@@ -2842,6 +2842,7 @@ func _run_shot() -> void:
 			hud._bm_focus = Vector2(p.global_position.x, p.global_position.z)
 	if args.has("--aim"):
 		p.aim_blend = 1.0
+		p.land_dip = 0.0
 		Input.action_press("aim")
 	hud.set_prompt("")
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -2856,7 +2857,18 @@ func _run_shot() -> void:
 		for i in kinds.size():
 			var lp := p.global_position + fwd * (4.0 + float(i / 4) * 2.2) + right * (float(i % 4) - 1.5) * 1.6
 			_spawn_loot(kinds[i][0], kinds[i][1], ground_at(lp) + Vector3(0, 0.08, 0)).label.visible = true
+	# --reload=F: hold a reload at that point (0..1) for the picture.
+	var rl_at := -1.0
+	for a in args:
+		if a.begins_with("--reload="):
+			rl_at = float(a.substr(9))
+			p.mags[p.current_id()] = 0
+			p.ammo[Weapons.caliber(p.current_id())] = 90
+			p.start_reload()
 	for i in wait:
+		if rl_at >= 0.0 and p.reloading:
+			p.reload_timer = p._reload_dur * (1.0 - rl_at)
+			p._reload_events.clear()
 		await get_tree().process_frame
 		if args.has("--fire") and i % 6 == 0 and i > 20:
 			p.fire_timer = 0.0
@@ -3050,6 +3062,10 @@ func _run_shot() -> void:
 		if a2.begins_with("--state="):
 			await _shot_state(a2.substr(8))
 	print("[shot] frames waited")
+	if OS.get_environment("DBG_ADS") != "" and player != null:
+		print("[dbgads] holder=", player.gun_holder.position, " rot=", player.gun_holder.rotation, " view=", player.view.position, " ads=", Weapons.ads_pos(player.current_id(), player._optic_id), " blend=", player.aim_blend, " equip=", player.equip_t)
+		if player._mag_node != null:
+			print("[dbgads] magview=", player.view.global_transform.affine_inverse() * player._mag_node.global_position, " reload=", player.hands.reload, " arm_l=", player.hands.arm_l.position, " hands=", player.hands.transform)
 	if OS.get_environment("DBG_SHADOW") != "" and player != null:
 		var cp := player.camera.global_position
 		for n in get_tree().root.find_children("*", "GeometryInstance3D", true, false):
@@ -6176,12 +6192,30 @@ func _run_cheat_test() -> void:
 	var st := {"caught": -1.0, "died": false, "killer": ""}
 	anticheat.condemned.connect(func(_w, r): st["caught"] = (Time.get_ticks_msec() - t0) / 1000.0; print("[cheat] CONDEMNED after %.1fs: %s" % [st["caught"], r]))
 	print("[cheat] cheating: ", kind)
+	# Run the way with the most open ground, not into the nearest wall.
 	var fwd := Basis(Vector3.UP, p.yaw) * Vector3(0, 0, -1)
+	var best := -1.0
+	var space := p.get_world_3d().direct_space_state
+	for k in 16:
+		var dir := Vector3(sin(k * TAU / 16.0), 0.0, cos(k * TAU / 16.0))
+		var from := p.global_position + Vector3(0, 1.0, 0)
+		var q := PhysicsRayQueryParameters3D.create(from, from + dir * 120.0)
+		q.exclude = [p.get_rid()]
+		var hit := space.intersect_ray(q)
+		var free := 120.0 if hit.is_empty() else from.distance_to(hit.position)
+		if free > best:
+			best = free
+			fwd = dir
+	p.yaw = atan2(-fwd.x, -fwd.z)
 	for i in 600:
 		match kind:
 			"speed":
+				# Moved along the ground, so no fence or crate on the way
+				# can wedge the test body and hide the hack.
 				p.test_input = Vector2(0, -1)
-				p.global_position += fwd * 0.42
+				var np := p.global_position + fwd * 0.42
+				np.y = maxf(np.y, terrain.height_at(np.x, np.z) + 0.05)
+				p.global_position = np
 			"rapid":
 				p.fire_timer = 0.0
 				p.reloading = false

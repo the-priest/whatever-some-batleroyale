@@ -67,6 +67,8 @@ var g_spoon: Node3D
 var _drops: Array[MeshInstance3D] = []
 ## Holding a gun (when no item is in use): {xf, grip, fore, scale, hand, pistol}.
 var _gun: Dictionary = {}
+## Reload in progress (see player._hand_reload), {} when not reloading.
+var reload: Dictionary = {}
 var _debris: Dictionary = {}
 
 
@@ -527,17 +529,76 @@ func _pose_gun() -> void:
 		# Support hand wrapped round the shooting hand, a little lower.
 		var pl := gx * Transform3D(grip_b, (_gun.grip as Vector3) * s + Vector3(-0.004, -0.016, 0.006))
 		var wl: Transform3D = pl * sc.call(_grip_cyl(0.026, true))
-		arm_l.transform = Transform3D(wl.basis.scaled(Vector3.ONE * hs), wl.origin)
-		_aim_fore(arm_l, Vector3(-0.16, -0.6, -0.12))
-		_curl(arm_l, 1.05, 0.6)
+		_place_left(Transform3D(wl.basis.scaled(Vector3.ONE * hs), wl.origin), Vector3(-0.16, -0.6, -0.12), 1.05, 0.6)
+		return
+	if bool(_gun.get("fore_vertical", false)):
+		# Left hand round the vertical foregrip, leaning a little forward.
+		var pv := gx * Transform3D(Basis(Vector3.RIGHT, 0.12), (_gun.fore as Vector3) * s)
+		var wv: Transform3D = pv * sc.call(_grip_cyl(0.019, true))
+		_place_left(Transform3D(wv.basis.scaled(Vector3.ONE * hs), wv.origin), ELBOW_L, 1.15, 0.85)
 		return
 	# Left hand under the handguard, the barrel along its palm.
 	var fb := Basis(Vector3(1, 0, 0), Vector3(0, 0, -1), Vector3(0, 1, 0))
 	var pf := gx * Transform3D(fb, (_gun.fore as Vector3) * s + Vector3(0, -0.006, 0))
 	var wf: Transform3D = pf * sc.call(_grip_cyl(0.024, true))
-	arm_l.transform = Transform3D(wf.basis.scaled(Vector3.ONE * hs), wf.origin)
-	_aim_fore(arm_l, ELBOW_L)
-	_curl(arm_l, 1.25, 0.7)
+	_place_left(Transform3D(wf.basis.scaled(Vector3.ONE * hs), wf.origin), ELBOW_L, 1.25, 0.7)
+
+
+## The support hand: on the gun, or (reloading) off it to swap the magazine,
+## feed shells or work the charging handle.
+func _place_left(home: Transform3D, elbow: Vector3, curl: float, thumb: float) -> void:
+	var xf := home
+	var c := curl
+	if not reload.is_empty():
+		var t: float = reload.t
+		var hs: float = _gun.hand
+		var s: float = _gun.scale
+		var gx: Transform3D = _gun.xf
+		var sc := func(g: Transform3D) -> Transform3D:
+			var w := Transform3D(g.basis, g.origin * hs)
+			return Transform3D(w.basis.scaled(Vector3.ONE * hs), w.origin)
+		if str(reload.kind) == "mag":
+			# Hand round the bottom of the magazine (it follows it out of
+			# sight and back in with the new one), then home or onto the
+			# charging handle when the gun ran dry.
+			var mx: Transform3D = reload.mag
+			var mp: Vector3 = mx * (reload.mag_low as Vector3)
+			var on_mag: Transform3D = Transform3D(mx.basis.orthonormalized() * Basis(Vector3.RIGHT, 0.1), mp) * sc.call(_grip_cyl(0.021, true))
+			var on := _s(t, 0.08, 0.17)
+			var off := _s(t, 0.62, 0.70)
+			xf = home.interpolate_with(on_mag, on)
+			c = lerpf(curl, 1.1, on)
+			if bool(reload.empty) and not bool(_gun.pistol):
+				var pull := _bump(t, 0.70, 0.82)
+				var rp: Vector3 = (reload.rack as Vector3) * s + Vector3(0, 0, pull * 0.065)
+				var rk: Transform3D = gx * Transform3D(Basis(Vector3.RIGHT, -0.25), rp) * sc.call(_grip_cyl(0.008, true))
+				xf = xf.interpolate_with(rk, off)
+				var back := _s(t, 0.84, 0.93)
+				xf = xf.interpolate_with(home, back)
+				c = lerpf(lerpf(c, 1.35, off), curl, back)
+			else:
+				xf = xf.interpolate_with(home, off)
+				c = lerpf(c, curl, off)
+			# A little lift in between, not a straight slide.
+			xf.origin.y += 0.03 * (_bump(t, 0.08, 0.17) + _bump(t, 0.62, 0.70))
+		elif str(reload.kind) == "shell":
+			# Shell by shell: down to the belt, up to the loading port.
+			var fb := Basis(Vector3(1, 0, 0), Vector3(0, 0, -1), Vector3(0, 1, 0))
+			var port: Transform3D = gx * Transform3D(fb, (reload.port as Vector3) * s) * sc.call(_grip_cyl(0.02, true))
+			var n := maxi(1, int(reload.shells))
+			var span := 0.62 / float(n)
+			var on := _s(t, 0.06, 0.14) * (1.0 - _s(t, 0.76, 0.86))
+			var dip := 0.0
+			if t > 0.14 and t < 0.76:
+				var ph := fmod((t - 0.14) / span, 1.0)
+				dip = _bump(ph, 0.0, 0.5)
+			var at_port := port
+			at_port.origin += Vector3(-0.05, -0.2, 0.08) * dip
+			xf = home.interpolate_with(at_port, on)
+			c = lerpf(curl, lerpf(0.9, 0.5, dip), on)
+	arm_l.transform = xf
+	_aim_fore(arm_l, elbow)
+	_curl(arm_l, c, thumb)
 
 
 func _place(arm: Node3D, xf: Transform3D, elbow: Vector3) -> void:
