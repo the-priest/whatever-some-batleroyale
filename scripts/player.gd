@@ -1259,7 +1259,7 @@ func _update_weapon(delta: float) -> void:
 		var t := _inspect
 		var a := _seg(t, 0.0, 0.18) * (1.0 - _seg(t, 0.45, 0.6))
 		var b := _seg(t, 0.45, 0.6) * (1.0 - _seg(t, 0.85, 1.0))
-		pos += Vector3(-0.1, 0.05, 0.05) * a + Vector3(-0.07, 0.03, 0.03) * b
+		pos += Vector3(-0.1, 0.05, -0.06) * a + Vector3(-0.07, 0.04, -0.07) * b
 		rot += Vector3(0.12, 0.95, 0.35) * a + Vector3(0.2, 0.5, -1.15) * b
 		pos.y += sin(t * TAU * 2.0) * 0.004 * (a + b)
 	# Up against a wall the gun comes back and up to high ready instead of
