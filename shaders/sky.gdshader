@@ -16,6 +16,9 @@ uniform float cover = 0.45;
 uniform vec3 cloud_tint : source_color = vec3(1.0);
 uniform float cloud_dark = 0.55;
 uniform float wind = 1.0;
+// Cloud drift in seconds, advanced from the script every few seconds (the
+// built-in clock here would redo the sky's lighting every frame).
+uniform float drift = 0.0;
 
 float hash(vec2 p) {
 	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
@@ -64,7 +67,7 @@ void sky() {
 	}
 	// Clouds: a layer at "height" 1 seen along the ray.
 	if (y > 0.015 && cover > 0.01) {
-		float t = TIME * 0.004 * wind;
+		float t = drift * 0.004 * wind;
 		vec2 uv = d.xz / (y + 0.06) * 0.9;
 		int oct = AT_CUBEMAP_PASS ? 3 : 5;
 		float base = fbm(uv * 1.2 + vec2(t, t * 0.6), oct);

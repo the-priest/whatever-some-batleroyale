@@ -157,6 +157,10 @@ func _build_lighting() -> void:
 	var sky_mat := ShaderMaterial.new()
 	sky_mat.shader = load("res://shaders/sky.gdshader")
 	sky.sky_material = sky_mat
+	# The clouds move by a uniform every few seconds; spread the lighting
+	# update over frames rather than redoing it all at once.
+	sky.process_mode = Sky.PROCESS_MODE_INCREMENTAL
+	sky.radiance_size = Sky.RADIANCE_SIZE_128
 	sky_material = sky_mat
 	env.sky = sky
 

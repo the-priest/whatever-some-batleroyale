@@ -1293,7 +1293,15 @@ func set_underwater(on: bool) -> void:
 
 
 ## Heartbeat when hurt, storm rumble when outside the zone.
+var _drift_t := 0.0
+
+
 func _update_ambience(delta: float) -> void:
+	# Clouds creep across the sky: a step every few seconds is enough.
+	_drift_t -= delta
+	if _drift_t <= 0.0 and world != null and world.sky_material != null:
+		_drift_t = 3.0
+		world.sky_material.set_shader_parameter("drift", float(Time.get_ticks_msec()) / 1000.0)
 	if player == null:
 		return
 	if player.alive and player.hp < 30.0 and player.mode == Player.Mode.GROUND:
