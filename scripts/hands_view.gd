@@ -538,10 +538,10 @@ func _pose_gun() -> void:
 		_place_left(Transform3D(wv.basis.scaled(Vector3.ONE * hs), wv.origin), ELBOW_L, 1.15, 0.85)
 		return
 	# Left hand under the handguard, the barrel along its palm.
-	var fb := Basis(Vector3(1, 0, 0), Vector3(0, 0, -1), Vector3(0, 1, 0))
-	var pf := gx * Transform3D(fb, (_gun.fore as Vector3) * s + Vector3(0, -0.006, 0))
-	var wf: Transform3D = pf * sc.call(_grip_cyl(0.024, true))
-	_place_left(Transform3D(wf.basis.scaled(Vector3.ONE * hs), wf.origin), ELBOW_L, 1.25, 0.7)
+	var fb := CRADLE
+	var pf := gx * Transform3D(fb, (_gun.fore as Vector3) * s + Vector3(0, 0.016, 0))
+	var wf: Transform3D = pf * sc.call(_grip_cyl(0.014, true))
+	_place_left(Transform3D(wf.basis.scaled(Vector3.ONE * hs), wf.origin), ELBOW_L, 1.4, 0.9)
 
 
 ## The support hand: on the gun, or (reloading) off it to swap the magazine,
@@ -583,7 +583,7 @@ func _place_left(home: Transform3D, elbow: Vector3, curl: float, thumb: float) -
 			xf.origin.y += 0.03 * (_bump(t, 0.08, 0.17) + _bump(t, 0.62, 0.70))
 		elif str(reload.kind) == "shell":
 			# Shell by shell: down to the belt, up to the loading port.
-			var fb := Basis(Vector3(1, 0, 0), Vector3(0, 0, -1), Vector3(0, 1, 0))
+			var fb := CRADLE
 			var port: Transform3D = gx * Transform3D(fb, (reload.port as Vector3) * s) * sc.call(_grip_cyl(0.02, true))
 			var n := maxi(1, int(reload.shells))
 			var span := 0.62 / float(n)
@@ -607,6 +607,9 @@ func _place(arm: Node3D, xf: Transform3D, elbow: Vector3) -> void:
 
 
 const ELBOW_L := Vector3(-0.3, -0.62, -0.2)
+## Support hand under a handguard (the prop's Y axis along the barrel): palm
+## up under it, fingers wrapping up the right side, wrist off to the lower left.
+const CRADLE := Basis(Vector3(-0.301, 0.954, 0.0), Vector3(0, 0, -1), Vector3(-0.954, -0.301, 0.0))
 const ELBOW_R := Vector3(0.3, -0.62, -0.18)
 const OFF_L := Vector3(-0.22, -0.42, -0.2)
 const OFF_R := Vector3(0.22, -0.42, -0.2)

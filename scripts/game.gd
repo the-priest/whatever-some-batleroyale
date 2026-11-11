@@ -41,6 +41,7 @@ const HEAR_RANGE := 70.0
 const PING_RANGE := 160.0
 
 var world: WorldBuilder
+var wildlife: Wildlife = null
 var terrain: Terrain
 var player: Player
 var plane: DropPlane
@@ -362,6 +363,11 @@ func _build_world() -> void:
 	world.progress.connect(hud.show_loading)
 	await world.build(seed_value)
 	terrain = world.terrain
+	if wildlife == null:
+		wildlife = Wildlife.new()
+		wildlife.name = "Wildlife"
+		add_child(wildlife)
+	wildlife.setup(self)
 	_apply_graphics()
 	print("[game] world seed %d built in %d ms, loot=%d" % [seed_value, Time.get_ticks_msec() - t0, world.loot_points.size()])
 	# The bots' walking grid, while the loading screen is still up.
@@ -1901,6 +1907,8 @@ func on_player_hit(_pos: Vector3, dmg: float, _headshot: bool) -> void:
 
 ## Every gunshot: nearby bots hear it, distant ones show on the map.
 func on_gunshot(pos: Vector3, shooter: Node) -> void:
+	if wildlife != null:
+		wildlife.gunshot(pos)
 	for b in bots:
 		if is_instance_valid(b) and b != shooter and b.alive and b.global_position.distance_to(pos) < HEAR_RANGE:
 			b.hear_shot(pos, shooter)
