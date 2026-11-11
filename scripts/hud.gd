@@ -1271,7 +1271,7 @@ func _build_keys(t: Array) -> void:
 	var cols: Array = [t[0], t[1]]
 	for c: VBoxContainer in cols:
 		c.add_theme_constant_override("separation", 3)
-	var half := int(ceil(Keybinds.BINDABLE.size() / 2.0))
+	var half := int(ceil((Keybinds.BINDABLE.size() + 1) / 2.0))
 	for i in Keybinds.BINDABLE.size():
 		var b: Array = Keybinds.BINDABLE[i]
 		var row := HBoxContainer.new()
@@ -1614,13 +1614,13 @@ func set_inventory(p: Player) -> void:
 	lbl_meds.text = ""
 	var parts: Array[String] = []
 	if p.bandages > 0:
-		parts.append("[4] BANDAGE ×%d" % p.bandages)
+		parts.append("[%s] BANDAGE ×%d" % [Keybinds.key("use_bandage"), p.bandages])
 	if p.meds > 0:
-		parts.append("[5] MEDKIT ×%d" % p.meds)
+		parts.append("[%s] MEDKIT ×%d" % [Keybinds.key("use_med"), p.meds])
 	if p.energy > 0:
-		parts.append("[6] ENERGY ×%d" % p.energy)
+		parts.append("[%s] ENERGY ×%d" % [Keybinds.key("use_energy"), p.energy])
 	if p.grenades > 0:
-		parts.append("[G] FRAG ×%d" % p.grenades)
+		parts.append("[%s] FRAG ×%d" % [Keybinds.key("grenade"), p.grenades])
 	var ammo_parts: Array[String] = []
 	for cal in ["9mm", "5.56", "7.62", "12ga"]:
 		if p.ammo_of(cal) > 0:
