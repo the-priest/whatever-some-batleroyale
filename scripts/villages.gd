@@ -913,6 +913,7 @@ func _build_house(h: Dictionary) -> void:
 			loot_points.append({"pos": lp, "kind": "weapon" if i == 0 else "gear", "village": true, "tier": "hi" if rng.randf() < 0.25 else ""})
 
 	# A chimney-ish crate stack + a couple of interior props.
+	var crate_corner := Vector2.INF
 	if rng.randf() < 0.75:
 		# Crates sit in a corner: never in the doorway, the walkway or on the
 		# stairs.
@@ -933,26 +934,75 @@ func _build_house(h: Dictionary) -> void:
 			var crate_pos: Vector3 = origin + house_basis * crate_local
 			_place("Prop_Crate", crate_pos, yaw_house + rng.randf_range(-0.3, 0.3))
 			_add_box_collider(crate_pos + Vector3(0, 0.53, 0), Vector3(1.06, 1.06, 1.06), yaw_house)
+			crate_corner = best
 
 	_furnish(origin, house_basis, w, d, levels, up_loot_from)
+	var table := _table(origin, house_basis, yaw_house, w, d, levels, int(h.door_side), crate_corner)
 
 	# Loot spots inside; at least one gun guaranteed per house by the loot manager.
 	var gun_spots := rng.randi_range(2, 3)
 	for i in gun_spots:
-		var p := Vector3(
-			center.x + rng.randf_range(-w * 0.5 + 1.3, w * 0.5 - 1.3),
-			pad + 0.06,
-			center.y + rng.randf_range(-d * 0.5 + 1.3, d * 0.5 - 1.3)
-		)
+		var p := Vector3.ZERO
+		for tries in 5:
+			p = Vector3(
+				center.x + rng.randf_range(-w * 0.5 + 1.3, w * 0.5 - 1.3),
+				pad + 0.06,
+				center.y + rng.randf_range(-d * 0.5 + 1.3, d * 0.5 - 1.3)
+			)
+			# Not under the table.
+			if table == Vector3.INF or Vector2(p.x - table.x, p.z - table.z).length() > 1.3:
+				break
 		loot_points.append({"pos": p, "kind": "weapon", "village": true})
 	for i in rng.randi_range(2, 3):
-		loot_points.append({
-			"pos": Vector3(center.x + rng.randf_range(-w * 0.5 + 1.0, w * 0.5 - 1.0), pad + 0.06,
-				center.y + rng.randf_range(-d * 0.5 + 1.0, d * 0.5 - 1.0)),
-			"kind": "gear", "village": true,
-		})
+		var p := Vector3.ZERO
+		for tries in 5:
+			p = Vector3(center.x + rng.randf_range(-w * 0.5 + 1.0, w * 0.5 - 1.0), pad + 0.06,
+				center.y + rng.randf_range(-d * 0.5 + 1.0, d * 0.5 - 1.0))
+			if table == Vector3.INF or Vector2(p.x - table.x, p.z - table.z).length() > 1.3:
+				break
+		loot_points.append({"pos": p, "kind": "gear", "village": true})
 
 	_stat.houses += 1
+
+
+## A kitchen table with two stools in a ground-floor corner: not the
+## crate's, not by the door, not on the stair side of a two-storey house.
+## Returns where it stands (world), or INF when there is no good corner.
+func _table(origin: Vector3, hb: Basis, yaw: float, w: float, d: float, levels: int, door_side: int, crate_corner: Vector2) -> Vector3:
+	if _tint < 0 or _tint % 4 == 3 or minf(w, d) < 4.0:
+		return Vector3.INF
+	var door: Vector2 = [Vector2(0, d * 0.5), Vector2(w * 0.5, 0), Vector2(0, -d * 0.5), Vector2(-w * 0.5, 0)][door_side]
+	var best := Vector2.INF
+	var best_d := 2.4
+	for cx: float in [-1.0, 1.0]:
+		if levels > 1 and cx > 0.0:
+			continue
+		for cz: float in [-1.0, 1.0]:
+			var c := Vector2(cx * (w * 0.5 - 1.05), cz * (d * 0.5 - 0.95))
+			if crate_corner != Vector2.INF and c.distance_to(crate_corner) < 1.6:
+				continue
+			var dd := c.distance_to(door)
+			if dd > best_d:
+				best_d = dd
+				best = c
+	if best == Vector2.INF:
+		return Vector3.INF
+	var at := origin + hb * Vector3(best.x, 0.032, best.y)
+	_tables += 1
+	# Top, legs, then a stool either side along the wall.
+	_proc_box(Transform3D(hb.scaled_local(Vector3(1.3, 0.07, 0.8)), at + Vector3(0, 0.74, 0)), "wood")
+	for lx: float in [-0.56, 0.56]:
+		for lz: float in [-0.32, 0.32]:
+			_proc_box(Transform3D(hb.scaled_local(Vector3(0.07, 0.72, 0.07)), at + hb * Vector3(lx, 0.36, lz)), "wood_dark")
+	for sx: float in [-0.95, 0.95]:
+		var st := at + hb * Vector3(sx, 0, 0)
+		_proc_box(Transform3D(hb.scaled_local(Vector3(0.36, 0.05, 0.36)), st + Vector3(0, 0.45, 0)), "wood")
+		_proc_box(Transform3D(hb.scaled_local(Vector3(0.26, 0.43, 0.26)), st + Vector3(0, 0.215, 0)), "wood_dark")
+	# A jug and a bowl on top.
+	_proc_box(Transform3D(hb.scaled_local(Vector3(0.14, 0.2, 0.14)), at + hb * Vector3(0.3, 0.875, 0.1)), "pot")
+	_proc_box(Transform3D(hb.scaled_local(Vector3(0.24, 0.06, 0.24)), at + hb * Vector3(-0.25, 0.805, -0.05)), "jar")
+	_add_box_collider(at + Vector3(0, 0.39, 0), Vector3(1.3, 0.78, 0.8), yaw)
+	return at
 
 
 ## Lived-in touches that never get in the way: a rug in the middle of the
@@ -1418,7 +1468,7 @@ func _dress_streets() -> void:
 						lamps += 1
 					k += 1
 				along += 17.0
-	print("[villages] %d wall shelves, %d beds" % [_shelves, _beds])
+	print("[villages] %d wall shelves, %d beds, %d tables" % [_shelves, _beds, _tables])
 	print("[villages] street dressing: %d barrels, %d lamp posts" % [barrels, lamps])
 
 
@@ -1584,6 +1634,7 @@ func _flower_box(wall_pos: Vector3, yaw: float) -> void:
 
 var _shelves := 0
 var _beds := 0
+var _tables := 0
 
 
 ## A plank shelf on about one blank ground-floor wall in four, with jars,
