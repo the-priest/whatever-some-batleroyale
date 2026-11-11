@@ -8,6 +8,8 @@ class_name Villages
 
 const MODEL_PATH := "res://assets/village/%s.gltf"
 const WALL_HEIGHT := 3.123
+## Window sill height on the kit's window walls, for the flower boxes.
+const FLOWER_SILL := 0.86
 const DOOR_WIDTH := 1.30
 
 const TOWN_NAMES := ["MOSSFORD", "HOLLOWMERE", "BRIARWICK", "STONEHELM", "ASHVALE", "THORNBY",
@@ -871,6 +873,8 @@ func _build_house(h: Dictionary) -> void:
 				_add_wall_for(key, world_pos, yaw_house + wall_yaw)
 				if is_window and shutters:
 					_place("WindowShutters_Wide_Flat_Open", world_pos, yaw_house + wall_yaw, false, Vector3(0, 0, 0.11))
+				if is_window and style == "Plaster":
+					_flower_box(world_pos, yaw_house + wall_yaw)
 				if is_door:
 					# The door itself, swung open into the room.
 					var hinge: Vector3 = world_pos + Basis(Vector3.UP, yaw_house + wall_yaw) * Vector3(-0.56, 0.0, 0.0)
@@ -1497,6 +1501,29 @@ func _place(key: String, bottom_center: Vector3, yaw: float, _align := true, piv
 	_stat.pieces += 1
 
 
+## A box of flowers under about one plaster window in three (picked by
+## position, not the village rng, so nothing else shifts).
+func _flower_box(wall_pos: Vector3, yaw: float) -> void:
+	var hv := absf(sin(wall_pos.x * 3.137 + wall_pos.z * 7.731 + wall_pos.y * 1.17))
+	if int(hv * 1000.0) % 3 != 0:
+		return
+	var b := Basis(Vector3.UP, yaw)
+	var at := wall_pos + b * Vector3(0, FLOWER_SILL, 0.15)
+	_proc_box(Transform3D(b.scaled_local(Vector3(1.3, 0.2, 0.24)), at), "wood_dark")
+	# Brackets under it.
+	for sx: float in [-0.45, 0.45]:
+		_proc_box(Transform3D(b.scaled_local(Vector3(0.05, 0.22, 0.05)), at + b * Vector3(sx, -0.18, -0.06)), "iron")
+	var cols := ["cloth_red", "cloth_yellow", "cloth_white", "cloth_red", "cloth_blue"]
+	var pick := int(hv * 77777.0)
+	for i in 6:
+		var x := -0.52 + float(i) * 0.208
+		var h := 0.12 + fmod(hv * float(i + 3) * 13.7, 1.0) * 0.1
+		# Leaves, then the flower heads on top.
+		_proc_box(Transform3D(b.scaled_local(Vector3(0.2, h, 0.18)), at + b * Vector3(x, 0.1 + h * 0.5, 0.0)), "leaf")
+		var c: String = cols[(pick + i * (pick % 3 + 1)) % cols.size()]
+		_proc_box(Transform3D(b.scaled_local(Vector3(0.11, 0.08, 0.11)), at + b * Vector3(x + 0.03, 0.12 + h, 0.02 * float(i % 2))), c)
+
+
 ## Collision for a kit wall piece. Pieces with an opening (windows, doors,
 ## arches) collide with their own render mesh, so whatever you can see
 ## through you can shoot through, and nothing else.
@@ -1745,6 +1772,10 @@ func _proc_material(key: String) -> Material:
 		m.albedo_color = cols[key]
 		m.roughness = 0.95
 		m.cull_mode = BaseMaterial3D.CULL_DISABLED
+		return m
+	if key == "leaf":
+		m.albedo_color = Color(0.2, 0.42, 0.16)
+		m.roughness = 0.9
 		return m
 	if key == "lamp":
 		m.albedo_color = Color(1.0, 0.84, 0.55)
