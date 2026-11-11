@@ -237,6 +237,8 @@ var test_hold: Dictionary = {}
 var invert_y := false
 var aim_toggle := false
 var crouch_toggle := false
+var sprint_toggle := false
+var _sprint_on := false
 var bob_scale := 1.0
 var shake_scale := 1.0
 var vm_offset := Vector3.ZERO
@@ -253,6 +255,8 @@ func _ap(action: String) -> bool:
 		return _aim_on
 	if action == "crouch" and crouch_toggle:
 		return _crouch_on
+	if action == "sprint" and sprint_toggle:
+		return _sprint_on
 	return Input.is_action_pressed(action)
 
 
@@ -281,10 +285,13 @@ func _unhandled_input(event: InputEvent) -> void:
 	if not alive:
 		_aim_on = false
 		_crouch_on = false
+		_sprint_on = false
 		return
 	# Toggle aim / crouch (Settings, CONTROLS).
 	if aim_toggle and event.is_action_pressed("aim") and not _locked():
 		_aim_on = not _aim_on
+	if sprint_toggle and event.is_action_pressed("sprint") and not _locked():
+		_sprint_on = not _sprint_on
 	if crouch_toggle and not _locked():
 		if event.is_action_pressed("crouch"):
 			_crouch_on = not _crouch_on
@@ -552,6 +559,9 @@ func _ground(delta: float) -> void:
 	var input := _vec("move_left", "move_right", "move_forward", "move_back")
 	var crouch := _ap("crouch")
 	_sprint_lock = maxf(0.0, _sprint_lock - delta)
+	# Toggled sprint ends when you stop running forward, aim or crouch.
+	if _sprint_on and (input.y >= -0.3 or crouch or aiming):
+		_sprint_on = false
 	sprinting = _ap("sprint") and input.y < -0.3 and not crouch and not aiming and not healing and _sprint_lock <= 0.0 and is_on_floor() and absf(lean) < 0.2
 	var speed := CROUCH if crouch else (SPRINT if sprinting else WALK)
 	if aiming:
@@ -2284,7 +2294,8 @@ func _update_lean(delta: float) -> void:
 func _update_breath(delta: float) -> void:
 	var scoped := aiming and cur_zoom() >= 1.9 and aim_blend > 0.7
 	var was_holding := holding_breath
-	holding_breath = scoped and _ap("sprint") and breath > 0.0
+	# The breath is held with the key itself, toggled sprint or not.
+	holding_breath = scoped and (test_hold.has("sprint") or (Input.is_action_pressed("sprint") and not _locked())) and breath > 0.0
 	if holding_breath != was_holding and game != null and game.sfx != null:
 		game.sfx.play_2d("breath_in" if holding_breath else "breath_out", -10.0, 0.05)
 	if holding_breath:

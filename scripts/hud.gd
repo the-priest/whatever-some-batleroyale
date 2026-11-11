@@ -124,6 +124,7 @@ const OPTS := {
 	"invert_y": ["INVERT MOUSE Y", ["OFF", "ON"], 0],
 	"aim_mode": ["AIM DOWN SIGHTS", ["HOLD", "TOGGLE"], 0],
 	"crouch_mode": ["CROUCH", ["HOLD", "TOGGLE"], 0],
+	"sprint_mode": ["SPRINT", ["HOLD", "TOGGLE"], 0],
 	"fps_cap": ["FRAME RATE LIMIT", ["UNLIMITED", "30", "60", "90", "120", "144", "165", "240"], 0],
 	"ui_scale": ["INTERFACE SIZE", ["85%", "100%", "115%", "130%"], 1],
 	"brightness": ["BRIGHTNESS", ["80%", "90%", "100%", "110%", "120%", "130%"], 2],
@@ -977,6 +978,7 @@ func _build_pause() -> void:
 	_opt_row(col, "invert_y")
 	_opt_row(col, "aim_mode")
 	_opt_row(col2, "crouch_mode")
+	_opt_row(col2, "sprint_mode")
 	_build_keys(t_keys)
 	col = t_audio[0]
 	lbl_vol = _lv("VOLUME", 12, MUTED)

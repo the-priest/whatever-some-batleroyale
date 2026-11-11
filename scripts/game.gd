@@ -6357,6 +6357,7 @@ func _apply_options() -> void:
 		player.invert_y = o.call("invert_y") == 1
 		player.aim_toggle = o.call("aim_mode") == 1
 		player.crouch_toggle = o.call("crouch_mode") == 1
+		player.sprint_toggle = o.call("sprint_mode") == 1
 		player.bob_scale = [1.0, 0.4, 0.0][clampi(o.call("head_bob"), 0, 2)]
 		player.shake_scale = [1.0, 0.45, 0.0][clampi(o.call("shake"), 0, 2)]
 		player.vm_offset = [Vector3.ZERO, Vector3(-0.085, 0.02, 0.0), Vector3(0.0, -0.045, 0.03)][clampi(o.call("viewmodel"), 0, 2)]
