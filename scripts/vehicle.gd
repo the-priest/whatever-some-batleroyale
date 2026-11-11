@@ -400,6 +400,7 @@ func _physics_process_body(delta: float) -> void:
 		_puppet_follow(delta)
 		_animate_wheels(delta, null)
 		_sound(delta)
+		_dust(delta, true)
 		return
 	var has_driver: bool = seats[0] != null
 	if has_driver:
@@ -532,6 +533,7 @@ func _physics_process_body(delta: float) -> void:
 	_sweep_people()
 	_animate_wheels(delta, hits)
 	_sound(delta)
+	_dust(delta)
 
 
 ## Anyone in the jeep's path gets hit and thrown aside; the jeep ploughs on
@@ -600,6 +602,26 @@ func _animate_wheels(delta: float, hits) -> void:
 	if sw != null:
 		sw.rotation = Vector3(deg_to_rad(-60.0), 0, 0)
 		sw.rotate_object_local(Vector3.UP, steer * 2.2)
+
+
+## Dust off the rear wheels at speed (more when sliding), spray in water.
+var _dust_t := 0.0
+
+
+func _dust(delta: float, puppet := false) -> void:
+	if game == null or game.player == null or (_grounded < 2 and not puppet) or absf(speed) < 6.0:
+		return
+	if global_position.distance_to(game.player.global_position) > 90.0:
+		return
+	_dust_t -= delta * (absf(speed) / 12.0 + _slip * 3.0)
+	if _dust_t > 0.0:
+		return
+	_dust_t = 0.09
+	for i in [2, 3]:
+		var wp := global_transform * ((WHEELS[i] as Vector3) + Vector3(0, -REST - WHEEL_R * 0.6, 0.25))
+		var surf: String = game.surface_at(wp + Vector3.UP * 0.5)
+		if surf in ["dirt", "grass", "water"]:
+			game.step_puff(wp, surf == "water")
 
 
 func _sound(delta: float) -> void:
