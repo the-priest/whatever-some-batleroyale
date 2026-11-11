@@ -1304,6 +1304,10 @@ func _scatter_ground_cover() -> void:
 		mat.set_shader_parameter("wind_strength", k.wind)
 		mat.set_shader_parameter("sway_height", 1.4)
 		mat.set_shader_parameter("alpha_cut", 0.32)
+		# The kit's bush leaves are a dark green that, shaded by their own
+		# clump, read as black dots across the meadows: lift them.
+		if (k.name as String).begins_with("Bush"):
+			mat.set_shader_parameter("tint", Color(1.6, 1.65, 1.35))
 
 		# 150 m tiles keep draw calls frustum-culled.
 		var tiles: Dictionary = {}
