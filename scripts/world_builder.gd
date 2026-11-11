@@ -608,6 +608,9 @@ func set_weather(kind: String) -> void:
 	env.volumetric_fog_albedo = (p[8] as Color).lightened(0.25)
 	env.ambient_light_energy = float(p[10])
 	env.tonemap_exposure = float(p[11])
+	# Wet ground in the rain.
+	if _terrain_material != null:
+		_terrain_material.set_shader_parameter("wetness", 1.0 if kind == "rain" else (0.25 if kind == "misty" else 0.0))
 	# Rain: falling streaks, splashes, the rain bed and thunder.
 	var old := get_node_or_null("Rain")
 	if old != null:

@@ -15,6 +15,9 @@ varying vec3 wnrm;
 // How wooded this ground is (0..1): far away, where the trees themselves are
 // culled, the ground takes on the canopy's colour so forests still read.
 varying float canopy;
+// Rain: 0 dry .. 1 soaked. Soil darkens, stone and roads go glossy, and
+// water pools in the flat ruts and hollows.
+uniform float wetness = 0.0;
 uniform float canopy_near = 520.0;
 uniform float canopy_far = 760.0;
 
@@ -69,8 +72,22 @@ void fragment() {
 		vec3 leaf = vec3(0.13, 0.27, 0.11) * (0.8 + macro * 0.4);
 		col = mix(col, leaf, clamp(canopy, 0.0, 1.0) * far_k * 0.85);
 	}
+	float rough = mix(0.96, 0.82, clamp(vw.b, 0.0, 1.0));
+	float spec = 0.28;
+	if (wetness > 0.0) {
+		float bare = clamp(vw.a + vw.g + vw.b + road, 0.0, 1.0);
+		col *= mix(1.0, mix(0.82, 0.62, bare), wetness);
+		rough = mix(rough, mix(0.7, 0.32, bare), wetness);
+		// Puddles: only where it is flat, in the low spots of the noise.
+		float flat_k = smoothstep(0.93, 0.985, n.y);
+		float hollow = smoothstep(0.58, 0.66, 1.0 - macro * 0.7 - macro2 * 0.5 + (road > 0.5 ? 0.1 : 0.0));
+		float pool = flat_k * hollow * wetness * clamp(bare + 0.3, 0.0, 1.0);
+		col = mix(col, col * 0.45 + vec3(0.015, 0.02, 0.025), pool);
+		rough = mix(rough, 0.04, pool);
+		spec = mix(spec, 0.6, pool);
+	}
 	ALBEDO = col;
-	ROUGHNESS = mix(0.96, 0.82, clamp(vw.b, 0.0, 1.0));
-	SPECULAR = 0.28;
+	ROUGHNESS = rough;
+	SPECULAR = spec;
 	AO = mix(1.0, 0.86, clamp(vw.b, 0.0, 1.0));
 }
