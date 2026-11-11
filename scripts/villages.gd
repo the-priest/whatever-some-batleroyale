@@ -875,6 +875,9 @@ func _build_house(h: Dictionary) -> void:
 					_place("WindowShutters_Wide_Flat_Open", world_pos, yaw_house + wall_yaw, false, Vector3(0, 0, 0.11))
 				if is_window and style == "Plaster":
 					_flower_box(world_pos, yaw_house + wall_yaw)
+				# (Not on the +x wall of a two-storey house: the stair runs there.)
+				if not is_window and not is_door and level == 0 and not (side == 1 and levels > 1):
+					_wall_shelf(world_pos, yaw_house + wall_yaw)
 				if is_door:
 					# The door itself, swung open into the room.
 					var hinge: Vector3 = world_pos + Basis(Vector3.UP, yaw_house + wall_yaw) * Vector3(-0.56, 0.0, 0.0)
@@ -1392,6 +1395,7 @@ func _dress_streets() -> void:
 						lamps += 1
 					k += 1
 				along += 17.0
+	print("[villages] %d wall shelves" % _shelves)
 	print("[villages] street dressing: %d barrels, %d lamp posts" % [barrels, lamps])
 
 
@@ -1553,6 +1557,40 @@ func _flower_box(wall_pos: Vector3, yaw: float) -> void:
 		_proc_box(Transform3D(b.scaled_local(Vector3(0.2, h, 0.18)), at + b * Vector3(x, 0.1 + h * 0.5, 0.0)), "leaf")
 		var c: String = cols[(pick + i * (pick % 3 + 1)) % cols.size()]
 		_proc_box(Transform3D(b.scaled_local(Vector3(0.11, 0.08, 0.11)), at + b * Vector3(x + 0.03, 0.12 + h, 0.02 * float(i % 2))), c)
+
+
+var _shelves := 0
+
+
+## A plank shelf on about one blank ground-floor wall in four, with jars,
+## pots and a sack on it (by position, like the flower boxes).
+func _wall_shelf(wall_pos: Vector3, yaw: float) -> void:
+	var hv := absf(sin(wall_pos.x * 5.311 + wall_pos.z * 2.917 + 0.4))
+	if int(hv * 1000.0) % 4 != 0:
+		return
+	_shelves += 1
+	var b := Basis(Vector3.UP, yaw)
+	# Inside face of the wall is at local z = -0.2.
+	var at := wall_pos + b * Vector3(0, 1.55, -0.36)
+	_proc_box(Transform3D(b.scaled_local(Vector3(1.5, 0.05, 0.3)), at), "wood_dark")
+	for sx: float in [-0.6, 0.6]:
+		_proc_box(Transform3D(b.scaled_local(Vector3(0.04, 0.2, 0.22)), at + b * Vector3(sx, -0.12, 0.03)), "iron")
+	var goods := ["jar", "jar", "pot", "cloth_white", "jar", "pot"]
+	var x := -0.6
+	var k := int(hv * 99991.0)
+	while x < 0.6:
+		var g: String = goods[(k + int(x * 10.0)) % goods.size()]
+		var gw := 0.14 if g == "jar" else (0.2 if g == "pot" else 0.26)
+		var gh := 0.2 if g == "jar" else (0.16 if g == "pot" else 0.18)
+		var gc := at + b * Vector3(x + gw * 0.5, 0.025 + gh * 0.5, 0)
+		_proc_box(Transform3D(b.scaled_local(Vector3(gw, gh, gw)), gc), g)
+		if g == "jar":
+			# A cork in its neck.
+			_proc_box(Transform3D(b.scaled_local(Vector3(gw * 0.5, 0.05, gw * 0.5)), gc + Vector3(0, gh * 0.5 + 0.025, 0)), "wood")
+		elif g == "pot":
+			# A lip round the top.
+			_proc_box(Transform3D(b.scaled_local(Vector3(gw * 1.15, 0.035, gw * 1.15)), gc + Vector3(0, gh * 0.5 - 0.01, 0)), "pot")
+		x += gw + 0.06 + fmod(hv * 37.0 * (x + 2.0), 0.12)
 
 
 ## Collision for a kit wall piece. Pieces with an opening (windows, doors,
@@ -1803,6 +1841,15 @@ func _proc_material(key: String) -> Material:
 		m.albedo_color = cols[key]
 		m.roughness = 0.95
 		m.cull_mode = BaseMaterial3D.CULL_DISABLED
+		return m
+	if key == "jar":
+		m.albedo_color = Color(0.32, 0.52, 0.48)
+		m.roughness = 0.3
+		m.metallic = 0.1
+		return m
+	if key == "pot":
+		m.albedo_color = Color(0.62, 0.34, 0.2)
+		m.roughness = 0.85
 		return m
 	if key == "leaf":
 		m.albedo_color = Color(0.2, 0.42, 0.16)
