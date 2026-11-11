@@ -42,7 +42,7 @@ var sun: DirectionalLight3D
 var fill_light: DirectionalLight3D
 var environment: Environment
 var world_env: WorldEnvironment
-var sky_material: ProceduralSkyMaterial
+var sky_material: ShaderMaterial
 var weather := "clear"
 
 var stats := {
@@ -152,17 +152,10 @@ func _build_lighting() -> void:
 	var env := Environment.new()
 	env.background_mode = Environment.BG_SKY
 	var sky := Sky.new()
-	var sky_mat := ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = Color(0.16, 0.34, 0.66)
-	sky_mat.sky_horizon_color = Color(0.62, 0.76, 0.90)
-	sky_mat.sky_curve = 0.13
-	sky_mat.sky_energy_multiplier = 1.05
-	# Below the horizon is open sea, so the sky's "ground" matches the water.
-	sky_mat.ground_bottom_color = Color(0.36, 0.52, 0.64)
-	sky_mat.ground_horizon_color = Color(0.60, 0.73, 0.87)
-	sky_mat.ground_curve = 0.08
-	sky_mat.sun_angle_max = 22.0
-	sky_mat.sun_curve = 0.12
+	# Gradient, sun and drifting clouds (shaders/sky.gdshader). Below the
+	# horizon is open sea, so the sky's "ground" matches the water.
+	var sky_mat := ShaderMaterial.new()
+	sky_mat.shader = load("res://shaders/sky.gdshader")
 	sky.sky_material = sky_mat
 	sky_material = sky_mat
 	env.sky = sky
@@ -645,10 +638,17 @@ func set_weather(kind: String) -> void:
 	sun.rotation_degrees = Vector3(float(p[0]), float(p[1]), 0.0)
 	sun.light_color = p[2]
 	sun.light_energy = float(p[3])
-	sm.sky_top_color = p[4]
-	sm.sky_horizon_color = p[5]
-	sm.ground_horizon_color = p[6]
-	sm.ground_bottom_color = p[7]
+	sm.set_shader_parameter("sky_top_color", p[4])
+	sm.set_shader_parameter("sky_horizon_color", p[5])
+	sm.set_shader_parameter("ground_horizon_color", p[6])
+	sm.set_shader_parameter("ground_bottom_color", p[7])
+	# Cloud cover and colour for the weather.
+	var cl: Array = {"clear": [0.56, Color(1, 1, 1), 0.66], "golden": [0.6, Color(1.0, 0.8, 0.64), 0.5],
+		"misty": [0.62, Color(0.92, 0.93, 0.95), 0.75], "overcast": [0.92, Color(0.82, 0.85, 0.88), 0.6],
+		"rain": [1.0, Color(0.5, 0.53, 0.57), 0.55]}.get(kind, [0.56, Color(1, 1, 1), 0.66])
+	sm.set_shader_parameter("cover", cl[0])
+	sm.set_shader_parameter("cloud_tint", cl[1])
+	sm.set_shader_parameter("cloud_dark", cl[2])
 	env.fog_light_color = p[8]
 	env.fog_density = float(p[9])
 	env.volumetric_fog_albedo = (p[8] as Color).lightened(0.25)
