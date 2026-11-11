@@ -285,7 +285,7 @@ func display_name() -> String:
 
 func prompt_text() -> String:
 	var verb := "PICK UP" if kind == "weapon" else ("EQUIP" if kind in ["armor", "helmet", "scope", "extmag", "comp"] else "TAKE")
-	return "[F]  %s  %s" % [verb, display_name()]
+	return "[%s]  %s  %s" % [Keybinds.key("interact"), verb, display_name()]
 
 
 ## Empty string when the player can take this, otherwise the reason they cannot.

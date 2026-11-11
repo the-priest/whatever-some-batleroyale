@@ -17,6 +17,7 @@ signal resume_pressed
 signal quit_pressed
 signal settings_changed(sensitivity: float, volume: float, fov: float, players: int)
 signal scope_sens_changed(mult: float)
+signal keys_changed
 signal loadout_changed(primary: String, secondary: String, optic: String, enabled: bool)
 
 # All HUD is constructed in code so the project stays scene-file free and the
@@ -146,6 +147,9 @@ const XHAIR_COLS := [Color(0.95, 0.96, 0.97), Color(0.45, 1.0, 0.45), Color(1.0,
 var opts: Dictionary = {}
 var _opt_buttons: Dictionary = {}
 var _tabs: Array = []
+## KEYS tab: one button per action; the action waiting for a key, if any.
+var _key_buttons: Dictionary = {}
+var _rebinding := ""
 var _tab_buttons: Array = []
 var _fps_t := 0.0
 var _fps_frames := 0
@@ -467,7 +471,7 @@ func _draw_scope() -> void:
 		var by := c.y + r * 0.86
 		scope.draw_rect(Rect2(c.x - bw * 0.5, by, bw, 3), Color(0, 0, 0, 0.35))
 		scope.draw_rect(Rect2(c.x - bw * 0.5, by, bw * breath_val / 100.0, 3), Color(0.1, 0.1, 0.1, 0.85) if not breath_hold else Color(0.15, 0.4, 0.75, 0.9))
-		scope.draw_string(font_bold, Vector2(c.x - 100, by - 6), "HOLD SHIFT  —  STEADY", HORIZONTAL_ALIGNMENT_CENTER, 200, 10, Color(0.05, 0.05, 0.05, 0.55))
+		scope.draw_string(font_bold, Vector2(c.x - 100, by - 6), "HOLD %s  —  STEADY" % Keybinds.key("sprint"), HORIZONTAL_ALIGNMENT_CENTER, 200, 10, Color(0.05, 0.05, 0.05, 0.55))
 	scope.draw_string(font_mono, Vector2(c.x + r * 0.45, c.y + r * 0.72), "ZERO %d" % int(zero), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.05, 0.05, 0.05, 0.6))
 	var last_mark := c.y
 	var last_label := c.y
@@ -935,6 +939,7 @@ func _build_pause() -> void:
 	holder.custom_minimum_size = Vector2(640, 330)
 	outer.add_child(holder)
 	var t_controls := _tab("CONTROLS", holder, bar)
+	var t_keys := _tab("KEYS", holder, bar)
 	var t_video := _tab("VIDEO", holder, bar)
 	var t_gfx := _tab("GRAPHICS", holder, bar)
 	var t_audio := _tab("AUDIO", holder, bar)
@@ -971,6 +976,7 @@ func _build_pause() -> void:
 	_opt_row(col, "invert_y")
 	_opt_row(col, "aim_mode")
 	_opt_row(col2, "crouch_mode")
+	_build_keys(t_keys)
 	col = t_audio[0]
 	lbl_vol = _lv("VOLUME", 12, MUTED)
 	col.add_child(lbl_vol)
@@ -1231,6 +1237,51 @@ func _step_opt(key: String, d: int) -> void:
 
 
 ## A tab of the settings screen: two columns.
+## Click an action, then press the key or mouse button you want for it.
+func _build_keys(t: Array) -> void:
+	Keybinds.snapshot_defaults()
+	var cols: Array = [t[0], t[1]]
+	for c: VBoxContainer in cols:
+		c.add_theme_constant_override("separation", 3)
+	var half := int(ceil(Keybinds.BINDABLE.size() / 2.0))
+	for i in Keybinds.BINDABLE.size():
+		var b: Array = Keybinds.BINDABLE[i]
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 6)
+		var l := _lv(b[1], 11, MUTED)
+		l.custom_minimum_size = Vector2(130, 0)
+		l.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		row.add_child(l)
+		var btn := _button("", false)
+		btn.custom_minimum_size = Vector2(160, 26)
+		btn.add_theme_font_size_override("font_size", 11)
+		var action: String = b[0]
+		btn.pressed.connect(func():
+			sfx_click()
+			_rebinding = action
+			_key_labels())
+		row.add_child(btn)
+		_key_buttons[action] = btn
+		(cols[0] if i < half else cols[1] as VBoxContainer).add_child(row)
+	var reset := _button("RESET KEYS", false)
+	reset.custom_minimum_size = Vector2(296, 26)
+	reset.add_theme_font_size_override("font_size", 11)
+	reset.pressed.connect(func():
+		sfx_click()
+		_rebinding = ""
+		Keybinds.reset_all()
+		_key_labels()
+		keys_changed.emit())
+	(cols[1] as VBoxContainer).add_child(reset)
+	_key_labels()
+
+
+func _key_labels() -> void:
+	for a in _key_buttons:
+		var btn: Button = _key_buttons[a]
+		btn.text = "PRESS A KEY  ·  ESC CANCELS" if a == _rebinding else Keybinds.key(a)
+
+
 func _tab(title: String, holder: Control, bar: HBoxContainer) -> Array:
 	var page := HBoxContainer.new()
 	page.add_theme_constant_override("separation", 40)
@@ -1817,6 +1868,19 @@ func hide_end() -> void:
 
 # ------------------------------------------------------------------- input --
 func _input(event: InputEvent) -> void:
+	# Waiting for a key on the KEYS tab: the next key or button press is it.
+	if _rebinding != "":
+		var press: bool = (event is InputEventKey and event.pressed and not event.echo) or (event is InputEventMouseButton and event.pressed)
+		if press:
+			get_viewport().set_input_as_handled()
+			if event is InputEventKey and (event as InputEventKey).keycode == KEY_ESCAPE:
+				_rebinding = ""
+			else:
+				Keybinds.rebind(_rebinding, event)
+				_rebinding = ""
+				keys_changed.emit()
+			_key_labels()
+			return
 	# F11 or Alt + Enter: fullscreen on and off, anywhere in the game.
 	if event is InputEventKey and event.pressed and not event.echo:
 		var k := event as InputEventKey
@@ -2590,7 +2654,7 @@ func _draw_big_map() -> void:
 			ky += 26.0
 
 	# What the keys do, centred under the map.
-	var pairs := [["M", "CLOSE"], ["LEFT CLICK", "MARK"], ["RIGHT CLICK", "REMOVE MARK"], ["WHEEL", "ZOOM"]]
+	var pairs := [[Keybinds.key("map"), "CLOSE"], ["LEFT CLICK", "MARK"], ["RIGHT CLICK", "REMOVE MARK"], ["WHEEL", "ZOOM"]]
 	var hx := inner.position.x + (inner.size.x - _keycaps_width(pairs)) * 0.5
 	var hy := minf(inner.end.y + 34.0, vp.y - 10.0)
 	for pr in pairs:
@@ -2956,4 +3020,4 @@ func set_vehicle(v: bool, kmh := 0.0, hp_frac := 1.0, driver := true) -> void:
 	_veh_speed.text = str(int(round(kmh)))
 	_veh_hp_fill.anchor_right = clampf(hp_frac, 0.0, 1.0)
 	_veh_hp_fill.color = Color(0.95, 0.62, 0.22) if hp_frac > 0.35 else DANGER
-	_veh_hint.text = "SPACE  HANDBRAKE   ·   F  GET OUT" if driver else "PASSENGER   ·   F  GET OUT"
+	_veh_hint.text = ("%s  HANDBRAKE   ·   %s  GET OUT" % [Keybinds.key("jump"), Keybinds.key("interact")]) if driver else ("PASSENGER   ·   %s  GET OUT" % Keybinds.key("interact"))

@@ -171,6 +171,8 @@ func _ready() -> void:
 	hud.quit_pressed.connect(_quit_to_menu)
 	hud.settings_changed.connect(_on_settings_changed)
 	hud.loadout_changed.connect(_on_loadout_changed)
+	hud.keys_changed.connect(func():
+		_save_settings())
 	hud.scope_sens_changed.connect(func(v: float):
 		scope_sens = v
 		_apply_settings()
@@ -421,6 +423,8 @@ func _load_settings() -> void:
 		for k in HUD.OPTS:
 			if cfg.has_section_key("options", k):
 				options[k] = int(cfg.get_value("options", k))
+		Keybinds.load_from(cfg)
+		hud._key_labels()
 	if not Weapons.DEFS.has(loadout_primary):
 		loadout_primary = "carbine"
 	if not Weapons.DEFS.has(loadout_secondary):
@@ -499,6 +503,7 @@ func _save_settings() -> void:
 	cfg.set_value("loadout", "secondary", loadout_secondary)
 	cfg.set_value("loadout", "optic", loadout_optic)
 	cfg.set_value("loadout", "enabled", loadout_enabled)
+	Keybinds.save(cfg)
 	cfg.save(SETTINGS_PATH)
 
 
@@ -1513,16 +1518,16 @@ func _update_prompt() -> void:
 		hud.set_prompt("")
 		return
 	if player.mode == Player.Mode.PLANE:
-		hud.set_prompt("SPACE  —  JUMP FROM THE PLANE")
+		hud.set_prompt("%s  —  JUMP FROM THE PLANE" % Keybinds.key("jump"))
 		return
 	if player.mode == Player.Mode.FREEFALL:
-		hud.set_prompt("W  DIVE  ·  SPACE  DEPLOY PARACHUTE")
+		hud.set_prompt("%s  DIVE  ·  %s  DEPLOY PARACHUTE" % [Keybinds.key("move_forward"), Keybinds.key("jump")])
 		return
 	if player.mode == Player.Mode.CHUTE:
 		hud.set_prompt("STEER WITH WASD  —  PICK YOUR LANDING SPOT")
 		return
 	if player.mode == Player.Mode.VEHICLE:
-		hud.set_prompt("[F]  GET OUT")
+		hud.set_prompt("[%s]  GET OUT" % Keybinds.key("interact"))
 		return
 	if player.mode != Player.Mode.GROUND:
 		hud.set_prompt("")
@@ -1531,7 +1536,7 @@ func _update_prompt() -> void:
 	var car := _nearest_vehicle(player.global_position, 1.7)
 	if _interact_wants_car(player, best, car):
 		var seat := car.free_seat()
-		hud.set_prompt("JEEP IS FULL" if seat < 0 else ("[F]  DRIVE THE JEEP" if seat == 0 else "[F]  RIDE AS PASSENGER"))
+		hud.set_prompt("JEEP IS FULL" if seat < 0 else (("[%s]  DRIVE THE JEEP" if seat == 0 else "[%s]  RIDE AS PASSENGER") % Keybinds.key("interact")))
 	elif best != null:
 		var why := best.block_reason(player)
 		hud.set_prompt(best.prompt_text() if why == "" else why)
@@ -5867,7 +5872,7 @@ func _enter_vehicle(v: Vehicle) -> void:
 	if seat == 0:
 		v.handbrake = false
 		_claim_vehicle(v)
-		hud.show_notice("W / S  DRIVE   ·   A / D  STEER   ·   SPACE  HANDBRAKE   ·   F  GET OUT", 3.0)
+		hud.show_notice("%s / %s  DRIVE   ·   %s / %s  STEER   ·   %s  HANDBRAKE   ·   %s  GET OUT" % [Keybinds.key("move_forward"), Keybinds.key("move_back"), Keybinds.key("move_left"), Keybinds.key("move_right"), Keybinds.key("jump"), Keybinds.key("interact")], 3.0)
 	else:
 		hud.show_notice("PASSENGER   ·   F  GET OUT", 2.0)
 
