@@ -2972,6 +2972,12 @@ func _run_shot() -> void:
 	p.velocity = Vector3.ZERO
 	p.yaw = ang
 	p.pitch = -0.16
+	# --step=M: walk M metres the way you are facing (up to a wall, say).
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--step="):
+			p.global_position += Basis(Vector3.UP, ang) * Vector3(0, 0, -float(a.substr(7)))
+		elif a.begins_with("--strafe="):
+			p.global_position += Basis(Vector3.UP, ang) * Vector3(float(a.substr(9)), 0, 0)
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--pitch="):
 			p.pitch = float(a.substr(8))

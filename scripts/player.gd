@@ -239,6 +239,7 @@ var aim_toggle := false
 var crouch_toggle := false
 var sprint_toggle := false
 var _sprint_on := false
+var _tuck := 0.0
 var bob_scale := 1.0
 var shake_scale := 1.0
 var vm_offset := Vector3.ZERO
@@ -1229,6 +1230,20 @@ func _update_weapon(delta: float) -> void:
 	pos += kick * (1.0 - ads_e * 0.45)
 	rot += kick_rot * (1.0 - ads_e * 0.5)
 
+	# Up against a wall the gun comes back and up to high ready instead of
+	# poking through it.
+	var tuck_want := 0.0
+	if aim_blend < 0.5:
+		var cf := camera.global_transform
+		var q := PhysicsRayQueryParameters3D.create(cf.origin, cf.origin - cf.basis.z * 0.95, 1)
+		q.exclude = [get_rid()]
+		var hit := get_world_3d().direct_space_state.intersect_ray(q)
+		if not hit.is_empty():
+			tuck_want = clampf(1.0 - (cf.origin.distance_to(hit.position) - 0.4) / 0.5, 0.0, 1.0)
+	_tuck = move_toward(_tuck, tuck_want, delta * 4.0)
+	var tk := _tuck * _tuck * (3.0 - 2.0 * _tuck)
+	pos += Vector3(0.015, -0.035, 0.14) * tk
+	rot += Vector3(0.75, 0.25, 0.2) * tk
 	gun_holder.position = pos
 	gun_holder.rotation = rot
 	# Where the gun sits on screen (Settings); aimed, it is on the sights.
