@@ -2941,6 +2941,23 @@ func _run_shot() -> void:
 			var pose := _landmark_pose(a.substr(5))
 			cam_pos = pose[0]
 			cam_look = pose[1]
+		elif a.begins_with("--vil="):
+			# --vil=<n>[,h]: the n-th ring village from above.
+			var fa2 := a.substr(6).split(",")
+			var k2 := 0
+			for v in world.villages.village_pads:
+				if str(v.type) != "village":
+					continue
+				if k2 < int(fa2[0]):
+					k2 += 1
+					continue
+				var c2: Vector2 = v.center
+				var hy2 := terrain.height_at(c2.x, c2.y)
+				var hh2 := float(fa2[1]) if fa2.size() > 1 else 14.0
+				cam_pos = Vector3(c2.x - hh2 * 1.4, hy2 + hh2, c2.y - hh2 * 1.4)
+				cam_look = Vector3(c2.x, hy2, c2.y)
+				print("[shot] village ", v.name, " at ", c2)
+				break
 		elif a.begins_with("--farm="):
 			# --farm=<n>[,air]: from inside the n-th farm's paddock, or above it.
 			var fa := a.substr(7).split(",")
