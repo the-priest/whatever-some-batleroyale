@@ -53,7 +53,7 @@ func _ready() -> void:
 		show_gun(gun_id)
 
 
-func show_gun(id: String) -> void:
+func show_gun(id: String, optic := "") -> void:
 	gun_id = id
 	if pivot == null:
 		return
@@ -63,6 +63,15 @@ func show_gun(id: String) -> void:
 	# Normalised models are 1 m long; short guns get a little bigger.
 	var length := float(Weapons.def(id).get("len", 0.8))
 	n.scale = Vector3.ONE * lerpf(0.75, 1.0, clampf(length, 0.2, 1.2) / 1.2)
+	# The sight it will carry, sized and seated as on the gun in your hands.
+	if optic != "" and Weapons.optic_kind(optic) != "" and Weapons.scope_fits(id, optic):
+		var s := Weapons.view_scale(id)
+		var oy := Weapons.optic_center_y(id, optic)
+		var top := float(Weapons.model(id).get("sight_y", 0.08)) * s
+		var o := Weapons.build_optic(optic, oy - top)
+		o.position = Vector3(0.0, oy, -0.02 if Weapons.cls(id) != "pistol" else 0.01) / s
+		o.scale = Vector3.ONE / s
+		n.add_child(o)
 	pivot.add_child(n)
 
 

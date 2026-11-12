@@ -225,7 +225,8 @@ func _pick(id: String) -> void:
 
 func _show(id: String) -> void:
 	var d := Weapons.def(id)
-	preview.show_gun(id)
+	# The primary carries the chosen sight in the preview as well.
+	preview.show_gun(id, optic if id == primary else "")
 	lbl_name.text = str(d["name"])
 	lbl_name.add_theme_color_override("font_color", Weapons.tier_color(id).lightened(0.25))
 	var mode := "AUTO" if bool(d["auto"]) else ("BOLT" if bool(d.get("bolt", false)) else "SEMI")

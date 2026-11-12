@@ -4173,6 +4173,12 @@ func _run_perf() -> void:
 func _shot_state(st: String) -> void:
 	var p := player
 	match st:
+		"menu":
+			hud.root.visible = true
+			hud.show_menu("SEED %d" % seed_value)
+			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+			for i in 10:
+				await get_tree().process_frame
 		"freefall":
 			hud.root.visible = true
 			p.mode = Player.Mode.FREEFALL

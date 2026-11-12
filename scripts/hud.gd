@@ -836,7 +836,7 @@ func set_loadout(p: String, s: String, o: String, e: bool) -> void:
 
 
 func _update_card(p: String, s: String, o: String, e: bool) -> void:
-	menu_preview.show_gun(p)
+	menu_preview.show_gun(p, o if e else "")
 	menu_loadout.text = "%s   +   %s" % [str(Weapons.def(p)["name"]), str(Weapons.def(s)["name"])]
 	var optic := ("  ·  " + ("RED DOT" if o == "reddot" else o.to_upper())) if o != "" else ""
 	menu_loadout_sub.text = ("DROPPING IN WITH THIS KIT" if e else "LOADOUT OFF  —  LOOT EVERYTHING") + optic
