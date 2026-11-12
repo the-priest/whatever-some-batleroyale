@@ -1459,7 +1459,7 @@ func _on_zone_phase(p: int, warning: bool) -> void:
 		hud.show_big("THE STORM IS CLOSING", _storm_color(), 2.4)
 		sfx.play_ui("zone_warn", -6.0)
 	elif not zone.finished:
-		hud.show_notice("NEXT SAFE ZONE MARKED  —  PRESS M FOR THE MAP", 3.0)
+		hud.show_notice("NEXT SAFE ZONE MARKED  —  PRESS %s FOR THE MAP" % Keybinds.key("map"), 3.0)
 		if p in [1, 2, 4, 5] and not net_is_client():
 			_spawn_airdrop()
 
@@ -6027,7 +6027,7 @@ func _enter_vehicle(v: Vehicle) -> void:
 		_claim_vehicle(v)
 		hud.show_notice("%s / %s  DRIVE   ·   %s / %s  STEER   ·   %s  HANDBRAKE   ·   %s  GET OUT" % [Keybinds.key("move_forward"), Keybinds.key("move_back"), Keybinds.key("move_left"), Keybinds.key("move_right"), Keybinds.key("jump"), Keybinds.key("interact")], 3.0)
 	else:
-		hud.show_notice("PASSENGER   ·   F  GET OUT", 2.0)
+		hud.show_notice("PASSENGER   ·   %s  GET OUT" % Keybinds.key("interact"), 2.0)
 
 
 func _claim_vehicle(v: Vehicle) -> void:

@@ -153,6 +153,7 @@ var _tabs: Array = []
 ## KEYS tab: one button per action; the action waiting for a key, if any.
 var _key_buttons: Dictionary = {}
 var _rebinding := ""
+var menu_keys: Label = null
 var _tab_buttons: Array = []
 var _fps_t := 0.0
 var _fps_frames := 0
@@ -810,7 +811,9 @@ func _build_menu() -> void:
 	menu_loadout_sub = _lv("", 13, MUTED, false)
 	menu_card.add_child(menu_loadout_sub)
 
-	var foot := _lv("WASD MOVE · SHIFT SPRINT · C CROUCH · RMB AIM · R RELOAD · F PICK UP · Q/E LEAN · B FIRE MODE · G GRENADE · H HEAL · M MAP", 11, DIM, false)
+	menu_keys = _lv("", 11, DIM, false)
+	var foot := menu_keys
+	_menu_keys_text()
 	foot.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
 	foot.offset_left = 96
 	foot.offset_top = -48
@@ -1304,7 +1307,19 @@ func _build_keys(t: Array) -> void:
 	_key_labels()
 
 
+## The controls line at the foot of the main menu, in the player's keys.
+func _menu_keys_text() -> void:
+	if menu_keys == null:
+		return
+	var k := func(a: String) -> String: return Keybinds.key(a)
+	menu_keys.text = "%s%s%s%s MOVE · %s SPRINT · %s CROUCH · %s AIM · %s RELOAD · %s PICK UP · %s/%s LEAN · %s FIRE MODE · %s GRENADE · %s HEAL · %s MAP" % [
+		k.call("move_forward"), k.call("move_left"), k.call("move_back"), k.call("move_right"), k.call("sprint"), k.call("crouch"),
+		k.call("aim").replace("RIGHT CLICK", "RMB").replace("LEFT CLICK", "LMB"), k.call("reload"), k.call("interact"),
+		k.call("lean_left"), k.call("lean_right"), k.call("fire_mode"), k.call("grenade"), k.call("heal"), k.call("map")]
+
+
 func _key_labels() -> void:
+	_menu_keys_text()
 	for a in _key_buttons:
 		var btn: Button = _key_buttons[a]
 		btn.text = "PRESS A KEY  ·  ESC CANCELS" if a == _rebinding else Keybinds.key(a)

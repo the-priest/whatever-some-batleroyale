@@ -725,7 +725,7 @@ func _ground(delta: float) -> void:
 	if want_fire and fire_timer <= 0.0 and not reloading and equip_t > 0.75 and bolt_t < 0.0:
 		_try_fire()
 	elif not has_gun() and _ajp("fire"):
-		notice.emit("NO WEAPON  —  PRESS F TO PICK ONE UP")
+		notice.emit("NO WEAPON  —  PRESS %s TO PICK ONE UP" % Keybinds.key("interact"))
 
 
 ## Riding in a jeep: the body sits in the seat, the game drives the camera.
@@ -1445,7 +1445,7 @@ func _try_fire() -> void:
 		if current_reserve() > 0:
 			start_reload()
 		else:
-			notice.emit("OUT OF AMMO  —  FIND AMMO OR SWAP (Q)")
+			notice.emit("OUT OF AMMO  —  FIND AMMO OR SWAP (%s)" % Keybinds.key("swap_weapon"))
 		return
 	var mag_before := current_mag()
 	mags[id] = current_mag() - 1
@@ -2386,7 +2386,7 @@ func jump_from_plane() -> void:
 	mode = Mode.FREEFALL
 	freefall_speed = -8.0
 	velocity = Vector3(0, -8, 0)
-	notice.emit("W TO DIVE  ·  SPACE TO DEPLOY CHUTE")
+	notice.emit("%s TO DIVE  ·  %s TO DEPLOY CHUTE" % [Keybinds.key("move_forward"), Keybinds.key("jump")])
 
 
 # ------------------------------------------------------------ gun handling --
