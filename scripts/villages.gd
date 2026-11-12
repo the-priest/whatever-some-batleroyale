@@ -104,6 +104,7 @@ func build(p_terrain: Terrain, p_seed: int) -> void:
 	add_child(landmarks)
 	landmarks.build(terrain, self, p_seed)
 	_signposts()
+	_harbour()
 	_commit_batches()
 	_commit_colliders()
 	print("[villages] %d villages, %d houses, %d towers, %d ruins, %d pieces, %d loot points, %d colliders" % [
@@ -1676,6 +1677,121 @@ func _signposts() -> void:
 					add_child(l)
 					l.global_transform = Transform3D(bb.rotated(Vector3.UP, 0.0 if face > 0.0 else PI), bp + bb * Vector3(0, 0, 0.04 * face))
 	print("[villages] %d signposts" % placed.size())
+
+
+## Fishing jetties by the coastal settlements: a plank deck on piles from the
+## beach out over the water, bollards, a crate at the end, and two rowboats
+## tied up beside it.
+func _harbour() -> void:
+	var built := 0
+	for town in village_pads:
+		if built >= 3 or str(town.type) == "farm":
+			continue
+		var site := _jetty_site(town)
+		if site.is_empty():
+			continue
+		_jetty(site[0], site[1])
+		print("[villages] jetty for %s at %s" % [town.name, site[0]])
+		built += 1
+
+
+## A gentle beach near a coastal settlement: the land rises less than 4 m
+## over the last 12 m behind the waterline, and the water is over 1.2 m deep
+## 22 m out. [shore, seaward direction], or [] when there is none in reach.
+func _jetty_site(town: Dictionary) -> Array:
+	var c: Vector2 = town.center
+	var best := 1e9
+	var res: Array = []
+	for k in 64:
+		var a := TAU * float(k) / 64.0
+		var d := Vector2(cos(a), sin(a))
+		var t := float(town.radius) * 0.6
+		while t < float(town.radius) + 110.0:
+			var q := c + d * t
+			var h := terrain.height_at(q.x, q.y)
+			if h < Terrain.WATER_LEVEL - 0.2:
+				var gdx := terrain.height_at(q.x + 2.0, q.y) - terrain.height_at(q.x - 2.0, q.y)
+				var gdz := terrain.height_at(q.x, q.y + 2.0) - terrain.height_at(q.x, q.y - 2.0)
+				var sea := -Vector2(gdx, gdz)
+				if sea.length() > 0.01:
+					sea = sea.normalized()
+					var back := q - sea * 12.0
+					var out := q + sea * 22.0
+					var rise := terrain.height_at(back.x, back.y) - Terrain.WATER_LEVEL
+					var deep := Terrain.WATER_LEVEL - terrain.height_at(out.x, out.y)
+					if rise > 0.3 and rise < 4.0 and deep > 1.2 and t < best and not _on_road(q, 2.0) and house_at(q, 8.0).is_empty():
+						best = t
+						res = [q, sea]
+				break
+			t += 2.0
+	return res
+
+
+func _jetty(shore: Vector2, dir: Vector2) -> void:
+	var wl := Terrain.WATER_LEVEL
+	var deck_y := wl + 1.05
+	var yaw := atan2(dir.x, dir.y)
+	var b := Basis(Vector3.UP, yaw)
+	var start := shore - dir * 4.0
+	var length := 26.0
+	var mid := start + dir * length * 0.5
+	var deck_c := Vector3(mid.x, deck_y, mid.y)
+	_proc_box(Transform3D(b.scaled_local(Vector3(2.6, 0.16, length)), deck_c), "wood")
+	_add_box_collider(deck_c, Vector3(2.6, 0.16, length), yaw)
+	# A ramp up from the sand to the deck.
+	var g0 := terrain.height_at(start.x, start.y)
+	if g0 < deck_y:
+		var rp := Vector3(start.x, (g0 + deck_y) * 0.5, start.y) - Vector3(dir.x, 0, dir.y) * 1.5
+		var rb := b * Basis(Vector3.RIGHT, -atan2(deck_y - g0, 3.0))
+		_proc_box(Transform3D(rb.scaled_local(Vector3(2.4, 0.12, 3.4)), rp), "wood")
+		_add_box_collider(rp, Vector3(2.4, 0.3, 3.4), yaw)
+	# Piles down to the bed, a pair every 3 m, and bollards along the edge.
+	var k := 0.0
+	while k <= length:
+		var at := start + dir * k
+		for sx: float in [-1.15, 1.15]:
+			var pp := at + Vector2(dir.y, -dir.x) * sx
+			var bed := minf(terrain.height_at(pp.x, pp.y), deck_y - 0.4)
+			var ph := deck_y - bed + 0.35
+			var pc := Vector3(pp.x, bed + ph * 0.5 - 0.3, pp.y)
+			_proc_box(Transform3D(b.scaled_local(Vector3(0.24, ph, 0.24)), pc), "wood_dark")
+			_add_box_collider(pc, Vector3(0.24, ph, 0.24), yaw)
+		k += 3.0
+	for kk: float in [8.0, 16.0, 24.0]:
+		for sx: float in [-1.15, 1.15]:
+			var pp2 := start + dir * kk + Vector2(dir.y, -dir.x) * sx
+			_proc_box(Transform3D(b.scaled_local(Vector3(0.26, 0.5, 0.26)), Vector3(pp2.x, deck_y + 0.33, pp2.y)), "wood_dark")
+	# A crate and some rope at the end, with loot.
+	var endp := start + dir * (length - 2.0)
+	_place("Prop_Crate", Vector3(endp.x, deck_y + 0.08, endp.y), yaw + 0.3)
+	_add_box_collider(Vector3(endp.x, deck_y + 0.61, endp.y), Vector3(1.06, 1.06, 1.06), yaw + 0.3)
+	loot_points.append({"pos": Vector3(endp.x, deck_y + 0.1, endp.y) - Vector3(dir.x, 0, dir.y) * 2.0, "kind": "weapon", "village": true})
+	# Two rowboats tied up alongside.
+	for i in 2:
+		var side := Vector2(dir.y, -dir.x) * (1.0 if i == 0 else -1.0)
+		var bp := start + dir * (12.0 + float(i) * 7.0) + side * 2.6
+		_rowboat(Vector3(bp.x, wl - 0.1, bp.y), yaw + (0.08 if i == 0 else -0.12), ["cloth_blue", "cloth_red"][i])
+
+
+## A small open rowboat: flat bottom, flared sides, pointed bow, transom,
+## two thwarts and a pair of oars, a painted band along the gunwale.
+func _rowboat(at: Vector3, yaw: float, paint: String) -> void:
+	var b := Basis(Vector3.UP, yaw)
+	var L := 3.4
+	_proc_box(Transform3D(b.scaled_local(Vector3(0.95, 0.08, L - 0.6)), at + b * Vector3(0, 0.0, 0.2)), "wood_dark")
+	for sx: float in [-1.0, 1.0]:
+		var sb := b * Basis(Vector3.FORWARD, sx * 0.3)
+		_proc_box(Transform3D(sb.scaled_local(Vector3(0.07, 0.48, L - 0.7)), at + b * Vector3(sx * 0.55, 0.22, 0.25)), "wood")
+		_proc_box(Transform3D(sb.scaled_local(Vector3(0.075, 0.1, L - 0.7)), at + b * Vector3(sx * 0.62, 0.43, 0.25)), paint)
+		# The bow: each side swings in to meet the stem.
+		var bb := b * Basis(Vector3.UP, sx * 0.62) * Basis(Vector3.FORWARD, sx * 0.25)
+		_proc_box(Transform3D(bb.scaled_local(Vector3(0.07, 0.5, 1.15)), at + b * Vector3(sx * 0.27, 0.24, -L * 0.5 + 0.05)), "wood")
+	_proc_box(Transform3D(b.scaled_local(Vector3(1.15, 0.46, 0.07)), at + b * Vector3(0, 0.22, L * 0.5 - 0.1)), "wood")
+	for z: float in [-0.3, 0.7]:
+		_proc_box(Transform3D(b.scaled_local(Vector3(1.05, 0.06, 0.24)), at + b * Vector3(0, 0.3, z)), "wood")
+	for sx: float in [-1.0, 1.0]:
+		var ob := b * Basis(Vector3.UP, sx * 0.12) * Basis(Vector3.FORWARD, sx * 0.05)
+		_proc_box(Transform3D(ob.scaled_local(Vector3(0.05, 0.05, 2.4)), at + b * Vector3(sx * 0.25, 0.36, 0.3)), "wood")
 
 
 ## A box of flowers under about one plaster window in three (picked by
