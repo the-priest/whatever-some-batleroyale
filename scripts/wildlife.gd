@@ -23,6 +23,8 @@ var _surf_at := Vector3.INF
 ## A quiet wind over the land: stronger up high and in the open, hushed in
 ## the woods and gone indoors.
 var _wind: AudioStreamPlayer = null
+## Pollen and dust drifting in the air round you on fair days.
+var _motes: GPUParticles3D = null
 
 
 func setup(p_game: Node) -> void:
@@ -115,6 +117,7 @@ func _process(delta: float) -> void:
 	_update_flocks(delta)
 	_update_surf(delta)
 	_update_ground_wind(delta)
+	_update_motes()
 	var p: Player = game.player
 	if not p.alive or p.mode != Player.Mode.GROUND or game.phase != "playing":
 		return
@@ -204,6 +207,69 @@ func _update_ground_wind(delta: float) -> void:
 	_wind.volume_db = lerpf(_wind.volume_db, want, clampf(delta * 1.2, 0.0, 1.0))
 	if want <= -70.0 and _wind.playing and _wind.volume_db < -60.0:
 		_wind.stop()
+
+
+func _update_motes() -> void:
+	if DisplayServer.get_name() == "headless":
+		return
+	var p: Player = game.player
+	if _motes == null:
+		_motes = GPUParticles3D.new()
+		_motes.amount = 70
+		_motes.lifetime = 9.0
+		_motes.preprocess = 9.0
+		_motes.local_coords = false
+		_motes.visibility_aabb = AABB(Vector3(-14, -6, -14), Vector3(28, 14, 28))
+		var pm := ParticleProcessMaterial.new()
+		pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+		pm.emission_box_extents = Vector3(11, 4, 11)
+		pm.direction = Vector3(1, 0.2, 0.3)
+		pm.spread = 180.0
+		pm.initial_velocity_min = 0.05
+		pm.initial_velocity_max = 0.25
+		pm.gravity = Vector3(0.08, 0.02, 0.04)
+		pm.turbulence_enabled = true
+		pm.turbulence_noise_strength = 0.6
+		pm.turbulence_noise_scale = 3.0
+		pm.scale_min = 0.6
+		pm.scale_max = 1.2
+		var grad := Gradient.new()
+		grad.set_color(0, Color(1, 0.97, 0.85, 0.0))
+		grad.add_point(0.2, Color(1, 0.97, 0.85, 0.75))
+		grad.add_point(0.8, Color(1, 0.97, 0.85, 0.75))
+		grad.set_color(grad.get_point_count() - 1, Color(1, 0.97, 0.85, 0.0))
+		var gt := GradientTexture1D.new()
+		gt.gradient = grad
+		pm.color_ramp = gt
+		_motes.process_material = pm
+		var q := QuadMesh.new()
+		q.size = Vector2(0.05, 0.05)
+		var m := StandardMaterial3D.new()
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		m.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+		m.vertex_color_use_as_albedo = true
+		# A soft round speck.
+		var dot := GradientTexture2D.new()
+		dot.fill = GradientTexture2D.FILL_RADIAL
+		dot.fill_from = Vector2(0.5, 0.5)
+		dot.fill_to = Vector2(1.0, 0.5)
+		dot.width = 32
+		dot.height = 32
+		var dg := Gradient.new()
+		dg.set_color(0, Color(1, 1, 1, 1))
+		dg.set_color(1, Color(1, 1, 1, 0))
+		dot.gradient = dg
+		m.albedo_texture = dot
+		q.material = m
+		_motes.draw_pass_1 = q
+		_motes.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(_motes)
+	var fair := str(game.world.weather) in ["clear", "golden", "misty"]
+	var on := fair and p.alive and p.mode == Player.Mode.GROUND and str(game.get("_listener_env")) != "indoor"
+	_motes.emitting = on
+	if on:
+		_motes.global_position = p.global_position + Vector3(0, 1.8, 0)
 
 
 func _sing(o: Vector3) -> void:
