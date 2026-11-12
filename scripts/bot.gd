@@ -91,6 +91,8 @@ var _posture_t := 0.0
 var _reload_t := 0.0
 
 var last_killer_node: Node = null
+## Whether the killing blow was a headshot (for the kill feed).
+var last_headshot := false
 
 # --- Network puppets: bots mirrored from the host, and other humans.
 ## Driven by snapshots instead of AI.
@@ -1985,6 +1987,7 @@ func take_damage(amount: float, _pos: Vector3 = Vector3.ZERO, headshot: bool = f
 			rotation.y = atan2(-to.x, -to.z)
 			think_timer = reaction
 	if hp <= 0.0:
+		last_headshot = headshot
 		_die(source)
 		return true
 	return false

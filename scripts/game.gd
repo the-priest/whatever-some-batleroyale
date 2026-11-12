@@ -1838,7 +1838,14 @@ func _on_bot_eliminated(victim: Bot, killer: String) -> void:
 		hud.show_notice("%d KILL%s" % [player_kills, "" if player_kills == 1 else "S"], 1.6)
 	var col := HUD.ACCENT if killer == "YOU" else HUD.MUTED
 	var mid := ("  [%s]  " % weapon) if weapon != "" else "   >   "
-	hud.killfeed("%s%s%s" % [k, mid, victim.bot_name], col)
+	# Headshot mark and the range, like a scoreboard would show them.
+	var tail := ""
+	if src is Node3D and is_instance_valid(src) and weapon != "":
+		var kd := (src as Node3D).global_position.distance_to(victim.global_position)
+		tail = "   %dM" % int(round(kd))
+	if victim.last_headshot and weapon != "":
+		mid = mid.replace("]", " ◎]")
+	hud.killfeed("%s%s%s%s" % [k, mid, victim.bot_name, tail], col)
 	hud.set_alive(alive, total_players)
 	last_hud_alive = alive
 	_drop_bot_loot(victim)
@@ -3171,6 +3178,10 @@ func _run_shot() -> void:
 		for i in kinds.size():
 			var lp := p.global_position + fwd * (4.0 + float(i / 4) * 2.2) + right * (float(i % 4) - 1.5) * 1.6
 			_spawn_loot(kinds[i][0], kinds[i][1], ground_at(lp) + Vector3(0, 0.08, 0)).label.visible = true
+	if args.has("--feed"):
+		hud.killfeed("YOU  [AR-74 ◎]  RAVEN   48M", HUD.ACCENT)
+		hud.killfeed("FALCON  [M-24]  ONYX   212M", HUD.MUTED)
+		hud.killfeed("THE STORM   >   BADGER", HUD.MUTED)
 	# --opt=key:value: a settings choice, as if picked in the menu.
 	for a in args:
 		if a.begins_with("--opt="):
