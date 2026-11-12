@@ -103,6 +103,7 @@ func build(p_terrain: Terrain, p_seed: int) -> void:
 	landmarks.name = "Landmarks"
 	add_child(landmarks)
 	landmarks.build(terrain, self, p_seed)
+	_signposts()
 	_commit_batches()
 	_commit_colliders()
 	print("[villages] %d villages, %d houses, %d towers, %d ruins, %d pieces, %d loot points, %d colliders" % [
@@ -1607,6 +1608,65 @@ func _place(key: String, bottom_center: Vector3, yaw: float, _align := true, piv
 	_batches[bkey].append(xform)
 	_batch_tints[bkey].append(_tint)
 	_stat.pieces += 1
+
+
+## A signpost where each road comes into a settlement: a post, a board with
+## the place's name on both faces, set beside the road and turned along it.
+func _signposts() -> void:
+	var placed: Array[Vector2] = []
+	var font: Font = load("res://assets/fonts/ui_bold.ttf")
+	for v in village_pads:
+		if str(v.type) == "farm" or str(v.name) == "":
+			continue
+		var c: Vector2 = v.center
+		var r := float(v.radius)
+		for rd in roads:
+			if bool(rd.get("bridge", false)):
+				continue
+			for end: Vector2 in [rd.a, rd.b]:
+				var other: Vector2 = rd.b if end == rd.a else rd.a
+				var d := end.distance_to(c)
+				# A road end at the edge of town, leading out of it.
+				if d < r - 6.0 or d > r + 10.0 or other.distance_to(c) < d:
+					continue
+				var along := (other - end).normalized()
+				var side := Vector2(-along.y, along.x)
+				var at := end + along * 2.0 + side * (float(rd.get("w", 3.0)) + 0.9)
+				var dup := false
+				for q in placed:
+					if q.distance_to(at) < 18.0:
+						dup = true
+				if dup or _on_road(at, 0.3) or not house_at(at, 1.5).is_empty():
+					continue
+				placed.append(at)
+				var gy := terrain.height_at(at.x, at.y)
+				var yaw := atan2(along.x, along.y)
+				var b := Basis(Vector3.UP, yaw)
+				var base := Vector3(at.x, gy, at.y)
+				_proc_box(Transform3D(b.scaled_local(Vector3(0.13, 2.3, 0.13)), base + Vector3(0, 1.1, 0)), "wood_dark")
+				# Hung off the side of the post away from the road, like a real one.
+				var out := 1.0 if (b * Vector3.RIGHT).dot(Vector3(side.x, 0, side.y)) > 0.0 else -1.0
+				var bp := base + Vector3(0, 1.95, 0) + b * Vector3(0.82 * out, 0, 0)
+				# The board faces along the road, readable as you come in or go out.
+				var bb := b
+				_proc_box(Transform3D(bb.scaled_local(Vector3(1.7, 0.42, 0.07)), bp), "wood")
+				_add_box_collider(base + Vector3(0, 1.1, 0), Vector3(0.15, 2.3, 0.15), yaw)
+				for face: float in [1.0, -1.0]:
+					var l := Label3D.new()
+					l.text = str(v.name)
+					l.font = font
+					l.font_size = 64
+					l.pixel_size = 0.0034
+					l.modulate = Color(0.16, 0.1, 0.05)
+					l.outline_size = 0
+					l.shaded = true
+					l.double_sided = false
+					l.visibility_range_end = 90.0
+					l.width = 460.0
+					l.autowrap_mode = TextServer.AUTOWRAP_OFF
+					add_child(l)
+					l.global_transform = Transform3D(bb.rotated(Vector3.UP, 0.0 if face > 0.0 else PI), bp + bb * Vector3(0, 0, 0.04 * face))
+	print("[villages] %d signposts" % placed.size())
 
 
 ## A box of flowers under about one plaster window in three (picked by
