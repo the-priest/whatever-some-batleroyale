@@ -2901,6 +2901,21 @@ func _sweep(spec: String) -> void:
 
 
 ## Ground-level centre of a named place: a fantasy site, a landmark or a town.
+## DBG_PICK="x,y;x,y": what is under those pixels (of a 1280x720 shot).
+func _dbg_pick() -> void:
+	if OS.get_environment("DBG_PICK") == "":
+		return
+	var cam3 := get_viewport().get_camera_3d()
+	for pp in OS.get_environment("DBG_PICK").split(";"):
+		var xy := pp.split_floats(",")
+		var px := Vector2(xy[0], xy[1]) * Vector2(get_viewport().get_visible_rect().size) / Vector2(1280, 720)
+		var o3 := cam3.project_ray_origin(px)
+		var d3 := cam3.project_ray_normal(px)
+		var hit3 := get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(o3, o3 + d3 * 300.0))
+		if not hit3.is_empty():
+			print("[pick] ", pp, " -> ", hit3.collider.name if hit3.collider is Node else hit3.collider, " at ", hit3.position, " place ", _place_name(hit3.position))
+
+
 func _poi_centre(nm: String) -> Vector3:
 	var t := terrain
 	var key := nm.to_lower()
@@ -3092,6 +3107,7 @@ func _run_shot() -> void:
 			var tf := Time.get_ticks_msec()
 			await get_tree().process_frame
 			print("[shot] frame ", i, " ", Time.get_ticks_msec() - tf, " ms")
+		_dbg_pick()
 		await RenderingServer.frame_post_draw
 		get_viewport().get_texture().get_image().save_png(out)
 		print("[shot] saved ", out, " objects=%d draws=%d prims=%dk" % [int(Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME)), int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)), int(Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)) / 1000])
@@ -3604,6 +3620,7 @@ func _run_shot() -> void:
 		if a2.begins_with("--state="):
 			await _shot_state(a2.substr(8))
 	print("[shot] frames waited")
+	_dbg_pick()
 	if args.has("--lookback"):
 		p.yaw -= 2.05
 		p.pitch = -0.95

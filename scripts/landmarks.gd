@@ -1291,11 +1291,31 @@ func _build_oak() -> void:
 			l.position = lp
 			_group.add_child(l)
 	# An old shrine ring round the tree, with mushrooms.
+	# Standing stones: a plinth, a shaft narrowing as it rises and leaning a
+	# little with age, a cap of moss, and a faint rune facing the tree.
+	if not _mats.has("oak_rune"):
+		var rm := StandardMaterial3D.new()
+		rm.albedo_color = Color(0.45, 0.9, 0.75)
+		rm.emission_enabled = true
+		rm.emission = Color(0.35, 0.95, 0.7)
+		rm.emission_energy_multiplier = 1.6
+		_mats["oak_rune"] = rm
+		var mm := StandardMaterial3D.new()
+		mm.albedo_color = Color(0.24, 0.36, 0.14)
+		mm.roughness = 1.0
+		_mats["oak_moss"] = mm
 	for i in 9:
 		var a := TAU * float(i) / 9.0
 		var p := Vector3(c.x + cos(a) * 11.5, 0, c.y + sin(a) * 11.5)
 		p.y = terrain.height_at(p.x, p.z) - 0.3
-		box(p + Vector3(0, 1.1, 0), Vector3(1.0, 2.6, 0.75), -a, "trim")
+		var lean := Basis(Vector3.UP, -a) * Basis(Vector3(1, 0, rng.randf_range(-0.4, 0.4)).normalized(), rng.randf_range(-0.07, 0.07))
+		var hgt := rng.randf_range(2.3, 3.1)
+		box(p + Vector3(0, 0.25, 0), Vector3(1.4, 0.6, 1.1), -a, "trim")
+		box_b(lean, p + lean * Vector3(0, 0.55 + hgt * 0.3, 0), Vector3(1.0, hgt * 0.6, 0.72), "trim")
+		box_b(lean, p + lean * Vector3(0, 0.55 + hgt * 0.6 + hgt * 0.2, 0), Vector3(0.78, hgt * 0.4, 0.6), "trim")
+		box_b(lean, p + lean * Vector3(0, 0.55 + hgt + 0.04, 0), Vector3(0.82, 0.1, 0.64), "oak_moss", false)
+		# The rune on the face toward the tree (the stone's local -x points in).
+		box_b(lean, p + lean * Vector3(0, 0.55 + hgt * 0.45, 0) - Vector3(cos(a), 0, sin(a)) * 0.515, Vector3(0.05, 0.5, 0.22), "oak_rune", false)
 	var shroom: PackedScene = load("res://assets/nature/Mushroom_Common.gltf")
 	for i in 14:
 		var a := rng.randf() * TAU
