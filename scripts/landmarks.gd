@@ -991,6 +991,53 @@ func _build_henge() -> void:
 
 # ---------------------------------------------------------------- Gull Point
 
+## The lamp's two beams sweeping slowly round over the sea: long soft cones
+## of light, faint in sunshine, plain to see in mist and rain.
+func _lighthouse_beam(at: Vector3) -> void:
+	if DisplayServer.get_name() == "headless":
+		return
+	var spin := Node3D.new()
+	spin.name = "LighthouseBeam"
+	_group.add_child(spin)
+	spin.position = at
+	var g := Gradient.new()
+	g.set_color(0, Color(1, 0.95, 0.8, 0.0))
+	g.add_point(0.06, Color(1, 0.95, 0.8, 0.0))
+	g.add_point(0.94, Color(1, 0.95, 0.8, 1.0))
+	g.set_color(g.get_point_count() - 1, Color(1, 0.95, 0.8, 1.0))
+	var gt := GradientTexture2D.new()
+	gt.gradient = g
+	gt.fill_from = Vector2(0, 1)
+	gt.fill_to = Vector2(0, 0)
+	gt.width = 4
+	gt.height = 64
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	m.albedo_texture = gt
+	m.albedo_color = Color(1.0, 0.92, 0.7, 0.11)
+	m.disable_receive_shadows = true
+	var cone := CylinderMesh.new()
+	cone.top_radius = 0.35
+	cone.bottom_radius = 5.5
+	cone.height = 90.0
+	cone.radial_segments = 16
+	cone.cap_top = false
+	cone.cap_bottom = false
+	for k: float in [0.0, PI]:
+		var mi := MeshInstance3D.new()
+		mi.mesh = cone
+		mi.material_override = m
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		# Lying on its side, the narrow end at the lamp, tipped down a touch.
+		mi.transform = Transform3D(Basis(Vector3.UP, k) * Basis(Vector3.RIGHT, PI * 0.5 - 0.06), Basis(Vector3.UP, k) * Vector3(0, -2.7, -45.0))
+		spin.add_child(mi)
+	var tw := spin.create_tween().set_loops()
+	tw.tween_property(spin, "rotation:y", TAU, 14.0).from(0.0)
+
+
 func _build_lighthouse() -> void:
 	_begin("GullPoint")
 	var c: Vector2 = terrain.lighthouse_c
@@ -1064,6 +1111,7 @@ func _build_lighthouse() -> void:
 	cyl(o + Vector3(0, deck + 0.8, 0), 2.1, 2.1, 2.4, "lamp", 12, true)
 	cyl(o + Vector3(0, deck + 3.2, 0), 2.7, 0.2, 2.4, "roof", 12, false)
 	cyl(o + Vector3(0, deck + 5.5, 0), 0.25, 0.0, 1.0, "gold", 8, false)
+	_lighthouse_beam(o + Vector3(0, deck + 2.0, 0))
 	# Keeper's cottage at the foot.
 	var cot := o + Vector3(cos(start_a + PI) * 12.0, 0, sin(start_a + PI) * 12.0)
 	var cyaw := -start_a
