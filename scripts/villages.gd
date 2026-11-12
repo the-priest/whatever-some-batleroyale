@@ -1498,17 +1498,26 @@ func _lamp_post(p: Vector3, toward: Vector2) -> void:
 func _commit_barrels() -> void:
 	if _barrels.is_empty():
 		return
-	var mm := MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.mesh = _barrel_mesh()
-	mm.instance_count = _barrels.size()
-	for i in _barrels.size():
-		mm.set_instance_transform(i, _barrels[i])
-	var mmi := MultiMeshInstance3D.new()
-	mmi.name = "Barrels"
-	mmi.multimesh = mm
-	mmi.visibility_range_end = 700.0
-	add_child(mmi)
+	var mesh := _barrel_mesh()
+	var cells: Dictionary = {}
+	for xf: Transform3D in _barrels:
+		var ck := Vector2i(floori(xf.origin.x / BATCH_CELL), floori(xf.origin.z / BATCH_CELL))
+		if not cells.has(ck):
+			cells[ck] = []
+		cells[ck].append(xf)
+	for ck in cells:
+		var list: Array = cells[ck]
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.mesh = mesh
+		mm.instance_count = list.size()
+		for i in list.size():
+			mm.set_instance_transform(i, list[i])
+		var mmi := MultiMeshInstance3D.new()
+		mmi.name = "Barrels_%d_%d" % [ck.x, ck.y]
+		mmi.multimesh = mm
+		mmi.visibility_range_end = 500.0 + BATCH_CELL * 0.75
+		add_child(mmi)
 
 
 ## Staves bulging out to the middle, a lid, three iron hoops.
