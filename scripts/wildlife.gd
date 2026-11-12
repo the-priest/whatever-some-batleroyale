@@ -20,6 +20,9 @@ var _rng := RandomNumberGenerator.new()
 var _surf: AudioStreamPlayer3D = null
 var _surf_t := 0.0
 var _surf_at := Vector3.INF
+## A quiet wind over the land: stronger up high and in the open, hushed in
+## the woods and gone indoors.
+var _wind: AudioStreamPlayer = null
 
 
 func setup(p_game: Node) -> void:
@@ -111,6 +114,7 @@ func _process(delta: float) -> void:
 	_hush = maxf(0.0, _hush - delta)
 	_update_flocks(delta)
 	_update_surf(delta)
+	_update_ground_wind(delta)
 	var p: Player = game.player
 	if not p.alive or p.mode != Player.Mode.GROUND or game.phase != "playing":
 		return
@@ -172,6 +176,34 @@ func _update_surf(delta: float) -> void:
 	_surf.volume_db = lerpf(_surf.volume_db, want, clampf(delta * 1.5, 0.0, 1.0))
 	if want <= -70.0 and _surf.playing and _surf.volume_db < -60.0:
 		_surf.stop()
+
+
+func _update_ground_wind(delta: float) -> void:
+	var p: Player = game.player
+	if _wind == null:
+		var st: AudioStream = game.sfx.stream("wind_loop")
+		if st == null:
+			return
+		# Its own copy: the freefall rush sets the shared one's pitch.
+		st = st.duplicate()
+		game._make_loop(st)
+		_wind = AudioStreamPlayer.new()
+		_wind.stream = st
+		_wind.volume_db = -80.0
+		_wind.pitch_scale = 0.62
+		add_child(_wind)
+	var want := -80.0
+	if p.alive and p.mode == Player.Mode.GROUND and game.phase in ["playing", "end"]:
+		var env := str(game.get("_listener_env"))
+		var h := clampf((p.global_position.y - 20.0) / 60.0, 0.0, 1.0)
+		want = {"indoor": -80.0, "forest": -34.0, "town": -30.0}.get(env, -27.0) + h * 7.0
+		if str(game.world.weather) == "rain":
+			want += 3.0
+	if want > -70.0 and not _wind.playing:
+		_wind.play(_rng.randf() * 5.0)
+	_wind.volume_db = lerpf(_wind.volume_db, want, clampf(delta * 1.2, 0.0, 1.0))
+	if want <= -70.0 and _wind.playing and _wind.volume_db < -60.0:
+		_wind.stop()
 
 
 func _sing(o: Vector3) -> void:
