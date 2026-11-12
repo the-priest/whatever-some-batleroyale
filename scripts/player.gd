@@ -344,6 +344,7 @@ func _physics_process(delta: float) -> void:
 ## _update_self_body).
 var self_body: SoldierRig = null
 var _self_mats: Array[ShaderMaterial] = []
+var _self_gun := "-"
 ## Height above your feet where your own body stops being drawn.
 const SELF_HIP := 0.78
 
@@ -415,6 +416,20 @@ func _update_self_body(at: Vector3) -> void:
 		legs = "Sprint" if sprinting else ("Jog_Fwd" if planar > 3.2 else "Walk")
 		spd = clampf(planar / (6.4 if sprinting else (4.6 if planar > 3.2 else 2.2)), 0.6, 1.4)
 	self_body.set_legs(legs, spd)
+	# The shadow holds your gun, up when you aim, and heals or reloads with you.
+	var gid := current_id() if has_gun() else ""
+	if gid != _self_gun:
+		_self_gun = gid
+		self_body.set_gun(gid)
+		for n in self_body.gun_holder.find_children("*", "GeometryInstance3D", true, false):
+			(n as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+	var arms := ""
+	if healing:
+		arms = heal_item
+	elif gid != "":
+		arms = "reload" if reloading else ("aim" if aiming else "idle")
+	self_body.set_arms(arms)
+	self_body.aim_dir = -camera.global_basis.z
 	for sm in _self_mats:
 		sm.set_shader_parameter("cut_above", at.y + (SELF_HIP * 0.62 if crouching() else SELF_HIP))
 	self_body.set_gear(vest_level, helmet_level)
