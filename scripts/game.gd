@@ -2356,6 +2356,101 @@ func step_puff(pos: Vector3, wet: bool) -> void:
 		_puff(at, Color(0.55, 0.47, 0.36, 0.32), 1.6, 6.5)
 
 
+var _blast_mats: Dictionary = {}
+
+
+func _blast_mat(key: String) -> StandardMaterial3D:
+	if _blast_mats.has(key):
+		return _blast_mats[key]
+	var m := StandardMaterial3D.new()
+	m.albedo_texture = world._cloud_texture() if world != null else null
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	m.disable_receive_shadows = true
+	if key == "fire":
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	else:
+		m.roughness = 1.0
+	_blast_mats[key] = m
+	return m
+
+
+## A grenade going off: a white-hot flash, a rolling fireball, dirt and stones
+## flung out, a column of dark smoke drifting up for a few seconds and a
+## scorch left on the ground.
+func _blast_visuals(pos: Vector3) -> void:
+	if DisplayServer.get_name() == "headless":
+		return
+	var up := Vector3.UP
+	var q := QuadMesh.new()
+	q.size = Vector2.ONE
+	# Fireball: puffs bursting out and fading from white through orange.
+	for i in 14:
+		var mi := MeshInstance3D.new()
+		mi.mesh = q
+		var fm := _blast_mat("fire").duplicate() as StandardMaterial3D
+		mi.material_override = fm
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(mi)
+		var dir := Vector3(randf_range(-1, 1), randf_range(0.2, 1.0), randf_range(-1, 1)).normalized()
+		mi.global_position = pos + up * 0.6 + dir * 0.3
+		mi.scale = Vector3.ONE * 1.8
+		var end := pos + up * 1.0 + dir * randf_range(0.8, 1.8)
+		var life := randf_range(0.35, 0.55)
+		var tw := mi.create_tween().set_parallel(true)
+		tw.tween_property(mi, "global_position", end, life).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+		tw.tween_property(mi, "scale", Vector3.ONE * randf_range(3.8, 5.2), life).set_ease(Tween.EASE_OUT)
+		tw.tween_method(func(t: float) -> void:
+			var c := Color(1.0, 0.95, 0.8).lerp(Color(1.0, 0.42, 0.1), clampf(t * 1.6, 0.0, 1.0))
+			c.a = (1.0 - t) * 0.95
+			fm.albedo_color = c
+		, 0.0, 1.0, life)
+		tw.chain().tween_callback(mi.queue_free)
+	# Smoke: dark puffs that rise, spread and thin out over a few seconds.
+	for i in 12:
+		var mi := MeshInstance3D.new()
+		mi.mesh = q
+		var sm2 := _blast_mat("smoke")
+		sm2.albedo_color = Color(0.2, 0.19, 0.18, 0.85)
+		mi.material_override = sm2
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(mi)
+		var off := Vector3(randf_range(-1.2, 1.2), randf_range(0.3, 1.4), randf_range(-1.2, 1.2))
+		mi.global_position = pos + off
+		mi.scale = Vector3.ONE * 1.2
+		var life := randf_range(2.5, 4.0)
+		var end := pos + off * 1.6 + up * randf_range(3.0, 5.5) + Vector3(0.8, 0, 0.4)
+		var tw := mi.create_tween().set_parallel(true)
+		tw.tween_property(mi, "global_position", end, life).set_ease(Tween.EASE_OUT)
+		tw.tween_property(mi, "scale", Vector3.ONE * randf_range(5.0, 8.0), life).set_ease(Tween.EASE_OUT)
+		mi.transparency = 0.15
+		tw.tween_property(mi, "transparency", 1.0, life).set_ease(Tween.EASE_IN)
+		tw.chain().tween_callback(mi.queue_free)
+	# Dirt and stones.
+	var n := up
+	_chips(pos + up * 0.2, n, Color(0.3, 0.24, 0.17), 10)
+	_chips(pos + up * 0.2, n, Color(0.45, 0.43, 0.4), 5)
+	# A scorch on the ground (a big burnt hole decal).
+	var hit := get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(pos + up * 1.0, pos + Vector3.DOWN * 2.0, 1))
+	if not hit.is_empty():
+		if _hole_tex == null:
+			_hole_tex = _make_hole_texture()
+		var d := Decal.new()
+		d.texture_albedo = _hole_tex
+		d.modulate = Color(0.25, 0.22, 0.2)
+		d.size = Vector3(3.4, 1.2, 3.4)
+		d.cull_mask = 1
+		d.distance_fade_enabled = true
+		d.distance_fade_begin = 60.0
+		d.distance_fade_length = 20.0
+		add_child(d)
+		var nn: Vector3 = (hit.normal as Vector3).normalized()
+		var sd := nn.cross(Vector3.RIGHT if absf(nn.x) < 0.9 else Vector3.FORWARD).normalized()
+		d.global_transform = Transform3D(Basis(sd, nn, sd.cross(nn)), hit.position)
+		_holes.append(d)
+
+
 func spawn_explosion(pos: Vector3) -> void:
 	sfx.play_at("explosion", pos, 4.0, 0.1)
 	var light := OmniLight3D.new()
@@ -2367,8 +2462,7 @@ func spawn_explosion(pos: Vector3) -> void:
 	var tl := light.create_tween()
 	tl.tween_property(light, "light_energy", 0.0, 0.35)
 	tl.tween_callback(light.queue_free)
-	_puff(pos + Vector3.UP * 0.4, Color(1.0, 0.72, 0.35, 0.95), 4.0, 26.0)
-	_puff(pos + Vector3.UP * 0.8, Color(0.25, 0.23, 0.21, 0.8), 6.0, 34.0)
+	_blast_visuals(pos)
 	if player != null and player.alive:
 		var d := pos.distance_to(player.global_position)
 		if d < 30.0:
@@ -3259,6 +3353,14 @@ func _run_shot() -> void:
 		for i in kinds.size():
 			var lp := p.global_position + fwd * (4.0 + float(i / 4) * 2.2) + right * (float(i % 4) - 1.5) * 1.6
 			_spawn_loot(kinds[i][0], kinds[i][1], ground_at(lp) + Vector3(0, 0.08, 0)).label.visible = true
+	for a in args:
+		# --boom=F: a grenade going off 8 m ahead, caught F seconds in.
+		if a.begins_with("--boom="):
+			var bp := ground_at(p.global_position + Basis(Vector3.UP, p.yaw) * Vector3(0, 0, -8.0))
+			spawn_explosion(bp)
+			var t_end := Time.get_ticks_msec() + int(float(a.substr(7)) * 1000.0)
+			while Time.get_ticks_msec() < t_end:
+				await get_tree().process_frame
 	if args.has("--feed"):
 		hud.killfeed("YOU  [AR-74 ◎]  RAVEN   48M", HUD.ACCENT)
 		hud.killfeed("FALCON  [M-24]  ONYX   212M", HUD.MUTED)
