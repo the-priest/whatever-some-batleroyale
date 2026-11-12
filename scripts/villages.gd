@@ -2046,22 +2046,41 @@ func _proc_material(key: String) -> Material:
 	return m
 
 
+## Small things (furniture, pots, flowers, lanterns) stop being drawn this
+## far out; walls, stone and timber carry on with the houses.
+const PROC_NEAR := ["jar", "pot", "leaf", "lamp", "iron", "cloth_white", "cloth_red", "cloth_blue", "cloth_green", "cloth_yellow"]
+
+
 func _commit_proc() -> void:
 	var cube := BoxMesh.new()
 	cube.size = Vector3.ONE
 	for key in _proc:
-		var list: Array = _proc[key]
-		var mm := MultiMesh.new()
-		mm.transform_format = MultiMesh.TRANSFORM_3D
-		mm.mesh = cube
-		mm.instance_count = list.size()
-		for i in list.size():
-			mm.set_instance_transform(i, list[i])
-		var mmi := MultiMeshInstance3D.new()
-		mmi.name = "P_" + key
-		mmi.multimesh = mm
-		mmi.material_override = _proc_material(key)
-		add_child(mmi)
+		# Split by map cell so what is off screen (or out of a shadow
+		# cascade) is culled, instead of one island-wide batch per material.
+		var cells: Dictionary = {}
+		for xf: Transform3D in _proc[key]:
+			var ck := Vector2i(floori(xf.origin.x / BATCH_CELL), floori(xf.origin.z / BATCH_CELL))
+			if not cells.has(ck):
+				cells[ck] = []
+			cells[ck].append(xf)
+		var mat := _proc_material(key)
+		var near: bool = key in PROC_NEAR
+		for ck in cells:
+			var list: Array = cells[ck]
+			var mm := MultiMesh.new()
+			mm.transform_format = MultiMesh.TRANSFORM_3D
+			mm.mesh = cube
+			mm.instance_count = list.size()
+			for i in list.size():
+				mm.set_instance_transform(i, list[i])
+			var mmi := MultiMeshInstance3D.new()
+			mmi.name = "P_%s_%d_%d" % [key, ck.x, ck.y]
+			mmi.multimesh = mm
+			mmi.material_override = mat
+			mmi.visibility_range_end = (260.0 if near else 1300.0) + BATCH_CELL * 0.75
+			if near:
+				mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF if key in ["jar", "pot", "leaf"] else GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+			add_child(mmi)
 
 
 func _commit_batches() -> void:
