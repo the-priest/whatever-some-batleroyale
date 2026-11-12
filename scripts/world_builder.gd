@@ -1321,6 +1321,10 @@ func _scatter_ground_cover() -> void:
 		# clump, read as black dots across the meadows: lift them.
 		if (k.name as String).begins_with("Bush"):
 			mat.set_shader_parameter("tint", Color(1.6, 1.65, 1.35))
+		# The kit's grass clumps and ferns are a lime that glows against the
+		# ground: bring them down to the meadow's green.
+		elif (k.name as String).begins_with("Grass") or (k.name as String).begins_with("Fern"):
+			mat.set_shader_parameter("tint", Color(0.78, 0.82, 0.62))
 
 		# 150 m tiles keep draw calls frustum-culled.
 		var tiles: Dictionary = {}
