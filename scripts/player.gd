@@ -340,8 +340,90 @@ func _physics_process(delta: float) -> void:
 		_phys_prev = _phys_cur
 
 
+## Your own body, seen when you look down and in your shadow (see
+## _update_self_body).
+var self_body: SoldierRig = null
+var _self_mats: Array[ShaderMaterial] = []
+## Height above your feet where your own body stops being drawn.
+const SELF_HIP := 0.78
+
+
+func _setup_self_body() -> void:
+	if self_body != null or DisplayServer.get_name() == "headless":
+		return
+	self_body = SoldierRig.new()
+	self_body.palette = 3  # woodland: your own legs read clearly against the ground
+	self_body.top_level = true
+	add_child(self_body)
+	for n in self_body.find_children("*", "GeometryInstance3D", true, false):
+		var gi := n as GeometryInstance3D
+		gi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		if not (gi is MeshInstance3D and (gi as MeshInstance3D).skin != null):
+			gi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+		if gi is MeshInstance3D and (gi as MeshInstance3D).skin != null:
+			var mi := gi as MeshInstance3D
+			for si in mi.mesh.get_surface_count():
+				var m := mi.get_surface_override_material(si)
+				if m == null:
+					m = mi.mesh.surface_get_material(si)
+				mi.set_surface_override_material(si, _near_cut(m))
+			if mi.material_override != null:
+				mi.material_override = _near_cut(mi.material_override)
+
+
+## The uniform: cut off at the hips (see shaders/camo.gdshader). Everything
+## else on the body (joints, vest, helmet, pack) is upper body or small:
+## shadow only.
+func _near_cut(m: Material) -> Material:
+	if m is ShaderMaterial:
+		var sm := (m as ShaderMaterial).duplicate() as ShaderMaterial
+		_self_mats.append(sm)
+		return sm
+	if m is BaseMaterial3D:
+		# The mannequin's joints: same cut, in their own flat colour.
+		var c := (m as BaseMaterial3D).albedo_color
+		var jm := ShaderMaterial.new()
+		jm.shader = load("res://shaders/camo.gdshader")
+		for p: String in ["c_base", "c_a", "c_b", "c_c"]:
+			jm.set_shader_parameter(p, Color(c.r, c.g, c.b))
+		_self_mats.append(jm)
+		return jm
+	return m
+
+
+func _update_self_body(at: Vector3) -> void:
+	if self_body == null:
+		_setup_self_body()
+		if self_body == null:
+			return
+	var on_foot := alive and mode == Mode.GROUND and vehicle == null
+	self_body.visible = on_foot
+	if not on_foot:
+		return
+	self_body.global_transform = Transform3D(Basis(Vector3.UP, yaw), at)
+	var planar := Vector2(velocity.x, velocity.z).length()
+	var legs := "Idle"
+	var spd := 1.0
+	if swimming:
+		legs = "Swim_Fwd" if planar > 0.5 else "Swim_Idle"
+	elif not is_on_floor():
+		legs = "Jump"
+	elif crouching():
+		legs = "Crouch_Fwd" if planar > 0.4 else "Crouch_Idle"
+		spd = clampf(planar / 1.6, 0.6, 1.4)
+	elif planar > 0.4:
+		legs = "Sprint" if sprinting else ("Jog_Fwd" if planar > 3.2 else "Walk")
+		spd = clampf(planar / (6.4 if sprinting else (4.6 if planar > 3.2 else 2.2)), 0.6, 1.4)
+	self_body.set_legs(legs, spd)
+	for sm in _self_mats:
+		sm.set_shader_parameter("cut_above", at.y + (SELF_HIP * 0.62 if crouching() else SELF_HIP))
+	self_body.set_gear(vest_level, helmet_level)
+
+
 func _process(delta: float) -> void:
 	if not alive or camera == null:
+		if self_body != null:
+			self_body.visible = false
 		return
 	_update_camera(delta)
 	var body := global_position
@@ -353,6 +435,7 @@ func _process(delta: float) -> void:
 			_phys_prev = global_position
 			_phys_cur = global_position
 	camera.global_position = body + _cam_local
+	_update_self_body(body)
 
 
 func _physics_process_body(delta: float) -> void:

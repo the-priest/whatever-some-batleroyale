@@ -10,6 +10,17 @@ uniform vec3 c_b : source_color = vec3(0.38, 0.31, 0.21);
 uniform vec3 c_c : source_color = vec3(0.12, 0.12, 0.10);
 uniform float scale = 9.0;
 uniform float seed = 0.0;
+// Your own body in first person: nothing above this world height (the hips)
+// is drawn from the camera, so looking down shows legs and feet and nothing
+// cuts through the view. The sun's shadow pass (orthographic) draws it all,
+// so the whole body still casts its shadow.
+uniform float cut_above = 1e9;
+
+varying float w_y;
+
+void vertex() {
+	w_y = (MODEL_MATRIX * vec4(VERTEX, 1.0)).y;
+}
 
 float hash(vec2 p) {
 	p = fract(p * vec2(123.34, 456.21) + seed);
@@ -29,6 +40,9 @@ float vnoise(vec2 p) {
 }
 
 void fragment() {
+	if (w_y > cut_above && PROJECTION_MATRIX[3][3] < 0.5) {
+		discard;
+	}
 	vec2 uv = UV * scale;
 	float n1 = vnoise(uv) * 0.65 + vnoise(uv * 2.3 + 7.1) * 0.35;
 	float n2 = vnoise(uv * 1.4 + 19.7) * 0.6 + vnoise(uv * 3.1 + 3.3) * 0.4;

@@ -43,6 +43,8 @@ const UPPER_BONES := ["spine_02", "spine_03", "neck_01", "Head", "clavicle_l", "
 	"clavicle_r", "upperarm_r", "lowerarm_r", "hand_r"]
 
 var model: Node3D
+## Uniform to wear (index into PALETTES), -1 for a random one.
+var palette := -1
 var skeleton: Skeleton3D
 var anim: AnimationPlayer
 var tree: AnimationTree
@@ -70,7 +72,7 @@ func _ready() -> void:
 	model.rotation.y = PI
 	skeleton = model.find_children("*", "Skeleton3D", true, false)[0]
 	anim = model.find_children("*", "AnimationPlayer", true, false)[0]
-	var pi := randi() % PALETTES.size()
+	var pi := palette if palette >= 0 else randi() % PALETTES.size()
 	var pal: Array = PALETTES[pi]
 	var camo := ShaderMaterial.new()
 	camo.shader = _camo_shader()
