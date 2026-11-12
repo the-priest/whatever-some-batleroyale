@@ -1847,6 +1847,9 @@ func _shoot_logic(delta: float) -> void:
 			game.ballistics.fire(self, from, dir, weapon_id, _muzzle_flash.global_position, _shot_seq, mult)
 	if game != null and game.has_method("play_sfx_at"):
 		game.play_sfx_at("shot_" + str(d["sound"]), from, 0.85)
+	# Brass out of the right side, close enough for you to see it.
+	if game != null and game.player != null and global_position.distance_to(game.player.global_position) < 35.0 and game.has_method("bot_casing"):
+		game.bot_casing(from - global_basis.z * -0.25 + global_basis.x * 0.08, global_basis.x * randf_range(1.6, 2.4) + Vector3.UP * 1.2, Weapons.cls(weapon_id) == "shotgun")
 	if game != null and game.has_method("on_gunshot"):
 		game.on_gunshot(from, self)
 

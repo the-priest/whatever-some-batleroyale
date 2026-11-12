@@ -2344,6 +2344,32 @@ func spawn_splash(at: Vector3) -> void:
 var _splash_mat: StandardMaterial3D = null
 
 
+var _bb_mesh: Array = []
+var _bb_mat: Array = []
+
+
+## Someone else's spent case or hull, flung out and left on the ground.
+func bot_casing(at: Vector3, vel: Vector3, shell: bool) -> void:
+	if DisplayServer.get_name() == "headless":
+		return
+	if _bb_mesh.is_empty():
+		for sh: bool in [false, true]:
+			var cm := CylinderMesh.new()
+			cm.top_radius = 0.0065 if sh else 0.0034
+			cm.bottom_radius = cm.top_radius
+			cm.height = 0.055 if sh else 0.03
+			cm.radial_segments = 6
+			cm.rings = 1
+			_bb_mesh.append(cm)
+			var m := StandardMaterial3D.new()
+			m.albedo_color = Color(0.7, 0.12, 0.1) if sh else Color(0.86, 0.66, 0.28)
+			m.metallic = 0.0 if sh else 0.7
+			m.roughness = 0.5 if sh else 0.3
+			_bb_mat.append(m)
+	var k := 1 if shell else 0
+	drop_casing(at, _bb_mesh[k], _bb_mat[k], vel)
+
+
 ## A footstep's puff of dust, or a splash in the shallows.
 func step_puff(pos: Vector3, wet: bool) -> void:
 	if player == null or pos.distance_to(player.global_position) > 60.0:
