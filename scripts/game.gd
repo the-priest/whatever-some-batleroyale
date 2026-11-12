@@ -1762,6 +1762,33 @@ func _on_player_died(killer: String) -> void:
 		return
 	if player.mode == Player.Mode.VEHICLE:
 		_leave_seat()
+	# Hosting: your own kit falls where you did, for the others to take.
+	# (Everyone else's death is a Bot on this machine: _drop_bot_kit.)
+	if net_on() and net.hosting and player.mode == Player.Mode.GROUND:
+		var base := ground_at(player.global_position + Vector3.UP * 0.5) + Vector3(0, 0.3, 0)
+		var items: Array = []
+		for gid: String in player.loadout:
+			if gid != "":
+				items.append(["weapon", gid, int(player.mags.get(gid, 0))])
+		for cal in player.ammo:
+			if int(player.ammo[cal]) > 0:
+				items.append(["ammo", str(cal), -1])
+		if player.vest_level > 0:
+			items.append(["armor", str(player.vest_level), -1])
+		if player.helmet_level > 0:
+			items.append(["helmet", str(player.helmet_level), -1])
+		if player.meds > 0:
+			items.append(["med", "", -1])
+		if player.bandages > 0:
+			items.append(["bandage", "", -1])
+		for it: Array in items:
+			var at := _loot_spot(base, 0.6, 1.8)
+			if at == Vector3.INF:
+				continue
+			if it[0] == "weapon":
+				_spawn_loot("weapon", it[1], at, int(it[2]), -1).dropped = true
+			else:
+				_spawn_loot(it[0], it[1], at).dropped = true
 	if net_on():
 		var k = player.last_killer
 		var kk := node_key(k)
@@ -1802,6 +1829,7 @@ func _on_notice(text: String) -> void:
 
 func _on_bot_eliminated(victim: Bot, killer: String) -> void:
 	alive = maxi(0, alive - 1)
+	_drop_bot_kit(victim)
 	if net_on() and net.hosting and victim.last_killer_node is Bot and is_instance_valid(victim.last_killer_node) and (victim.last_killer_node as Bot).is_human:
 		anticheat.host_peer_kill((victim.last_killer_node as Bot).peer_id)
 	if net_on() and net.hosting:
@@ -1976,6 +2004,42 @@ func try_pickup(p: Player) -> void:
 		hud.set_prompt("")
 		if p.hands != null:
 			p.hands.grab()
+
+
+## What a fallen fighter had on them is left where they fell: the gun with
+## what was in it, ammo for it, armour, helmet, meds and grenades, spread
+## round the body so each can be picked up. The host (or a solo game) drops
+## it; clients get it like any other loot.
+func _drop_bot_kit(b: Bot) -> void:
+	if b == null or not is_instance_valid(b) or phase != "playing":
+		return
+	if net_on() and not net.hosting:
+		return
+	var c := b.global_position
+	var items: Array = []
+	if b.armed and b.weapon_id != "":
+		items.append(["weapon", b.weapon_id, b.mag])
+		items.append(["ammo", Weapons.caliber(b.weapon_id), -1])
+	if b.vest_level > 0:
+		items.append(["armor", str(b.vest_level), -1])
+	if b.helmet_level > 0:
+		items.append(["helmet", str(b.helmet_level), -1])
+	for i in mini(b.meds, 2):
+		items.append(["med" if i == 0 else "bandage", "", -1])
+	if b.grenades > 0:
+		items.append(["grenade", "", -1])
+	# Where the body lies, then free floor round it in the same room.
+	var base := ground_at(c + Vector3.UP * 0.5) + Vector3(0, 0.3, 0)
+	for it: Array in items:
+		var at := _loot_spot(base, 0.6, 1.6)
+		if at == Vector3.INF:
+			at = _loot_spot(base, 0.0, 2.4)
+		if at == Vector3.INF:
+			continue
+		if it[0] == "weapon":
+			_spawn_loot("weapon", it[1], at, int(it[2]), -1).dropped = true
+		else:
+			_spawn_loot(it[0], it[1], at).dropped = true
 
 
 func drop_item(kind: String, id: String, pos: Vector3) -> void:
