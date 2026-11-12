@@ -39,6 +39,8 @@ var body: SoldierRig
 var speed_anim := "Idle"
 var hit_flash := 0.0
 var dead_timer := 0.0
+## A body lies where it fell this long (by its dropped kit), then sinks away.
+const BODY_STAYS := 45.0
 var head_offset := 1.50
 
 var _loot_scan := 0.0
@@ -342,10 +344,10 @@ func _physics_process_body(delta: float) -> void:
 				velocity.y = minf(velocity.y, 0.0)
 			velocity.y = maxf(velocity.y - GRAVITY * delta, -50.0)
 			_move()
-		else:
+		elif dead_timer > BODY_STAYS:
 			# Settle into the ground rather than vanish.
 			position.y -= delta * 0.6
-		if dead_timer > 10.0:
+		if dead_timer > BODY_STAYS + 3.0:
 			queue_free()
 		return
 
@@ -1565,9 +1567,9 @@ func _puppet_tick(delta: float) -> void:
 		if dead_timer <= 7.0 and global_position.y > _dead_floor + 0.01:
 			_dead_vy = minf(_dead_vy + GRAVITY * delta, 50.0)
 			global_position.y = maxf(_dead_floor, global_position.y - _dead_vy * delta)
-		if dead_timer > 7.0 and not is_human:
+		if dead_timer > BODY_STAYS and not is_human:
 			position.y -= delta * 0.6
-		if dead_timer > 10.0 and not is_human:
+		if dead_timer > BODY_STAYS + 3.0 and not is_human:
 			queue_free()
 		return
 	if not _net_seen:
