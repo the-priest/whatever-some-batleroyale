@@ -18,6 +18,9 @@ var spawn_points: Array[Vector3] = []
 ## What the map is drawn from: heights + water depth, and tree cover.
 var map_data_texture: ImageTexture
 var map_canopy_texture: ImageTexture
+## The same tree cover on the CPU (R8, MAP_CANOPY_RES square over the map),
+## for the grass to thin out under the trees.
+var canopy_image: Image = null
 const MAP_CANOPY_RES := 2048
 ## The dry land's bounding box in world x/z (the lobby frames its map on it).
 var land_rect := Rect2(-Terrain.HALF, -Terrain.HALF, Terrain.SIZE, Terrain.SIZE)
@@ -342,6 +345,16 @@ func _ground_weights(x: float, z: float, h: float, n: Vector3) -> Color:
 
 
 const ROAD_RES := 2048
+
+
+## How much tree cover is over this spot (0 open .. 1 under a crown).
+func canopy_at(x: float, z: float) -> float:
+	if canopy_image == null:
+		return 0.0
+	var n := canopy_image.get_width()
+	var px := clampi(int((x + Terrain.HALF) / Terrain.SIZE * float(n)), 0, n - 1)
+	var pz := clampi(int((z + Terrain.HALF) / Terrain.SIZE * float(n)), 0, n - 1)
+	return canopy_image.get_pixel(px, pz).r
 
 
 ## Crisp dirt roads: segments rasterised into a mask the terrain shader blends.
@@ -1738,6 +1751,13 @@ func _build_minimap() -> void:
 	cimg.convert(Image.FORMAT_R8)
 	cimg.generate_mipmaps()
 	map_canopy_texture = ImageTexture.create_from_image(cimg)
+	canopy_image = cimg
+	if OS.get_environment("DBG_CANOPY") != "":
+		cimg.save_png(OS.get_environment("DBG_CANOPY"))
+	# The same cover tells the ground where the forest floor is.
+	if _terrain_material != null:
+		_terrain_material.set_shader_parameter("canopy_map", map_canopy_texture)
+		_terrain_material.set_shader_parameter("has_canopy_map", true)
 
 
 func _map_stamp(img: Image, stamps: Dictionary, c: Vector2, radius_m: float, k: float) -> void:

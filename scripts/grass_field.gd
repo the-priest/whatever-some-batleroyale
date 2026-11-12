@@ -160,6 +160,10 @@ func _compute_chunk(k: Vector2i) -> void:
 			var forest := t.forest_density(x, z)
 			if forest > 0.6 and rr.randf() < 0.6:
 				continue
+			# Under the crowns the floor is litter and moss, not lawn.
+			var cov := world.canopy_at(x, z)
+			if cov > 0.3 and rr.randf() < (cov - 0.3) * 1.25:
+				continue
 			if world._road_distance(x, z) < 0.9 or world.grass_blocked(x, z):
 				continue
 			var s := rr.randf_range(0.75, 1.35)

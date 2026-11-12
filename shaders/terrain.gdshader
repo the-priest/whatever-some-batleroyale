@@ -18,6 +18,9 @@ varying float canopy;
 // Rain: 0 dry .. 1 soaked. Soil darkens, stone and roads go glossy, and
 // water pools in the flat ruts and hollows.
 uniform float wetness = 0.0;
+// Tree cover baked from the trees actually planted (world_builder minimap).
+uniform sampler2D canopy_map : filter_linear_mipmap, repeat_disable;
+uniform bool has_canopy_map = false;
 uniform float canopy_near = 520.0;
 uniform float canopy_far = 760.0;
 
@@ -66,6 +69,24 @@ void fragment() {
 		float rut = smoothstep(0.55, 0.75, road) * (1.0 - smoothstep(0.8, 0.95, road));
 		track *= 1.0 - rut * 0.18;
 		col = mix(col, track, smoothstep(0.0, 0.5, road) * 0.92);
+	}
+	// Under the trees: leaf litter, needles and moss in patches instead of
+	// meadow grass, a little darker where the canopy closes over.
+	float under = 0.0;
+	if (has_canopy_map) {
+		under = textureLod(canopy_map, (wpos.xz + vec2(map_half)) / (2.0 * map_half), 1.0).r;
+	}
+	float cov = clamp(under * 1.3, 0.0, 1.0) * clamp(vw.r * 1.4, 0.0, 1.0) * (1.0 - clamp(road * 2.0, 0.0, 1.0));
+	if (cov > 0.01) {
+		// Fine litter noise from the grass texture's own detail, so it is
+		// not one flat brown.
+		float fleck = dot(texture(tex_grass, uv * 2.3).rgb, vec3(0.33));
+		// Patches of needles and dead leaves through dark mossy grass.
+		float patch = smoothstep(0.42, 0.62, macro2 * 0.55 + macro * 0.55 + (fleck - 0.4) * 0.6);
+		vec3 litter = mix(vec3(0.085, 0.06, 0.032), vec3(0.16, 0.11, 0.055), fleck) * (0.85 + macro * 0.3);
+		vec3 moss = grass * vec3(0.5, 0.62, 0.36);
+		vec3 floor_c = mix(moss, litter, patch);
+		col = mix(col, floor_c, smoothstep(0.15, 0.7, cov) * 0.8);
 	}
 	float far_k = smoothstep(canopy_near, canopy_far, length(wpos - CAMERA_POSITION_WORLD));
 	if (far_k > 0.0 && canopy > 0.0) {
