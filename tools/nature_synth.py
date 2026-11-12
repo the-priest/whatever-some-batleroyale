@@ -96,6 +96,36 @@ def gull(seed):
     return dsp.trim_silence(dsp.fade(out, 0.002, 0.1))
 
 
+def surf(seed, length=24.0):
+    """Waves on a beach: a low sea bed, and every few seconds a swell that
+    rises, breaks into hiss and washes back up the sand. Loops cleanly."""
+    rng = np.random.default_rng(seed)
+    n = int(length * SR)
+    t = np.arange(n) / SR
+    bed = dsp.lp(dsp.brown(n, rng), 300.0) * 0.5 + dsp.lp(dsp.pink(n, rng), 900.0) * 0.12
+    out = bed
+    at = 0.0
+    while at < length:
+        period = rng.uniform(5.0, 7.5)
+        ln = int(period * SR)
+        x = np.zeros(ln)
+        tt = np.arange(ln) / SR
+        # Rising swell, the break, then the wash running back.
+        rise = np.clip(tt / (period * 0.35), 0.0, 1.0) ** 2
+        brk = np.exp(-np.maximum(tt - period * 0.35, 0.0) / (period * 0.22)) * (tt >= period * 0.35)
+        env = rise * (tt < period * 0.35) + brk
+        hiss = dsp.bp(dsp.white(ln, rng), 2400.0, 0.6) * 0.35 + dsp.bp(dsp.pink(ln, rng), 700.0, 0.7) * 0.6
+        x = hiss * env
+        dsp.place(out, x * rng.uniform(0.7, 1.0), at)
+        # Wrap the tail past the end round to the start, so the loop is seamless.
+        over = int((at + period) * SR) - n
+        if over > 0:
+            out[:over] += x[ln - over:] * 0.85
+        at += period
+    out = dsp.lp(out, 6000.0)
+    return out
+
+
 def main():
     songs = [
         # Two clear falling whistles and a quick trill.
@@ -115,6 +145,7 @@ def main():
         dsp.write("bird_%d" % (i + 1), song(100 + i, s), out_dir=OUT, peak=0.7)
     for i in range(3):
         dsp.write("gull_%d" % (i + 1), gull(200 + i), out_dir=OUT, peak=0.7)
+    dsp.write("surf_loop", surf(300), out_dir=OUT, peak=0.7)
 
 
 if __name__ == "__main__":

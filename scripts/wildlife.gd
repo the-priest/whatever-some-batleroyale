@@ -16,6 +16,10 @@ var _hush := 0.0
 var _t := 0.0
 var _flocks: Array[Dictionary] = []
 var _rng := RandomNumberGenerator.new()
+## Waves on the shore: a sound at the nearest open sea, louder the closer.
+var _surf: AudioStreamPlayer3D = null
+var _surf_t := 0.0
+var _surf_at := Vector3.INF
 
 
 func setup(p_game: Node) -> void:
@@ -106,6 +110,7 @@ func _process(delta: float) -> void:
 	_t += delta
 	_hush = maxf(0.0, _hush - delta)
 	_update_flocks(delta)
+	_update_surf(delta)
 	var p: Player = game.player
 	if not p.alive or p.mode != Player.Mode.GROUND or game.phase != "playing":
 		return
@@ -122,6 +127,51 @@ func _process(delta: float) -> void:
 		_gull_t = _rng.randf_range(7.0, 16.0)
 		if _hush <= 0.0 and not wet:
 			_gull(p.global_position)
+
+
+func _update_surf(delta: float) -> void:
+	var p: Player = game.player
+	if _surf == null:
+		var st: AudioStream = game.sfx.stream("surf_loop")
+		if st == null:
+			return
+		game._make_loop(st)
+		_surf = AudioStreamPlayer3D.new()
+		_surf.stream = st
+		_surf.unit_size = 22.0
+		_surf.max_distance = 140.0
+		_surf.volume_db = -80.0
+		_surf.attenuation_filter_cutoff_hz = 5000.0
+		add_child(_surf)
+	var listening: bool = p.alive and p.mode in [Player.Mode.GROUND, Player.Mode.VEHICLE] and game.phase in ["playing", "end"]
+	_surf_t -= delta
+	if _surf_t <= 0.0 and listening:
+		_surf_t = 0.6
+		# The nearest open sea in a ring of samples round you.
+		var o := p.global_position
+		var best := Vector3.INF
+		var best_d := 1e9
+		for r: float in [12.0, 30.0, 55.0, 90.0]:
+			for k in 16:
+				var a := TAU * float(k) / 16.0
+				var q := o + Vector3(cos(a), 0, sin(a)) * r
+				if game.terrain.height_at(q.x, q.z) < Terrain.WATER_LEVEL - 0.4:
+					var d := r
+					if d < best_d:
+						best_d = d
+						best = Vector3(q.x, Terrain.WATER_LEVEL + 0.5, q.z)
+			if best != Vector3.INF:
+				break
+		_surf_at = best
+	var want := -80.0
+	if listening and _surf_at != Vector3.INF:
+		want = -6.0
+		_surf.global_position = _surf.global_position.lerp(_surf_at, clampf(delta * 2.0, 0.0, 1.0)) if _surf.playing else _surf_at
+	if want > -70.0 and not _surf.playing:
+		_surf.play(_rng.randf() * 20.0)
+	_surf.volume_db = lerpf(_surf.volume_db, want, clampf(delta * 1.5, 0.0, 1.0))
+	if want <= -70.0 and _surf.playing and _surf.volume_db < -60.0:
+		_surf.stop()
 
 
 func _sing(o: Vector3) -> void:
