@@ -58,6 +58,15 @@ func _materials() -> void:
 	}
 	for k in defs:
 		var d: Array = defs[k]
+		if (k as String).begins_with("crystal"):
+			# Gems: shaders/crystal.gdshader.
+			var cm := ShaderMaterial.new()
+			cm.shader = load("res://shaders/crystal.gdshader")
+			cm.set_shader_parameter("core", d[0])
+			cm.set_shader_parameter("glow", d[1])
+			cm.set_shader_parameter("energy", float(d[2]))
+			lm._mats[k] = cm
+			continue
 		var m := StandardMaterial3D.new()
 		m.albedo_color = d[0]
 		m.emission_enabled = true
