@@ -16,7 +16,7 @@ const TOWN_NAMES := ["MOSSFORD", "HOLLOWMERE", "BRIARWICK", "STONEHELM", "ASHVAL
 	"OLDHAVEN", "DUNMORE", "REDWATER", "FENWICK", "GREYMARSH", "WILLOWDEEP", "CROWHOLLOW",
 	"LARKSPUR", "MILLBROOK", "WESTERHOLT", "BRAMBLEGATE", "SALTCOMBE", "ELMSTEAD", "COLDHARBOUR"]
 ## Batches are split into cells so distant settlements can be culled.
-const BATCH_CELL := 250.0
+const BATCH_CELL := 600.0
 
 ## Footprints that have a matching roof piece in the kit.
 const LOTS := [

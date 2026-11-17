@@ -69,7 +69,11 @@ static func apply(q: int, env: Environment, sun: DirectionalLight3D, fill: Direc
 		if o_aa > 0 and not fsr2:
 			vp.use_taa = fp and o_aa == 3
 			vp.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA if o_aa == 2 or (o_aa == 3 and not fp) else Viewport.SCREEN_SPACE_AA_DISABLED
-		vp.msaa_3d = Viewport.MSAA_2X if (not fp and q >= 2) else Viewport.MSAA_DISABLED
+		# MSAA is never a win here: on the Compatibility fallback it used to be
+		# forced on at HIGH/ULTRA (and could not be turned off from the AA
+		# option), which halved the frame rate. TAA on Forward+ and FXAA on the
+		# fallback cover edges for a fraction of the cost.
+		vp.msaa_3d = Viewport.MSAA_DISABLED
 		if fsr2:
 			vp.scaling_3d_mode = Viewport.SCALING_3D_MODE_FSR2
 			vp.scaling_3d_scale = UPSCALE_SCALE[clampi(upscale, 0, 3)]

@@ -4,8 +4,8 @@ class_name WorldBuilder
 ## Builds the whole island: sky + lighting, chunked terrain with collision, sea,
 ## instanced forest and ground cover, modular villages, distant islands, clouds.
 
-const TREE_TILE := 150.0
-const CHUNK_SIZE := 50.0
+const TREE_TILE := 300.0
+const CHUNK_SIZE := 150.0
 ## Godot measures visibility range to the centre of a MultiMesh's bounds, so a
 ## tile's range must cover its own half-diagonal or it pops out in big squares.
 const TREE_HALF_DIAG := TREE_TILE * 0.7072

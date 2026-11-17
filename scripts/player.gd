@@ -176,6 +176,20 @@ func _ready() -> void:
 	view.add_child(gun_holder)
 	hands = HandsView.new()
 	view.add_child(hands)
+	# A soft fill only for the first-person arms and gun (layer 2). The
+	# viewmodel often sits in a building's shadow, where the sun leaves it a
+	# black silhouette; this keeps the metal, wood and gloves readable without
+	# touching the world.
+	var vm_fill := OmniLight3D.new()
+	vm_fill.name = "ViewmodelFill"
+	vm_fill.light_cull_mask = 2
+	vm_fill.light_color = Color(1.0, 0.94, 0.86)
+	vm_fill.light_energy = 0.85
+	vm_fill.omni_range = 1.5
+	vm_fill.omni_attenuation = 1.1
+	vm_fill.shadow_enabled = false
+	vm_fill.position = Vector3(0.35, 0.45, 0.1)
+	camera.add_child(vm_fill)
 	hands.sound.connect(func(n: String, db: float) -> void:
 		if game != null and game.get("sfx") != null:
 			game.sfx.play_2d(n, db, 0.05))
@@ -345,8 +359,10 @@ func _physics_process(delta: float) -> void:
 var self_body: SoldierRig = null
 var _self_mats: Array[ShaderMaterial] = []
 var _self_gun := "-"
-## Height above your feet where your own body stops being drawn.
-const SELF_HIP := 0.78
+var _self_waist: Node3D = null
+## Height above your feet where your own body stops being drawn. The cut
+## follows the pelvis when animated; this is only the fallback.
+const SELF_HIP := 1.03
 
 
 func _setup_self_body() -> void:
@@ -354,6 +370,8 @@ func _setup_self_body() -> void:
 		return
 	self_body = SoldierRig.new()
 	self_body.palette = 3  # woodland: your own legs read clearly against the ground
+	self_body.fp_stance = deg_to_rad(10.0)
+	self_body.fp_lean = deg_to_rad(10.0)
 	self_body.top_level = true
 	add_child(self_body)
 	for n in self_body.find_children("*", "GeometryInstance3D", true, false):
@@ -370,6 +388,75 @@ func _setup_self_body() -> void:
 				mi.set_surface_override_material(si, _near_cut(m))
 			if mi.material_override != null:
 				mi.material_override = _near_cut(mi.material_override)
+	# The cut leaves the torso open at the hips. Cap it with a flat waist and
+	# a belt: looking down then reads as your own waist and legs, not two
+	# hollow pipes under a floating ball.
+	var waist := self_body._attach("pelvis", Transform3D(Basis.IDENTITY, Vector3(0, 0.985, 0)))
+	waist.name = "Waist"
+	_self_waist = waist
+	var cc: Array = SoldierRig.CAMO[self_body.palette]
+	# Close the open pelvis with a low disc, then wrap a belt round the seam:
+	# from above it reads as your waist, and the legs carry on underneath.
+	var hips := MeshInstance3D.new()
+	hips.name = "Hips"
+	var hip_mesh := CylinderMesh.new()
+	hip_mesh.top_radius = 0.17
+	hip_mesh.bottom_radius = 0.175
+	hip_mesh.height = 0.11
+	hip_mesh.radial_segments = 24
+	hips.mesh = hip_mesh
+	hips.scale = Vector3(1.0, 1.0, 0.72)
+	hips.position = Vector3(0, 0.0, 0)
+	# Camo cloth, not a hole: the invisible chest above still casts its
+	# shadow, and a plain or shadowed cap at this angle reads as an opening.
+	# A small generated camo swatch keeps the lap lit and matches the trousers.
+	var img := Image.create_empty(64, 64, false, Image.FORMAT_RGB8)
+	var nz := FastNoiseLite.new()
+	nz.seed = 4242
+	nz.frequency = 0.09
+	var c0: Color = cc[0]
+	var c1: Color = cc[1]
+	var c2: Color = cc[2]
+	var c3: Color = cc[3]
+	for y in 64:
+		for x in 64:
+			var a := nz.get_noise_2d(x, y) * 0.5 + 0.5
+			var b := nz.get_noise_2d(x + 37, y + 91) * 0.5 + 0.5
+			var c := c0
+			if a > 0.54:
+				c = c1
+			if b > 0.60:
+				c = c2
+			if a > 0.70 and b > 0.45:
+				c = c3
+			img.set_pixel(x, y, c)
+	img.generate_mipmaps()
+	var hm := StandardMaterial3D.new()
+	hm.albedo_texture = ImageTexture.create_from_image(img)
+	hm.roughness = 0.95
+	hm.disable_receive_shadows = true
+	hm.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	hips.material_override = hm
+	hips.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	waist.add_child(hips)
+	var belt := MeshInstance3D.new()
+	belt.name = "Belt"
+	var band := CylinderMesh.new()
+	band.top_radius = 0.185
+	band.bottom_radius = 0.185
+	band.height = 0.06
+	band.radial_segments = 24
+	band.cap_top = false
+	band.cap_bottom = false
+	belt.mesh = band
+	belt.scale = Vector3(1.0, 1.0, 0.72)
+	belt.position = Vector3(0, 0.045, 0)
+	var bm := StandardMaterial3D.new()
+	bm.albedo_color = Color(0.1, 0.1, 0.09)
+	bm.roughness = 0.95
+	belt.material_override = bm
+	belt.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	waist.add_child(belt)
 
 
 ## The uniform: cut off at the hips (see shaders/camo.gdshader). Everything
@@ -423,15 +510,22 @@ func _update_self_body(at: Vector3) -> void:
 		self_body.set_gun(gid)
 		for n in self_body.gun_holder.find_children("*", "GeometryInstance3D", true, false):
 			(n as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
-	var arms := ""
+	# Keep the hands up at chest height even when unarmed: anything below the
+	# hip cut would show up as a forearm floating over the ground.
+	var arms := "idle"
 	if healing:
 		arms = heal_item
 	elif gid != "":
 		arms = "reload" if reloading else ("aim" if aiming else "idle")
 	self_body.set_arms(arms)
 	self_body.aim_dir = -camera.global_basis.z
+	var cut := at.y + (SELF_HIP * 0.62 if crouching() else SELF_HIP)
+	if _self_waist != null:
+		# Follow the animated pelvis, so crouching and swimming keep the same
+		# amount of body visible.
+		cut = _self_waist.global_position.y + 0.035
 	for sm in _self_mats:
-		sm.set_shader_parameter("cut_above", at.y + (SELF_HIP * 0.62 if crouching() else SELF_HIP))
+		sm.set_shader_parameter("cut_above", cut)
 	self_body.set_gear(vest_level, helmet_level)
 
 
@@ -2251,7 +2345,7 @@ func _rebuild_viewmodel() -> void:
 	# Mounted optic, built in metres and placed on the top rail.
 	_optic_id = str(cur_att().get("scope", ""))
 	if _optic_id != "" and Weapons.optic_kind(_optic_id) != "":
-		var oy := Weapons.optic_center_y(id, _optic_id)
+		var oy := Weapons.optic_center_y(id, _optic_id) + Weapons.ads_riser(id)
 		var top := float(Weapons.model(id).get("sight_y", 0.08)) * _gun_scale
 		var optic := Weapons.build_optic(_optic_id, oy - top)
 		optic.position = Vector3(0.0, oy, -0.02 if Weapons.cls(id) != "pistol" else 0.01)

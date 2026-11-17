@@ -232,12 +232,26 @@ static func hip_pos(id: String) -> Vector3:
 static func ads_pos(id: String, optic: String = "") -> Vector3:
 	var s := view_scale(id)
 	var m := model(id)
-	var z := -0.27 if cls(id) == "pistol" else -s * 0.5 + 0.06
+	# Hold the eye a hand's width behind the butt. Any closer and the grip,
+	# receiver and stock fill the lower half of the screen.
+	var z := -0.27 if cls(id) == "pistol" else -(s * 0.5 + 0.10)
 	if optic != "" and optic_kind(optic) != "":
-		var oy := optic_center_y(id, optic)
+		var oy := optic_center_y(id, optic) + ads_riser(id)
 		return Vector3(0.0, -oy, z - 0.02)
 	# Iron sights: the line through the rear aperture and the front post.
-	return Vector3(0.0, -iron_line(id), z)
+	return Vector3(0.0, -sight_line(id), z)
+
+
+## Optional extra height for the sight line above the gun's own sights. The
+## farther aim hold below keeps the receiver out of the way, so this stays
+## zero; a non-zero value builds a proper riser under the sights.
+static func ads_riser(id: String) -> float:
+	return 0.0
+
+
+## The line the eye aims along: the model's own sights plus the riser.
+static func sight_line(id: String) -> float:
+	return iron_line(id) + ads_riser(id)
 
 
 ## Height of the iron sight line above the gun's centre line (view metres):
@@ -257,7 +271,7 @@ static func build_irons(id: String) -> Node3D:
 	var root := Node3D.new()
 	root.name = "Irons"
 	var s := view_scale(id)
-	var h := iron_line(id)
+	var h := sight_line(id)
 	var top := h - (0.006 if cls(id) == "pistol" else 0.011)
 	var body := _omat("body")
 	var along := Vector3(PI * 0.5, 0, 0)
@@ -307,7 +321,14 @@ static func build_irons(id: String) -> Node3D:
 	var mdl := model(id)
 	if float(mdl.get("front_y", 0.0)) - float(mdl.get("muzzle_y", 0.0)) > 0.02:
 		fz = float(mdl.get("front_z", -0.44)) * s
-	# Rear sight: a base on the receiver, a ring, two wings guarding it.
+	# Rear sight: a base on the receiver, a ring, two wings guarding it. When
+	# the sight line is raised above the gun's own sights (ads_riser), a short
+	# riser column bridges the gap so nothing floats.
+	var rail_y := float(mdl.get("sight_y", 0.08)) * s
+	if top + 0.002 - rail_y > 0.004:
+		var col := BoxMesh.new()
+		col.size = Vector3(0.014, top + 0.002 - rail_y, 0.012)
+		_opart(root, col, body, Vector3(0, (top + 0.002 + rail_y) * 0.5, rz))
 	var base := BoxMesh.new()
 	base.size = Vector3(0.016, 0.004, 0.014)
 	_opart(root, base, body, Vector3(0, top + 0.002, rz))
@@ -404,19 +425,19 @@ static func _omat(key: String) -> Material:
 			_optic_mats[key] = m
 			return m
 		"body":
-			m.albedo_color = Color(0.075, 0.078, 0.085)
+			m.albedo_color = Color(0.125, 0.13, 0.14)
 			m.roughness = 0.42
 			m.metallic = 0.45
 			m.rim_enabled = true
-			m.rim = 0.3
+			m.rim = 0.35
 			# Tubes are seen from the inside when aiming through them.
 			m.cull_mode = BaseMaterial3D.CULL_DISABLED
 		"mount":
-			m.albedo_color = Color(0.11, 0.115, 0.12)
+			m.albedo_color = Color(0.17, 0.175, 0.185)
 			m.roughness = 0.5
 			m.metallic = 0.5
 		"knurl":
-			m.albedo_color = Color(0.16, 0.16, 0.17)
+			m.albedo_color = Color(0.21, 0.21, 0.22)
 			m.roughness = 0.75
 		"glass":
 			m.albedo_color = Color(0.45, 0.6, 0.7, 0.07)
@@ -836,14 +857,15 @@ static var _mat_cache: Dictionary = {}
 const GUN_FINISH := {
 	"wood": [Color(0.46, 0.25, 0.12), 0.0, 0.55],
 	"darkwood": [Color(0.31, 0.16, 0.08), 0.0, 0.6],
-	"black": [Color(0.075, 0.078, 0.085), 0.25, 0.55],
-	"grey": [Color(0.13, 0.135, 0.14), 0.1, 0.62],
-	"darkmetal": [Color(0.11, 0.115, 0.125), 0.7, 0.36],
-	"metal": [Color(0.17, 0.175, 0.185), 0.8, 0.3],
-	"lightmetal": [Color(0.3, 0.31, 0.32), 0.85, 0.26],
+	# Near-black finishes still need a visible edge in a building's shadow.
+	"black": [Color(0.125, 0.13, 0.14), 0.25, 0.5],
+	"grey": [Color(0.19, 0.195, 0.2), 0.1, 0.58],
+	"darkmetal": [Color(0.16, 0.165, 0.18), 0.7, 0.32],
+	"metal": [Color(0.24, 0.245, 0.255), 0.8, 0.28],
+	"lightmetal": [Color(0.36, 0.37, 0.38), 0.85, 0.24],
 	"main": [Color(0.5, 0.42, 0.3), 0.05, 0.62],
 	"mainlight": [Color(0.58, 0.5, 0.37), 0.05, 0.62],
-	"maindark": [Color(0.085, 0.09, 0.095), 0.2, 0.55],
+	"maindark": [Color(0.14, 0.145, 0.15), 0.2, 0.5],
 	"glass": [Color(0.04, 0.09, 0.16), 0.9, 0.05],
 }
 
@@ -874,7 +896,7 @@ static func _gun_material(src: Material) -> Material:
 		var lum := col.r * 0.3 + col.g * 0.59 + col.b * 0.11
 		var warm := col.r > col.b * 1.25
 		if lum < 0.25 and not warm:
-			m.albedo_color = col.lerp(Color(0.2, 0.205, 0.21), 0.45)
+			m.albedo_color = col.lerp(Color(0.24, 0.245, 0.25), 0.45)
 			m.metallic = 0.35
 			m.roughness = 0.38
 		elif warm:
@@ -883,12 +905,12 @@ static func _gun_material(src: Material) -> Material:
 			m.roughness = 0.55
 			m.metallic = 0.15
 	m.rim_enabled = true
-	m.rim = 0.18
+	m.rim = 0.25
 	m.rim_tint = 0.4
 	# Keep the gun readable in deep shade (first person sits right in it).
 	m.emission_enabled = true
-	m.emission = m.albedo_color.lightened(0.25)
-	m.emission_energy_multiplier = 0.05
+	m.emission = m.albedo_color.lightened(0.3)
+	m.emission_energy_multiplier = 0.07
 	_mat_cache[key] = m
 	return m
 

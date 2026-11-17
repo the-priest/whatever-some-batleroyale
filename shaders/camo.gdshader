@@ -1,5 +1,5 @@
 shader_type spatial;
-render_mode diffuse_burley, specular_schlick_ggx;
+render_mode diffuse_burley, specular_schlick_ggx, cull_disabled;
 
 // Disruptive camouflage on soldier uniforms: two octaves of value noise in
 // UV space cut into four colour blotches, with a fine fabric weave on top.
@@ -15,12 +15,6 @@ uniform float seed = 0.0;
 // cuts through the view. The sun's shadow pass (orthographic) draws it all,
 // so the whole body still casts its shadow.
 uniform float cut_above = 1e9;
-
-varying float w_y;
-
-void vertex() {
-	w_y = (MODEL_MATRIX * vec4(VERTEX, 1.0)).y;
-}
 
 float hash(vec2 p) {
 	p = fract(p * vec2(123.34, 456.21) + seed);
@@ -40,6 +34,9 @@ float vnoise(vec2 p) {
 }
 
 void fragment() {
+	// World height of this fragment after skinning, so the cut follows the
+	// walk, crouch and jump clips instead of the rest pose.
+	float w_y = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).y;
 	if (w_y > cut_above && PROJECTION_MATRIX[3][3] < 0.5) {
 		discard;
 	}

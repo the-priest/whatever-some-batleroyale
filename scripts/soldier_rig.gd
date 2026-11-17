@@ -496,6 +496,12 @@ func _set_kit_visible(v: bool) -> void:
 var _anim_acc := 0.0
 var _anim_frame := 0
 var _anim_every := 1
+## Your own first-person body stands with the knees a little apart, so the
+## legs stay visible round the hip cut instead of hiding under it.
+var fp_stance := 0.0
+## Knees bent slightly forward for the first-person body. The shins are
+## turned back by the same angle, so the feet stay flat and under the hips.
+var fp_lean := 0.0
 
 
 func _process(delta: float) -> void:
@@ -518,6 +524,34 @@ func _process_body(delta: float) -> void:
 			_drink_k = move_toward(_drink_k, 1.0 if _arms == "energy" else 0.0, delta * float(_anim_every) * 2.5)
 			if _drink_k > 0.0 and not _dead:
 				_drink_ik(_drink_k)
+			if fp_stance != 0.0 and not _dead:
+				var axis := skeleton.global_basis.inverse() * global_basis.z
+				for i in 2:
+					var b := "thigh_l" if i == 0 else "thigh_r"
+					var bi := skeleton.find_bone(b)
+					if bi < 0:
+						continue
+					# Body's left is -X in this pose, right is +X.
+					var side := -1.0 if i == 0 else 1.0
+					var g := skeleton.get_bone_global_pose(bi)
+					var rot := Basis(axis, fp_stance * side)
+					skeleton.set_bone_global_pose(bi, Transform3D(rot * g.basis, g.origin))
+			if fp_lean != 0.0 and not _dead:
+				# Pitch the thighs forward at the hip, then pitch the shins back
+				# at the knee: the feet stay flat and planted underneath.
+				var laxis := skeleton.global_basis.inverse() * global_basis.x
+				for b: String in ["thigh_l", "thigh_r"]:
+					var bi := skeleton.find_bone(b)
+					if bi < 0:
+						continue
+					var g := skeleton.get_bone_global_pose(bi)
+					skeleton.set_bone_global_pose(bi, Transform3D(Basis(laxis, fp_lean) * g.basis, g.origin))
+				for b: String in ["calf_l", "calf_r"]:
+					var bi := skeleton.find_bone(b)
+					if bi < 0:
+						continue
+					var g := skeleton.get_bone_global_pose(bi)
+					skeleton.set_bone_global_pose(bi, Transform3D(Basis(laxis, -fp_lean) * g.basis, g.origin))
 	# Distance LOD: soldiers stay visible out to sniping range (an 8x scope
 	# makes out a figure at a kilometre), but far ones animate rarely and
 	# their small kit is not drawn.
