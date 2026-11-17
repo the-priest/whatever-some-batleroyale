@@ -20,7 +20,8 @@ Open the project in Godot 4.7 and press Play, or export with the presets in `exp
 | B | Fire mode (single / auto) |
 | Page Up / Page Down | Zeroing distance |
 | Q / E | Lean left / right |
-| F | Pick up (ammo for your guns and fitting attachments are picked up automatically) · get in / out of a jeep |
+| F | Pick up (ammo for your guns and fitting attachments are picked up automatically) · get in / out of a jeep · take a writ · open a Wayshrine |
+| F (hold) | Dig up a relic · light a beacon |
 | 1 / 2, mouse wheel, X | Switch weapon |
 | H | Use the best healing item |
 | 4 / 5 / 6 | Bandage / medkit / energy drink |
@@ -37,6 +38,35 @@ firing cancels it. A bandage (2.2 s, heals to 75) is torn and wrapped round the 
 (4 s, +60) is unzipped and its syringe goes into your thigh; an energy drink (1.6 s, boost) is
 cracked open, downed in three gulps and crushed. Other players and bots show the same item in their
 hands, and you can hear someone healing nearby. You cannot heal while swimming.
+
+## Writs, Embers and Wayshrines
+
+The island is full of work for those brave enough to take it.
+
+- **Writ boards** stand in every town and at the great landmarks: a roofed notice board with three
+  sealed writs and a pennant in the writ's colour. Walk up and press **F** to take its writ. You
+  carry one at a time; a board gets new writs a little after one is taken.
+  - **Blood Writ** (red): a soldier is marked as a champion — heavy armour, a good gun, sharp aim.
+    Their area shows on your map as a circle that follows them and shrinks. Get within 70 m and
+    you see them exactly. Kill them yourself to fulfil it.
+  - **Relic Writ** (gold): three search circles, each smaller, lead to a buried relic. Hold **F**
+    at the glowing earth to dig up a cache: a high-tier gun, ammo, armour, a helmet and a scope.
+  - **Beacon Writ** (blue): climb to a hilltop beacon, hold **F** to light it, then hold the hill for
+    45 seconds while the soldiers nearby come for you. A supply drop lands beside it.
+  - The writ shows top left (objective, distance, time left), on the map, the minimap, the compass
+    and on screen. Run out of time, fall, or lose your mark to someone else and it is void.
+- **Embers** ◆ are earned for kills (more for headshots and long shots) and for writs.
+- **Wayshrines** (stone shrines with a fire bowl, marked ▲ on the map) sell for Embers: medkits,
+  ammo, grenades, armour, helmets, **Raven's Eye** (every soldier within 250 m on your map) and
+  **Kindling**. Press **F** at one, then **1–8** to buy; what you buy is laid on its offering stone.
+- **Kindling** (solo games): fall while carrying it and you rise again at the nearest Wayshrine with
+  a pistol and two bandages. Your kit and your Embers stay where you fell — the Embers glow there
+  as a **Cinder** (on your map and screen). Walk over it to take them back. Fall again first and
+  they are gone. Once the circle is small the fires go out and Kindling no longer works.
+- Writs, Embers and Wayshrines work for every player in a LAN game; the host keeps the score.
+
+The plan for what comes next (Revenants guarding vaults, Branded players, living-island events,
+Oaths and Renown) is in [docs/PLAN.md](docs/PLAN.md).
 
 ## Gunplay
 

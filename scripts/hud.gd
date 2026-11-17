@@ -2970,6 +2970,8 @@ func set_writ(v: Dictionary) -> void:
 
 
 var kindling := false
+## Seconds of Branded left (0 = not branded).
+var branded_t := 0.0
 ## Your dropped Embers: {pos, amount} or {}.
 var cinder: Dictionary = {}
 
@@ -3010,6 +3012,14 @@ func _draw_writ() -> void:
 		_ember_pop_t = maxf(0.0, _ember_pop_t - get_process_delta_time())
 		var a := clampf(_ember_pop_t / 0.6, 0.0, 1.0)
 		writ_draw.draw_string(font_bold, Vector2(124, -14), _ember_pop, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(1.0, 0.76, 0.4, a))
+		writ_draw.queue_redraw()
+	var by := 0.0 if writ.is_empty() else 72.0
+	if branded_t > 0.0:
+		var pulse := 0.75 + 0.25 * sin(Time.get_ticks_msec() * 0.008)
+		writ_draw.draw_rect(Rect2(0, by, 330, 30), Color(0.35, 0.03, 0.03, 0.82 * pulse))
+		writ_draw.draw_rect(Rect2(0, by, 4, 30), DANGER)
+		writ_draw.draw_string(font_bold, Vector2(14, by + 20), "BRANDED  ·  THEY KNOW WHERE YOU ARE", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, WHITE)
+		writ_draw.draw_string(font_mono, Vector2(318, by + 20), "%d:%02d" % [int(branded_t) / 60, int(branded_t) % 60], HORIZONTAL_ALIGNMENT_RIGHT, -1, 13, WHITE)
 		writ_draw.queue_redraw()
 	if writ.is_empty():
 		return

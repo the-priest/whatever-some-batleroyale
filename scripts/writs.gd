@@ -43,6 +43,11 @@ const KINDLING_MIN_RADIUS := 160.0
 const RISE_DELAY := 4.5
 const RAVEN_RANGE := 250.0
 const CHAMPION_GUNS := ["dmr", "m24", "carbine", "bullpup", "rifle", "lmg", "axmc"]
+## Branded: this many kills inside BRAND_WINDOW seconds marks you for all.
+const BRAND_KILLS := 5
+const BRAND_WINDOW := 90.0
+const BRAND_TIME := 90.0
+const BRAND_REWARD := 1000
 const KILL_EMBERS := 100
 const HEADSHOT_EMBERS := 50
 const LONG_SHOT_EMBERS := 50
@@ -75,6 +80,12 @@ var kindling := 0
 var cinder: Dictionary = {}
 var _cinder_node: Node3D = null
 var rising := false
+## Host: owner -> [kill times]; owner -> seconds of Branded left.
+var _kill_times: Dictionary = {}
+var branded: Dictionary = {}
+var _brand_call := 0.0
+## What this machine shows: seconds of Branded left (0 = not).
+var my_brand := 0.0
 
 
 func setup(p_game: Node) -> void:
@@ -107,6 +118,9 @@ func reset() -> void:
 	kindling = 0
 	rising = false
 	_set_cinder({})
+	_kill_times.clear()
+	branded.clear()
+	my_brand = 0.0
 	if game != null and game.hud != null:
 		game.hud.set_writ({})
 		game.hud.set_embers(0, 0, "")
@@ -210,13 +224,18 @@ func _process(delta: float) -> void:
 		game.hud.set_writ(view)
 	_animate_sites(delta)
 	_check_cinder()
+	if my_brand > 0.0:
+		my_brand = maxf(0.0, my_brand - delta)
+		game.hud.branded_t = my_brand
 	if game.net_is_client():
 		return
 	_tick -= delta
 	if _tick <= 0.0:
-		_tick = 0.5
+		# Keep the remainder, so the writ clocks run at the real rate.
+		_tick = maxf(_tick + 0.5, 0.0)
 		for o in active.keys():
 			_host_tick(int(o), 0.5)
+		_brand_tick(0.5)
 
 
 # -------------------------------------------------------------- shrines --
@@ -707,6 +726,11 @@ func on_bot_eliminated(victim: Bot) -> void:
 			n += LONG_SHOT_EMBERS
 			why = "LONG SHOT" if why == "KILL" else why + " · LONG SHOT"
 		award(killer_o, n, why)
+		_count_kill(killer_o)
+	if victim.is_human and branded.has(victim.peer_id):
+		_unbrand(victim.peer_id, false)
+		if killer_o >= 0:
+			award(killer_o, BRAND_REWARD / 2, "BRANDED SLAIN")
 	if victim.has_meta("writ_mark"):
 		var o := int(victim.get_meta("writ_mark"))
 		victim.remove_meta("writ_mark")
@@ -722,6 +746,78 @@ func on_bot_eliminated(victim: Bot) -> void:
 				if src != null and is_instance_valid(src) and src.has_method("display_name"):
 					by = str(src.call("display_name"))
 				_end(o, false, "YOUR MARK FELL TO %s" % by)
+
+
+# -------------------------------------------------------------- branded --
+
+func _count_kill(o: int) -> void:
+	var now: float = game.match_time
+	var times: Array = _kill_times.get(o, [])
+	times.append(now)
+	times = times.filter(func(t): return now - float(t) <= BRAND_WINDOW)
+	_kill_times[o] = times
+	if times.size() >= BRAND_KILLS and not branded.has(o):
+		branded[o] = BRAND_TIME
+		_kill_times[o] = []
+		_brand_call = 0.0
+		_send_event(o, {"ev": "branded", "t": BRAND_TIME})
+		# Everyone else hears of it.
+		var who := ""
+		if game.net_on():
+			who = str(game.net.my_name) if o == 0 else str(game.net.roster.get(o, "A PLAYER"))
+		if game.net_on():
+			for pid in game.net.roster:
+				if int(pid) != o and int(pid) != 1:
+					game.net.send_writ_event(int(pid), {"ev": "brand_other", "who": who})
+			if o != 0:
+				apply_event({"ev": "brand_other", "who": who})
+
+
+func _brand_tick(dt: float) -> void:
+	if branded.is_empty():
+		return
+	_brand_call -= dt
+	var call := _brand_call <= 0.0
+	if call:
+		_brand_call = 15.0
+	for o in branded.keys():
+		var oi := int(o)
+		if not _owner_alive(oi):
+			_unbrand(oi, false)
+			continue
+		branded[o] = float(branded[o]) - dt
+		var at := _owner_pos(oi)
+		if call and at != Vector3.INF:
+			# They know where you are: soldiers within 500 m come hunting, and
+			# the other players see you on their maps.
+			var n := 0
+			for b in game.bots:
+				if n >= 10:
+					break
+				if is_instance_valid(b) and b.alive and b.armed and not b.is_human and not b.puppet and b.state == Bot.State.GROUND \
+						and b.global_position.distance_to(at) < 500.0:
+					b.roam_point = Vector2(at.x, at.z) + Vector2(randf_range(-15, 15), randf_range(-15, 15))
+					b.heard_pos = at
+					b.alert_timer = 10.0
+					n += 1
+			var pts := [Vector2(at.x, at.z)]
+			if game.net_on():
+				for pid in game.net.roster:
+					if int(pid) != oi and int(pid) != 1:
+						game.net.send_writ_event(int(pid), {"ev": "reveal_brand", "pts": pts})
+				if oi != 0:
+					apply_event({"ev": "reveal_brand", "pts": pts})
+		if float(branded[o]) <= 0.0:
+			_unbrand(oi, true)
+
+
+func _unbrand(o: int, survived: bool) -> void:
+	if not branded.has(o):
+		return
+	branded.erase(o)
+	if survived:
+		award(o, BRAND_REWARD, "SURVIVED BRANDED")
+	_send_event(o, {"ev": "unbranded", "won": survived})
 
 
 func award(o: int, n: int, why: String) -> void:
@@ -855,6 +951,23 @@ func apply_event(e: Dictionary) -> void:
 			hud.show_notice(str(e.get("why", "")), 3.0)
 		"say":
 			hud.show_notice(str(e.get("why", "")), 2.6)
+		"branded":
+			my_brand = float(e.get("t", BRAND_TIME))
+			hud.branded_t = my_brand
+			game.sfx.play_ui("writ_fail", -2.0)
+			hud.show_big("BRANDED", HUD.DANGER, 3.0)
+			hud.show_notice("TOO MANY KILLS TOO FAST  —  EVERYONE KNOWS WHERE YOU ARE. SURVIVE %d SECONDS" % int(BRAND_TIME), 4.0)
+		"unbranded":
+			my_brand = 0.0
+			hud.branded_t = 0.0
+			if bool(e.get("won", false)):
+				game.sfx.play_ui("writ_done", -4.0)
+				hud.show_big("THE BRAND FADES", Color(1.0, 0.82, 0.38), 2.6)
+				hud.show_notice("YOU SURVIVED BRANDED   ·   +%d EMBERS" % BRAND_REWARD, 3.0)
+		"brand_other":
+			hud.killfeed("%s %s BRANDED  —  HUNT THEM FOR EMBERS" % [str(e.get("who", "")), "IS"], HUD.DANGER)
+		"reveal_brand":
+			hud.reveal(e.get("pts", []), 6.0)
 		"bought":
 			game.sfx.play_ui("shrine_buy", -4.0)
 			hud.show_notice("%s  —  LAID ON THE OFFERING STONE" % str(e.get("what", "")), 2.4)

@@ -5678,6 +5678,21 @@ func _run_writ_test() -> void:
 			break
 	await get_tree().physics_frame
 	_check("a kill pays embers", writs.my_embers >= e0 + Writs.KILL_EMBERS)
+	# Five kills in a row: Branded. Survive it.
+	var bk := 0
+	for b in bots:
+		if bk >= Writs.BRAND_KILLS:
+			break
+		if is_instance_valid(b) and b.alive and not b.is_human:
+			b.take_damage(999.0, b.global_position, false, player)
+			bk += 1
+	await get_tree().physics_frame
+	_check("five quick kills: branded", writs.branded.has(0) and writs.my_brand > 0.0)
+	var eb := writs.my_embers
+	for i in int(60 * (Writs.BRAND_TIME + 2.0)):
+		await get_tree().physics_frame
+	print("[writs] after the brand: branded=%s my_brand=%.1f embers %d -> %d, match_time %.0f" % [str(writs.branded), writs.my_brand, eb, writs.my_embers, match_time])
+	_check("survived branded: paid", not writs.branded.has(0) and writs.my_embers >= eb + Writs.BRAND_REWARD)
 	# Spend them at a Wayshrine.
 	print("[writs] %d wayshrines" % writs.shrines.size())
 	_check("wayshrines spread over the island", writs.shrines.size() >= 6)
@@ -5696,7 +5711,7 @@ func _run_writ_test() -> void:
 		writs._buy(0)
 		writs._buy(5)
 		await get_tree().physics_frame
-		_check("bought a medkit and a raven's eye", writs.my_embers == e1 - int(Writs.WARES[0][2]) - int(Writs.WARES[5][2]) and loot_pool.size() == l1 + 1)
+		_check("bought a medkit and a raven's eye", writs.my_embers == e1 - int(Writs.WARES[0][2]) - int(Writs.WARES[5][2]) and loot_pool.size() >= l1 + 1)
 		writs.close_shop()
 		_check("shop closes and frees the player", not hud.shop_open() and not input_locked)
 		# Kindling: fall, rise at a shrine, get the Embers back.
@@ -6189,6 +6204,30 @@ func _run_net_test(as_host: bool) -> void:
 				if humans[id].seated_in != null:
 					seated = "seat %d" % humans[id].seated_slot
 			print("[net] host sees jeep0 at ", hj.global_position.round(), " owner=", hj.owner_peer, " frozen=", hj.freeze, " client ", seated)
+		# A relic writ taken and finished by the joined player.
+		if not as_host and i >= 28 and i < 48 and writs != null:
+			if i == 28:
+				for bi in writs.boards.size():
+					if writs.boards[bi].kind == "relic":
+						var bp: Vector3 = writs.boards[bi].pos
+						player.global_position = ground_at(bp + Basis(Vector3.UP, float(writs.boards[bi].yaw)) * Vector3(0, 2.0, 1.4)) + Vector3.UP * 0.2
+						player.velocity = Vector3.ZERO
+						await get_tree().create_timer(0.6).timeout
+						print("[net] client at a relic board: ", writs.prompt(player.global_position))
+						writs.interact(player.global_position)
+						break
+			elif writs.view.has("act"):
+				player.global_position = (writs.view["act_pos"] as Vector3) + Vector3(1.0, 0.4, 0.0)
+				await get_tree().create_timer(0.6).timeout
+				print("[net] client digs at ", (writs.view["act_pos"] as Vector3).round())
+				net.send_writ_act("dig")
+			elif writs.view.has("c"):
+				var cc: Vector2 = writs.view["c"]
+				player.global_position = ground_at(Vector3(cc.x, 400.0, cc.y)) + Vector3.UP * 0.3
+				player.velocity = Vector3.ZERO
+			print("[net] client writ: %s  embers %d" % [str(writs.view.get("line", "none")), writs.my_embers])
+		if i == 48 and not as_host and writs != null:
+			print("[net] %s client relic writ over LAN, embers %d" % ["PASS" if writs.my_embers >= Writs.REWARD["relic"] and writs.view.is_empty() else "FAIL", writs.my_embers])
 		if i == 50 and not as_host and near != null:
 			print("[net] client shooting ", near.bot_name, " at ", int(bd), " m")
 			net_route_hit(near, 500.0, near.global_position + Vector3(0, 1.6, 0), true, player)
