@@ -41,7 +41,7 @@ const FAIL_BAN_MS := 600000
 ## Messages per second a client may send, by kind: [sustained, burst].
 const RATES := {
 	"pstate": [30.0, 45.0], "vstate": [30.0, 45.0], "shots": [40.0, 70.0], "chat": [1.5, 5.0], "marker": [2.0, 6.0],
-	"grenade": [1.5, 4.0], "hit": [30.0, 70.0], "loot": [12.0, 40.0], "veh": [20.0, 40.0], "misc": [4.0, 12.0], "inv": [1.0, 3.0],
+	"grenade": [1.5, 4.0], "hit": [30.0, 70.0], "loot": [12.0, 40.0], "veh": [20.0, 40.0], "misc": [4.0, 12.0], "inv": [1.0, 3.0], "writ": [3.0, 8.0],
 }
 ## Dropped messages before a flooding client is kicked.
 const FLOOD_KICK := 600
@@ -1772,6 +1772,101 @@ func _ac_hunt(pid: int, reason: String) -> void:
 	else:
 		game.anticheat.mark_condemned(pid, reason)
 		game._hunt_other(pid, reason)
+
+
+# ------------------------------------------------------------------ writs --
+## Client: take the writ from board `bi`.
+func send_writ_take(bi: int) -> void:
+	if active and not hosting:
+		_writ_take.rpc_id(1, bi)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _writ_take(bi: int) -> void:
+	var sender := multiplayer.get_remote_sender_id()
+	if not hosting or not _gate(sender, "writ") or game == null or game.writs == null:
+		return
+	game.writs.take(sender, bi)
+
+
+## Client: held F long enough to dig the relic or light the beacon.
+func send_writ_act(act: String) -> void:
+	if active and not hosting:
+		_writ_act.rpc_id(1, act)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _writ_act(act: String) -> void:
+	var sender := multiplayer.get_remote_sender_id()
+	if not hosting or not _gate(sender, "writ") or game == null or game.writs == null:
+		return
+	if act == "dig" or act == "light":
+		game.writs.act_on(sender, act)
+
+
+## Host: what a player's writ looks like now ({} = none).
+func send_writ_view(pid: int, v: Dictionary) -> void:
+	if active and hosting and roster.has(pid):
+		_writ_view.rpc_id(pid, v)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _writ_view(v: Dictionary) -> void:
+	if multiplayer.get_remote_sender_id() != 1 or game == null or game.writs == null:
+		return
+	game.writs.apply_view(v)
+
+
+func send_writ_event(pid: int, e: Dictionary) -> void:
+	if active and hosting and roster.has(pid):
+		_writ_event.rpc_id(pid, e)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _writ_event(e: Dictionary) -> void:
+	if multiplayer.get_remote_sender_id() != 1 or game == null or game.writs == null:
+		return
+	game.writs.apply_event(e)
+
+
+## Host: a board was emptied; everyone sees it resting.
+func send_writ_board(bi: int, rest: float) -> void:
+	if active and hosting:
+		_writ_board.rpc(bi, rest)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _writ_board(bi: int, rest: float) -> void:
+	if multiplayer.get_remote_sender_id() != 1 or game == null or game.writs == null:
+		return
+	if bi >= 0 and bi < game.writs.board_cool.size():
+		game.writs.board_cool[bi] = clampf(rest, 0.0, 600.0)
+
+
+## Client: buy ware `n` at Wayshrine `si`.
+func send_shrine_buy(si: int, n: int) -> void:
+	if active and not hosting:
+		_shrine_buy.rpc_id(1, si, n)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _shrine_buy(si: int, n: int) -> void:
+	var sender := multiplayer.get_remote_sender_id()
+	if not hosting or not _gate(sender, "writ") or game == null or game.writs == null:
+		return
+	game.writs.buy_on(sender, si, n)
+
+
+func send_embers(pid: int, total: int, gain: int, why: String) -> void:
+	if active and hosting and roster.has(pid):
+		_embers.rpc_id(pid, total, gain, why)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _embers(total: int, gain: int, why: String) -> void:
+	if multiplayer.get_remote_sender_id() != 1 or game == null or game.writs == null:
+		return
+	game.writs._embers_here(total, gain, why)
 
 
 func send_airdrop(p: Vector2, ground: float) -> void:

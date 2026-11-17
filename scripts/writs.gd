@@ -1,0 +1,1033 @@
+class_name Writs
+extends Node
+## Writs: jobs nailed to the boards in every town. Take one (F at a board),
+## do it before its time runs out, and get paid in Embers and loot.
+##
+##   BLOOD WRIT   hunt a marked champion; their area shows as a circle that
+##                follows them and shrinks, and close up you see them exactly
+##   RELIC WRIT   three search circles, each smaller, then dig the relic up
+##   BEACON WRIT  light a beacon on a hilltop and hold it while soldiers
+##                come for you; a supply drop lands on it
+##
+## The host (or a solo game) owns every writ. A joined player asks the host
+## to take one or to dig / light, and is told what to show. Owner 0 is the
+## player on this machine; any other owner is a joined player's peer id.
+
+const TITLE := {"blood": "BLOOD WRIT", "relic": "RELIC WRIT", "beacon": "BEACON WRIT"}
+const BLURB := {"blood": "HUNT A MARKED CHAMPION", "relic": "DIG UP A BURIED RELIC", "beacon": "LIGHT AND HOLD A HILLTOP BEACON"}
+const TINT := {"blood": Color(0.96, 0.30, 0.24), "relic": Color(1.0, 0.78, 0.32), "beacon": Color(0.42, 0.72, 1.0)}
+const REWARD := {"blood": 650, "relic": 500, "beacon": 750}
+const TIME := {"blood": 300.0, "relic": 360.0, "beacon": 300.0}
+## A board gets new writs this long after one is taken from it.
+const BOARD_REST := 75.0
+const REACH := 2.8
+const RELIC_RINGS := [95.0, 45.0, 15.0]
+const DIG_TIME := 3.0
+const LIGHT_TIME := 1.5
+const HOLD_TIME := 45.0
+const HOLD_RADIUS := 24.0
+## Embers for a kill, and the extras.
+## What a Wayshrine sells: [id, label, cost]. Laid out on its offering stone.
+const WARES := [
+	["med", "MEDKIT", 200],
+	["ammo", "AMMUNITION  ·  TWO BOXES FOR THE GUN IN HAND", 150],
+	["grenade", "FRAG GRENADES  ·  TWO", 220],
+	["vest", "ARMOUR VEST  ·  LEVEL 2", 400],
+	["helmet", "HELMET  ·  LEVEL 2", 300],
+	["raven", "RAVEN'S EYE  ·  SEE EVERY SOLDIER WITHIN 250 M", 450],
+	["vest3", "WARDEN'S PLATE  ·  LEVEL 3 VEST", 1100],
+	["kindling", "KINDLING  ·  RISE AGAIN HERE WHEN YOU FALL", 1500],
+]
+## Kindling stops working once the circle is this small: the fires go out.
+const KINDLING_MIN_RADIUS := 160.0
+const RISE_DELAY := 4.5
+const RAVEN_RANGE := 250.0
+const CHAMPION_GUNS := ["dmr", "m24", "carbine", "bullpup", "rifle", "lmg", "axmc"]
+const KILL_EMBERS := 100
+const HEADSHOT_EMBERS := 50
+const LONG_SHOT_EMBERS := 50
+
+var game: Node
+## [{pos: Vector3, yaw, town, kind}] from the villages.
+var boards: Array = []
+var board_cool: Array[float] = []
+## Host: owner -> the writ (with its target, site and timers).
+var active: Dictionary = {}
+## Host: owner -> Embers.
+var purse: Dictionary = {}
+## What this machine's player sees of their own writ ({} for none).
+var view: Dictionary = {}
+var my_embers := 0
+var _tick := 0.0
+var _hold := 0.0
+var _hold_sent := false
+## This machine's site props (the dig mound, the beacon) by kind.
+var _site_nodes: Dictionary = {}
+var _beacon_fire: Node3D = null
+var _flicker := 0.0
+## [{pos, yaw, name}] from the villages.
+var shrines: Array = []
+## The shrine whose wares are open on screen, or -1.
+var shop := -1
+## Kindling carried (one at most). Solo games only.
+var kindling := 0
+## Embers left where you fell: {pos, amount}, or {} for none.
+var cinder: Dictionary = {}
+var _cinder_node: Node3D = null
+var rising := false
+
+
+func setup(p_game: Node) -> void:
+	game = p_game
+	boards = game.world.villages.writ_boards
+	board_cool.resize(boards.size())
+	board_cool.fill(0.0)
+	var marks: Array = []
+	for b in boards:
+		marks.append([Vector2(b.pos.x, b.pos.z), b.kind, b.town])
+	game.hud.writ_boards = marks
+	shrines = game.world.villages.wayshrines
+	var sm: Array = []
+	for w in shrines:
+		sm.append(Vector2(w.pos.x, w.pos.z))
+	game.hud.shrine_marks = sm
+
+
+func reset() -> void:
+	for o in active.keys():
+		_end(int(o), false, "", false)
+	active.clear()
+	purse.clear()
+	view = {}
+	my_embers = 0
+	board_cool.fill(0.0)
+	_clear_sites()
+	_hold = 0.0
+	close_shop()
+	kindling = 0
+	rising = false
+	_set_cinder({})
+	if game != null and game.hud != null:
+		game.hud.set_writ({})
+		game.hud.set_embers(0, 0, "")
+
+
+# ------------------------------------------------------------- the player --
+
+## Board within reach of this spot (and in front of it), or -1.
+func board_near(p: Vector3) -> int:
+	var best := -1
+	var best_d := REACH
+	for i in boards.size():
+		var bp: Vector3 = boards[i].pos
+		var d := Vector2(p.x - bp.x, p.z - bp.z).length()
+		if d < best_d and absf(p.y - bp.y) < 2.5:
+			best_d = d
+			best = i
+	return best
+
+
+## What the interact prompt should say here ("" for nothing writ-related).
+func prompt(p: Vector3) -> String:
+	var key := Keybinds.key("interact")
+	var bi := board_near(p)
+	if bi >= 0:
+		var b: Dictionary = boards[bi]
+		var kind: String = b.kind
+		if not view.is_empty():
+			return "WRIT BOARD  —  YOU ALREADY CARRY A WRIT"
+		if board_cool[bi] > 0.0:
+			return "WRIT BOARD  —  NEW WRITS IN %d:%02d" % [int(board_cool[bi]) / 60, int(board_cool[bi]) % 60]
+		return "[%s]  TAKE THE %s  —  %s   (+%d EMBERS)" % [key, TITLE[kind], BLURB[kind], REWARD[kind]]
+	var act := _act_here(p)
+	if act != "":
+		return "HOLD [%s]  %s" % [key, "DIG UP THE RELIC" if act == "dig" else "LIGHT THE BEACON"]
+	if shrine_near(p) >= 0:
+		return "[%s]  WAYSHRINE  —  SPEND YOUR EMBERS   (◆ %d)" % [key, my_embers]
+	return ""
+
+
+## F pressed: take a writ from the board here. True if it was for us.
+func interact(p: Vector3) -> bool:
+	var bi := board_near(p)
+	if bi < 0:
+		var si := shrine_near(p)
+		if si >= 0:
+			open_shop(si)
+			return true
+		return false
+	if not view.is_empty() or board_cool[bi] > 0.0:
+		return true
+	if game.net_is_client():
+		game.net.send_writ_take(bi)
+	else:
+		take(0, bi)
+	return true
+
+
+## The dig or light action available where you stand, or "".
+func _act_here(p: Vector3) -> String:
+	if view.is_empty() or not view.has("act"):
+		return ""
+	var ap: Vector3 = view["act_pos"]
+	if Vector2(p.x - ap.x, p.z - ap.z).length() < 2.6 and absf(p.y - ap.y) < 3.0:
+		return str(view["act"])
+	return ""
+
+
+func _process(delta: float) -> void:
+	if game == null or game.player == null:
+		return
+	var playing: bool = game.phase == "playing"
+	if shop >= 0 and (not playing or not game.player.alive or shrine_near(game.player.global_position) != shop):
+		close_shop()
+	if not playing:
+		return
+	for i in board_cool.size():
+		if board_cool[i] > 0.0:
+			board_cool[i] = maxf(0.0, board_cool[i] - delta)
+	# Holding F to dig or light.
+	var pl: Player = game.player
+	var act := _act_here(pl.global_position) if pl.alive and pl.mode == Player.Mode.GROUND else ""
+	if act != "" and Input.is_action_pressed("interact") and not game.input_locked:
+		var need := DIG_TIME if act == "dig" else LIGHT_TIME
+		_hold += delta
+		game.hud.set_progress("DIGGING ..." if act == "dig" else "LIGHTING THE BEACON ...", clampf(_hold / need, 0.0, 1.0))
+		if _hold >= need and not _hold_sent:
+			_hold_sent = true
+			game.hud.set_progress("", 0.0)
+			if game.net_is_client():
+				game.net.send_writ_act(act)
+			else:
+				act_on(0, act)
+	elif _hold > 0.0:
+		_hold = 0.0
+		_hold_sent = false
+		game.hud.set_progress("", 0.0)
+	# The clock on our own writ runs here too (the host corrects it).
+	if not view.is_empty():
+		view["t"] = maxf(0.0, float(view.get("t", 0.0)) - delta)
+		game.hud.set_writ(view)
+	_animate_sites(delta)
+	_check_cinder()
+	if game.net_is_client():
+		return
+	_tick -= delta
+	if _tick <= 0.0:
+		_tick = 0.5
+		for o in active.keys():
+			_host_tick(int(o), 0.5)
+
+
+# -------------------------------------------------------------- shrines --
+
+func shrine_near(p: Vector3) -> int:
+	for i in shrines.size():
+		var sp: Vector3 = shrines[i].pos
+		if Vector2(p.x - sp.x, p.z - sp.z).length() < 2.6 and absf(p.y - sp.y) < 2.0:
+			return i
+	return -1
+
+
+func open_shop(si: int) -> void:
+	shop = si
+	game.input_locked = true
+	game.hud.show_shop(WARES, my_embers)
+	game.sfx.play_ui("ui_click", -8.0)
+
+
+func close_shop() -> void:
+	if shop < 0:
+		return
+	shop = -1
+	if game != null:
+		game.input_locked = false
+		game.hud.hide_shop()
+
+
+func _input(event: InputEvent) -> void:
+	if shop < 0 or not (event is InputEventKey) or not event.is_pressed() or event.is_echo():
+		return
+	var k := event as InputEventKey
+	var code := k.physical_keycode if k.physical_keycode != KEY_NONE else k.keycode
+	if code >= KEY_1 and code <= KEY_9:
+		var n := int(code - KEY_1)
+		if n < WARES.size():
+			_buy(n)
+		get_viewport().set_input_as_handled()
+	elif event.is_action("interact") or event.is_action("ui_cancel") or code == KEY_ESCAPE:
+		close_shop()
+		get_viewport().set_input_as_handled()
+
+
+func _buy(n: int) -> void:
+	var cost := int(WARES[n][2])
+	if my_embers < cost:
+		game.hud.show_notice("NOT ENOUGH EMBERS  —  %d MORE" % (cost - my_embers), 1.8)
+		game.sfx.play_ui("empty_click", -6.0)
+		return
+	if game.net_is_client():
+		game.net.send_shrine_buy(shop, n)
+	else:
+		buy_on(0, shop, n)
+
+
+## Host: owner `o` buys ware `n` at shrine `si`.
+func buy_on(o: int, si: int, n: int) -> void:
+	if si < 0 or si >= shrines.size() or n < 0 or n >= WARES.size() or not _owner_alive(o):
+		return
+	var sp: Vector3 = shrines[si].pos
+	var at := _owner_pos(o)
+	if at == Vector3.INF or Vector2(at.x - sp.x, at.z - sp.z).length() > 4.0:
+		return
+	var ware: Array = WARES[n]
+	if str(ware[0]) == "kindling":
+		if game.net_on():
+			_tell(o, "KINDLING ONLY BURNS IN A SOLO GAME")
+			return
+		if kindling > 0:
+			_tell(o, "YOU ALREADY CARRY KINDLING")
+			return
+		if game.zone != null and game.zone.radius < KINDLING_MIN_RADIUS:
+			_tell(o, "THE FIRES HAVE GONE OUT  —  TOO LATE FOR KINDLING")
+			return
+	if not spend(o, int(ware[2])):
+		return
+	var yaw: float = shrines[si].yaw
+	var side := Basis(Vector3.UP, yaw) * Vector3.RIGHT
+	var spot: Vector3 = sp + side * randf_range(-0.35, 0.35) + Vector3.UP * 0.06
+	match str(ware[0]):
+		"med":
+			game._spawn_loot("med", "", spot)
+		"ammo":
+			game._spawn_loot("ammo", "", spot - side * 0.2)
+			game._spawn_loot("ammo", "", spot + side * 0.2)
+		"grenade":
+			game._spawn_loot("grenade", "", spot - side * 0.2)
+			game._spawn_loot("grenade", "", spot + side * 0.2)
+		"vest":
+			game._spawn_loot("armor", "2", spot)
+		"vest3":
+			game._spawn_loot("armor", "3", spot)
+		"helmet":
+			game._spawn_loot("helmet", "2", spot)
+		"kindling":
+			kindling = 1
+			game.hud.set_kindling(true)
+		"raven":
+			var pts: Array = []
+			for b in game.bots:
+				if not is_instance_valid(b) or not b.alive or b.state != Bot.State.GROUND:
+					continue
+				if b.is_human and (b.peer_id == o or b.friendly):
+					continue
+				if Vector2(b.global_position.x - at.x, b.global_position.z - at.z).length() < RAVEN_RANGE:
+					pts.append(Vector2(b.global_position.x, b.global_position.z))
+			if o != 0 and game.player != null and game.player.alive:
+				var hp: Vector3 = game.player.global_position
+				if Vector2(hp.x - at.x, hp.z - at.z).length() < RAVEN_RANGE and not game.net.squad:
+					pts.append(Vector2(hp.x, hp.z))
+			_send_event(o, {"ev": "reveal", "pts": pts})
+	_send_event(o, {"ev": "bought", "what": str(ware[1]).split("  ·")[0]})
+
+
+# ---------------------------------------------------- kindling, cinders --
+
+## The player just fell (solo). With Kindling and the fires still burning,
+## they rise again at the nearest Wayshrine instead. True if so.
+func try_rise() -> bool:
+	if game.net_on() or kindling <= 0 or rising or shrines.is_empty():
+		return false
+	if game.zone != null and game.zone.radius < KINDLING_MIN_RADIUS:
+		return false
+	kindling = 0
+	rising = true
+	game.hud.set_kindling(false)
+	var pl: Player = game.player
+	var here := pl.global_position
+	# Your Embers stay where you fell. Die again before you get them back and
+	# they are gone.
+	if my_embers > 0:
+		var amount := my_embers
+		purse[0] = 0
+		_embers_here(0, -amount, "")
+		_set_cinder({"pos": game.ground_at(here + Vector3.UP * 0.5), "amount": amount})
+	else:
+		_set_cinder({})
+	if not view.is_empty():
+		_end(0, false, "YOU FELL  —  THE WRIT IS VOID")
+	close_shop()
+	game._drop_player_kit()
+	game.hud.show_big("YOU FELL", HUD.DANGER, RISE_DELAY)
+	game.hud.show_notice("THE KINDLING CATCHES  ...", RISE_DELAY)
+	game.sfx.play_ui("defeat", -8.0)
+	_rise_later(here)
+	return true
+
+
+func _rise_later(here: Vector3) -> void:
+	await get_tree().create_timer(RISE_DELAY).timeout
+	if game == null or game.phase != "playing" or not rising:
+		rising = false
+		return
+	# The nearest Wayshrine inside the circle, else the nearest of all.
+	var best := -1
+	var best_s := INF
+	for i in shrines.size():
+		var sp: Vector3 = shrines[i].pos
+		var s := sp.distance_to(here)
+		if game.zone != null and game.zone.is_outside(sp):
+			s += 100000.0
+		if s < best_s:
+			best_s = s
+			best = i
+	var sh: Dictionary = shrines[best]
+	var pl: Player = game.player
+	var keep_kills: int = pl.kills
+	pl.reset_for_match()
+	pl.kills = keep_kills
+	pl.mode = Player.Mode.GROUND
+	pl.landed = true
+	pl.global_position = game.ground_at(sh.pos + Basis(Vector3.UP, float(sh.yaw)) * Vector3(0, 1.0, 1.6)) + Vector3.UP * 0.1
+	pl.velocity = Vector3.ZERO
+	pl.yaw = float(sh.yaw) + PI
+	pl.give_weapon("pistol")
+	pl.add_ammo_cal("9mm", 30)
+	pl.bandages = 2
+	pl.spawn_protect = 3.0
+	game.anticheat.grace(3.0)
+	pl._emit_health()
+	pl._emit_weapon()
+	pl.inventory_changed.emit()
+	rising = false
+	game.hud.show_big("YOU RISE AGAIN", Color(1.0, 0.72, 0.36), 2.6)
+	game.hud.show_notice("YOUR EMBERS WAIT WHERE YOU FELL" if not cinder.is_empty() else "THE WAYSHRINE'S FIRE BROUGHT YOU BACK", 3.5)
+	game.sfx.play_ui("beacon_light", -6.0)
+
+
+func _set_cinder(c: Dictionary) -> void:
+	cinder = c
+	if _cinder_node != null and is_instance_valid(_cinder_node):
+		_cinder_node.queue_free()
+	_cinder_node = null
+	if game != null and game.hud != null:
+		game.hud.cinder = c.duplicate()
+	if c.is_empty() or game == null:
+		return
+	var root := Node3D.new()
+	game.add_child(root)
+	root.global_position = c.pos
+	var glow := _mat(Color(1.0, 0.55, 0.2), 4.0)
+	var ash := _mat(Color(0.12, 0.11, 0.1))
+	for i in 9:
+		var a := randf() * TAU
+		var r := randf() * 0.45
+		_box(root, Vector3(0.14, 0.06, 0.1), Vector3(cos(a) * r, 0.04, sin(a) * r), glow if i % 3 != 0 else ash, Vector3(0, randf() * PI, 0))
+	MeshMerge.merge(root, [])
+	var light := OmniLight3D.new()
+	light.light_color = Color(1.0, 0.55, 0.25)
+	light.light_energy = 1.6
+	light.omni_range = 4.0
+	light.position.y = 0.4
+	root.add_child(light)
+	_cinder_node = root
+
+
+## Walking over your Cinder gives the Embers back.
+func _check_cinder() -> void:
+	if cinder.is_empty() or game.player == null or not game.player.alive:
+		return
+	var cp: Vector3 = cinder.pos
+	if game.player.global_position.distance_to(cp) < 2.2:
+		var amount := int(cinder.amount)
+		_set_cinder({})
+		purse[0] = int(purse.get(0, 0)) + amount
+		_embers_here(int(purse[0]), amount, "RECOVERED")
+		game.hud.show_big("EMBERS RECOVERED", Color(1.0, 0.72, 0.36), 2.2)
+
+
+# ------------------------------------------------------------------ host --
+
+func _owner_pos(o: int) -> Vector3:
+	if o == 0:
+		return game.player.global_position if game.player != null else Vector3.INF
+	return game.net_peer_position(o)
+
+
+func _owner_alive(o: int) -> bool:
+	if o == 0:
+		return game.player != null and game.player.alive
+	var h = game.humans.get(o)
+	return h != null and is_instance_valid(h) and (h as Bot).alive
+
+
+func take(o: int, bi: int) -> void:
+	if bi < 0 or bi >= boards.size() or active.has(o) or board_cool[bi] > 0.0 or not _owner_alive(o):
+		return
+	var b: Dictionary = boards[bi]
+	var at := _owner_pos(o)
+	if at == Vector3.INF or Vector2(at.x - b.pos.x, at.z - b.pos.z).length() > REACH + 2.0:
+		return
+	var kind: String = b.kind
+	var w := {"kind": kind, "t": TIME[kind], "stage": 0, "board": bi}
+	match kind:
+		"blood":
+			var target := _pick_mark(at)
+			if target == null:
+				_tell(o, "NO CHAMPION TO MARK RIGHT NOW  —  TRY AGAIN SOON")
+				return
+			_crown(target, o)
+			w["target"] = target
+			w["name"] = target.bot_name
+			w["r"] = 110.0
+			w["c"] = _ring_centre(target.global_position, 110.0)
+			w["move"] = 20.0
+		"relic":
+			var site := _pick_site(at, 250.0, 650.0, false)
+			if site == Vector3.INF:
+				_tell(o, "THE BOARD'S RELIC MAPS ARE ALL TAKEN")
+				return
+			w["site"] = site
+			w["c"] = _ring_centre(site, RELIC_RINGS[0])
+		"beacon":
+			var site2 := _pick_site(at, 220.0, 600.0, true)
+			if site2 == Vector3.INF:
+				_tell(o, "NO HILL FOR A BEACON NEARBY")
+				return
+			w["site"] = site2
+			w["hold"] = HOLD_TIME
+			w["call"] = 0.0
+	active[o] = w
+	board_cool[bi] = BOARD_REST
+	if game.net_on():
+		game.net.send_writ_board(bi, BOARD_REST)
+	_refresh(o, w)
+	_send_event(o, {"ev": "take", "kind": kind, "town": str(b.town)})
+
+
+## A soldier for a Blood Writ: on the ground, not too near, not too far.
+func _pick_mark(at: Vector3) -> Bot:
+	var best: Bot = null
+	var best_s := INF
+	for b in game.bots:
+		if not is_instance_valid(b) or not b.alive or b.is_human or b.puppet or b.state != Bot.State.GROUND or b.has_meta("writ_mark"):
+			continue
+		var d := Vector2(b.global_position.x - at.x, b.global_position.z - at.z).length()
+		if d < 140.0 or d > 750.0:
+			continue
+		var s := absf(d - 380.0) + randf() * 60.0
+		if s < best_s:
+			best_s = s
+			best = b
+	return best
+
+
+## The mark becomes a champion: armoured, well armed, sharper.
+func _crown(b: Bot, o: int) -> void:
+	b.set_meta("writ_mark", o)
+	b.vest_level = maxi(b.vest_level, 3)
+	b.armor = 100.0
+	b.helmet_level = maxi(b.helmet_level, 2)
+	b.hp = maxf(b.hp, 100.0)
+	b.shoot_skill = maxf(b.shoot_skill, 0.72)
+	b.reaction = minf(b.reaction, 0.28)
+	b.aggression = maxf(b.aggression, 0.7)
+	if not b.armed or not (b.weapon_id in CHAMPION_GUNS):
+		b.arm_weapon(CHAMPION_GUNS[randi() % CHAMPION_GUNS.size()])
+	b.meds = maxi(b.meds, 2)
+
+
+## Open, dry ground at a distance; a hilltop for a beacon. Inside the next
+## safe circle when possible.
+func _pick_site(at: Vector3, lo: float, hi: float, hill: bool) -> Vector3:
+	var terrain: Terrain = game.terrain
+	var best := Vector3.INF
+	var best_s := -INF
+	var zc: Vector2 = game.zone.next_center() if game.zone != null else Vector2(at.x, at.z)
+	var zr: float = game.zone.next_radius() if game.zone != null else 99999.0
+	for i in 70:
+		var a := randf() * TAU
+		var d := randf_range(lo, hi)
+		var q := Vector2(at.x, at.z) + Vector2(cos(a), sin(a)) * d
+		if absf(q.x) > Terrain.HALF - 60.0 or absf(q.y) > Terrain.HALF - 60.0:
+			continue
+		var h := terrain.height_at(q.x, q.y)
+		if h < terrain.water_surface_at(q.x, q.y) + 1.0 or terrain.slope_at(q.x, q.y) > (0.45 if hill else 0.35):
+			continue
+		if game._on_building(q.x, q.y) or game.world.villages.blocks_house(q, 4.0):
+			continue
+		var s := h * 0.08 if hill else randf()
+		if q.distance_to(zc) < zr * 0.85:
+			s += 30.0
+		if s > best_s:
+			best_s = s
+			best = Vector3(q.x, h, q.y)
+	if best != Vector3.INF:
+		best = game.ground_at(best + Vector3.UP * 30.0)
+	return best
+
+
+func _ring_centre(site: Vector3, r: float) -> Vector2:
+	var a := randf() * TAU
+	return Vector2(site.x, site.z) + Vector2(cos(a), sin(a)) * r * randf_range(0.2, 0.62)
+
+
+func _host_tick(o: int, dt: float) -> void:
+	var w: Dictionary = active[o]
+	if not _owner_alive(o):
+		_end(o, false, "YOU FELL  —  THE WRIT IS VOID")
+		return
+	w["t"] = float(w["t"]) - dt
+	if float(w["t"]) <= 0.0:
+		_end(o, false, "OUT OF TIME  —  THE WRIT IS VOID")
+		return
+	var at := _owner_pos(o)
+	var here := Vector2(at.x, at.z)
+	var changed := false
+	match str(w.kind):
+		"blood":
+			var b = w.get("target")
+			if b == null or not is_instance_valid(b) or not (b as Bot).alive:
+				_end(o, false, "YOUR MARK IS GONE")
+				return
+			var tp: Vector3 = (b as Bot).global_position
+			var close := here.distance_to(Vector2(tp.x, tp.z)) < 70.0
+			w["move"] = float(w["move"]) - dt
+			if close != bool(w.get("close", false)):
+				w["close"] = close
+				changed = true
+				if close:
+					_send_event(o, {"ev": "close"})
+			if float(w["move"]) <= 0.0 or not w.has("c"):
+				w["move"] = 20.0
+				var frac := 1.0 - float(w["t"]) / TIME["blood"]
+				w["r"] = lerpf(110.0, 40.0, clampf(frac, 0.0, 1.0))
+				w["c"] = _ring_centre(tp, float(w["r"]))
+				changed = true
+				_send_event(o, {"ev": "ping"})
+			if close:
+				w["pt"] = tp + Vector3.UP * 2.0
+				changed = true
+		"relic":
+			var st := int(w["stage"])
+			var c: Vector2 = w["c"]
+			if st < RELIC_RINGS.size() - 1 and here.distance_to(c) < float(RELIC_RINGS[st]) * 0.8:
+				w["stage"] = st + 1
+				w["c"] = _ring_centre(w.site, RELIC_RINGS[st + 1])
+				changed = true
+				_send_event(o, {"ev": "ping"})
+		"beacon":
+			var site: Vector3 = w.site
+			if int(w["stage"]) == 1:
+				var inside := here.distance_to(Vector2(site.x, site.z)) < HOLD_RADIUS
+				if inside:
+					w["hold"] = float(w["hold"]) - dt
+				if inside != bool(w.get("inside", true)):
+					w["inside"] = inside
+				w["call"] = float(w["call"]) - dt
+				if float(w["call"]) <= 0.0:
+					w["call"] = 15.0
+					_call_soldiers(site, 6)
+				changed = true
+				if float(w["hold"]) <= 0.0:
+					game.spawn_airdrop_at(Vector2(site.x + 7.0, site.z + 3.0))
+					_end(o, true, "THE BEACON BURNS  —  A SUPPLY DROP IS ON ITS WAY")
+					return
+	# The timer itself is kept in step every few seconds.
+	if changed or int(float(w["t"]) * 2.0) % 10 == 0:
+		_refresh(o, w)
+
+
+## Armed soldiers near the beacon come to see who lit it.
+func _call_soldiers(site: Vector3, n: int) -> void:
+	var near: Array = []
+	for b in game.bots:
+		if is_instance_valid(b) and b.alive and b.armed and not b.is_human and not b.puppet and b.state == Bot.State.GROUND:
+			var d := Vector2(b.global_position.x - site.x, b.global_position.z - site.z).length()
+			if d < 450.0:
+				near.append([d, b])
+	near.sort_custom(func(a, c): return a[0] < c[0])
+	for i in mini(n, near.size()):
+		var b: Bot = near[i][1]
+		b.roam_point = Vector2(site.x, site.z) + Vector2(randf_range(-8, 8), randf_range(-8, 8))
+		b.heard_pos = site
+		b.alert_timer = 12.0
+
+
+## A player finished holding F at the dig spot or the beacon.
+func act_on(o: int, act: String) -> void:
+	if not active.has(o):
+		return
+	var w: Dictionary = active[o]
+	if not w.has("site"):
+		return
+	var site: Vector3 = w.site
+	var at := _owner_pos(o)
+	if at == Vector3.INF or Vector2(at.x - site.x, at.z - site.z).length() > 3.6:
+		return
+	if act == "dig" and str(w.kind) == "relic" and int(w["stage"]) == RELIC_RINGS.size() - 1:
+		_relic_cache(site)
+		_end(o, true, "RELIC RECOVERED")
+	elif act == "light" and str(w.kind) == "beacon" and int(w["stage"]) == 0:
+		w["stage"] = 1
+		w["inside"] = true
+		_call_soldiers(site, 6)
+		w["call"] = 15.0
+		_send_event(o, {"ev": "lit"})
+		_refresh(o, w)
+
+
+func _relic_cache(site: Vector3) -> void:
+	var gun: String = CHAMPION_GUNS[randi() % CHAMPION_GUNS.size()]
+	var items: Array = [["weapon", gun], ["ammo", Weapons.caliber(gun)], ["ammo", Weapons.caliber(gun)],
+		["armor", "3" if randf() < 0.4 else "2"], ["helmet", "2"], ["med", ""], ["scope", "4x"]]
+	for i in items.size():
+		var a := TAU * float(i) / float(items.size())
+		var p: Vector3 = game.ground_at(site + Vector3(cos(a), 1.0, sin(a)) * 1.6) + Vector3(0, 0.08, 0)
+		game._spawn_loot(items[i][0], items[i][1], p)
+
+
+## A soldier died (host). Pays for the kill, and settles a Blood Writ.
+func on_bot_eliminated(victim: Bot) -> void:
+	if game.net_is_client():
+		return
+	var src = victim.last_killer_node
+	var killer_o := -1
+	if src == game.player:
+		killer_o = 0
+	elif src is Bot and is_instance_valid(src) and (src as Bot).is_human:
+		killer_o = (src as Bot).peer_id
+	if killer_o >= 0:
+		var n := KILL_EMBERS
+		var why := "KILL"
+		if victim.last_headshot:
+			n += HEADSHOT_EMBERS
+			why = "HEADSHOT"
+		if src is Node3D and (src as Node3D).global_position.distance_to(victim.global_position) > 150.0:
+			n += LONG_SHOT_EMBERS
+			why = "LONG SHOT" if why == "KILL" else why + " · LONG SHOT"
+		award(killer_o, n, why)
+	if victim.has_meta("writ_mark"):
+		var o := int(victim.get_meta("writ_mark"))
+		victim.remove_meta("writ_mark")
+		if active.has(o) and active[o].get("target") == victim:
+			if killer_o == o:
+				# The champion's kit is worth having.
+				var base: Vector3 = game.ground_at(victim.global_position)
+				game._spawn_loot("armor", "3", base + Vector3(0.9, 0.08, 0.3))
+				game._spawn_loot("med", "", base + Vector3(-0.7, 0.08, 0.5))
+				_end(o, true, "MARK SLAIN")
+			else:
+				var by := "THE STORM"
+				if src != null and is_instance_valid(src) and src.has_method("display_name"):
+					by = str(src.call("display_name"))
+				_end(o, false, "YOUR MARK FELL TO %s" % by)
+
+
+func award(o: int, n: int, why: String) -> void:
+	purse[o] = int(purse.get(o, 0)) + n
+	if o == 0:
+		_embers_here(int(purse[o]), n, why)
+	elif game.net_on():
+		game.net.send_embers(o, int(purse[o]), n, why)
+
+
+## Spend Embers (Wayshrines). False if there are not enough.
+func spend(o: int, n: int) -> bool:
+	if int(purse.get(o, 0)) < n:
+		return false
+	purse[o] = int(purse[o]) - n
+	if o == 0:
+		_embers_here(int(purse[o]), -n, "")
+	elif game.net_on():
+		game.net.send_embers(o, int(purse[o]), -n, "")
+	return true
+
+
+func _end(o: int, won: bool, why: String, tell := true) -> void:
+	var w: Dictionary = active.get(o, {})
+	if w.is_empty():
+		return
+	active.erase(o)
+	var b = w.get("target")
+	if b != null and is_instance_valid(b) and (b as Bot).has_meta("writ_mark"):
+		(b as Bot).remove_meta("writ_mark")
+	if not tell:
+		return
+	var kind := str(w.kind)
+	if won:
+		award(o, REWARD[kind], TITLE[kind])
+	_send_view(o, {})
+	_send_event(o, {"ev": "done" if won else "fail", "kind": kind, "why": why, "reward": REWARD[kind] if won else 0})
+
+
+## Turn the host's writ into what its owner's HUD shows.
+func _refresh(o: int, w: Dictionary) -> void:
+	var kind := str(w.kind)
+	var v := {"kind": kind, "title": TITLE[kind], "t": float(w["t"])}
+	match kind:
+		"blood":
+			v["line"] = "HUNT %s" % str(w.get("name", "THE MARK"))
+			if w.has("c"):
+				v["c"] = w["c"]
+				v["r"] = w["r"]
+			if bool(w.get("close", false)) and w.has("pt"):
+				v["pt"] = w["pt"]
+				v["line"] = "%s IS CLOSE" % str(w.get("name", "THE MARK"))
+		"relic":
+			var st := int(w["stage"])
+			v["c"] = w["c"]
+			v["r"] = RELIC_RINGS[st]
+			if st == RELIC_RINGS.size() - 1:
+				v["line"] = "DIG WHERE THE GROUND GLOWS"
+				v["act"] = "dig"
+				v["act_pos"] = w.site
+				v["mound"] = w.site
+			else:
+				v["line"] = "SEARCH THE CIRCLE  (%d / %d)" % [st + 1, RELIC_RINGS.size()]
+		"beacon":
+			var site: Vector3 = w.site
+			v["pt"] = site + Vector3.UP * 3.0
+			v["beacon"] = site
+			if int(w["stage"]) == 0:
+				v["line"] = "CLIMB TO THE BEACON AND LIGHT IT"
+				v["act"] = "light"
+				v["act_pos"] = site
+			else:
+				v["lit"] = true
+				v["hold"] = float(w["hold"])
+				v["line"] = ("HOLD THE BEACON  %d s" % int(ceil(float(w["hold"])))) if bool(w.get("inside", true)) else "GET BACK TO THE BEACON!"
+				v["c"] = Vector2(site.x, site.z)
+				v["r"] = HOLD_RADIUS
+	_send_view(o, v)
+
+
+func _send_view(o: int, v: Dictionary) -> void:
+	if o == 0:
+		apply_view(v)
+	elif game.net_on():
+		game.net.send_writ_view(o, v)
+
+
+func _send_event(o: int, e: Dictionary) -> void:
+	if o == 0:
+		apply_event(e)
+	elif game.net_on():
+		game.net.send_writ_event(o, e)
+
+
+func _tell(o: int, text: String) -> void:
+	_send_event(o, {"ev": "say", "why": text})
+
+
+# ------------------------------------------------------- this machine ----
+
+func apply_view(v: Dictionary) -> void:
+	view = v
+	game.hud.set_writ(v)
+	_sync_sites()
+
+
+func apply_event(e: Dictionary) -> void:
+	var hud: HUD = game.hud
+	match str(e.get("ev", "")):
+		"take":
+			game.sfx.play_ui("writ_take", -3.0)
+			var kind := str(e.kind)
+			hud.show_big(TITLE[kind], TINT[kind], 2.4)
+			hud.show_notice("%s  —  TAKEN AT %s" % [BLURB[kind], str(e.get("town", ""))], 3.0)
+		"ping":
+			game.sfx.play_ui("writ_ping", -10.0)
+		"close":
+			game.sfx.play_ui("writ_ping", -6.0)
+			hud.show_notice("YOUR MARK IS CLOSE  —  MARKED ON YOUR SCREEN", 2.6)
+		"lit":
+			hud.show_big("THE BEACON IS LIT", TINT["beacon"], 2.2)
+			hud.show_notice("HOLD IT FOR %d SECONDS  —  THEY HAVE SEEN THE FIRE" % int(HOLD_TIME), 3.0)
+		"done":
+			game.sfx.play_ui("writ_done", -2.0)
+			hud.show_big("WRIT FULFILLED", Color(1.0, 0.82, 0.38), 3.2)
+			hud.show_notice("%s   ·   +%d EMBERS" % [str(e.get("why", "")), int(e.get("reward", 0))], 3.5)
+			hud.killfeed("%s FULFILLED  +%d" % [TITLE.get(str(e.get("kind", "")), "WRIT"), int(e.get("reward", 0))], Color(1.0, 0.82, 0.38))
+		"fail":
+			game.sfx.play_ui("writ_fail", -3.0)
+			hud.show_big("WRIT FAILED", HUD.DANGER, 2.6)
+			hud.show_notice(str(e.get("why", "")), 3.0)
+		"say":
+			hud.show_notice(str(e.get("why", "")), 2.6)
+		"bought":
+			game.sfx.play_ui("shrine_buy", -4.0)
+			hud.show_notice("%s  —  LAID ON THE OFFERING STONE" % str(e.get("what", "")), 2.4)
+		"reveal":
+			var pts: Array = e.get("pts", [])
+			hud.reveal(pts, 10.0)
+			hud.show_big("RAVEN'S EYE", Color(0.75, 0.6, 1.0), 2.0)
+			hud.show_notice("%d SOLDIER%s WITHIN %d M  —  ON YOUR MAP" % [pts.size(), "" if pts.size() == 1 else "S", int(RAVEN_RANGE)], 3.0)
+
+
+func _embers_here(total: int, gain: int, why: String) -> void:
+	my_embers = total
+	game.hud.set_embers(total, gain, why)
+	if shop >= 0:
+		game.hud.show_shop(WARES, my_embers)
+	if gain > 0:
+		game.sfx.play_ui("ember", -12.0 if gain < 300 else -6.0)
+
+
+# ---------------------------------------------------- site props (local) --
+
+func _clear_sites() -> void:
+	for k in _site_nodes:
+		var n = _site_nodes[k]
+		if n != null and is_instance_valid(n):
+			(n as Node).queue_free()
+	_site_nodes.clear()
+	_beacon_fire = null
+
+
+## Build or remove the dig mound and the beacon to match our writ.
+func _sync_sites() -> void:
+	var want_mound: bool = view.has("mound")
+	var want_beacon: bool = view.has("beacon")
+	if not want_mound and _site_nodes.has("mound"):
+		(_site_nodes["mound"] as Node).queue_free()
+		_site_nodes.erase("mound")
+	if want_mound and not _site_nodes.has("mound"):
+		_site_nodes["mound"] = _make_mound(view["mound"])
+	if not want_beacon and _site_nodes.has("beacon"):
+		(_site_nodes["beacon"] as Node).queue_free()
+		_site_nodes.erase("beacon")
+		_beacon_fire = null
+	if want_beacon and not _site_nodes.has("beacon"):
+		_site_nodes["beacon"] = _make_beacon(view["beacon"])
+	if _beacon_fire != null and bool(view.get("lit", false)) and not _beacon_fire.visible:
+		_beacon_fire.visible = true
+		game.sfx.play_at("beacon_light", (_site_nodes["beacon"] as Node3D).global_position + Vector3.UP * 2.0, 2.0)
+
+
+func _mat(c: Color, emit := 0.0, rough := 0.85) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = c
+	m.roughness = rough
+	if emit > 0.0:
+		m.emission_enabled = true
+		m.emission = c
+		m.emission_energy_multiplier = emit
+	return m
+
+
+func _box(parent: Node3D, size: Vector3, pos: Vector3, mat: Material, rot := Vector3.ZERO) -> void:
+	var mi := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = size
+	mi.mesh = bm
+	mi.material_override = mat
+	mi.position = pos
+	mi.rotation = rot
+	parent.add_child(mi)
+
+
+## Freshly turned earth with a faint golden glow seeping out of it.
+func _make_mound(at: Vector3) -> Node3D:
+	var root := Node3D.new()
+	game.add_child(root)
+	root.global_position = at
+	var soil := _mat(Color(0.24, 0.17, 0.11), 0.0, 0.95)
+	for i in 7:
+		var a := TAU * float(i) / 7.0
+		_box(root, Vector3(0.7, 0.22, 0.55), Vector3(cos(a) * 0.55, 0.06, sin(a) * 0.55), soil, Vector3(0.0, a, 0.15))
+	_box(root, Vector3(1.0, 0.3, 1.0), Vector3(0, 0.1, 0), soil)
+	var glow := _mat(Color(1.0, 0.75, 0.3), 3.5)
+	for i in 3:
+		_box(root, Vector3(0.06, 0.04, 0.4), Vector3(randf_range(-0.3, 0.3), 0.26, randf_range(-0.3, 0.3)), glow, Vector3(0, randf() * PI, 0))
+	MeshMerge.merge(root, [])
+	var light := OmniLight3D.new()
+	light.light_color = Color(1.0, 0.72, 0.35)
+	light.light_energy = 1.4
+	light.omni_range = 5.0
+	light.position = Vector3(0, 0.6, 0)
+	light.shadow_enabled = false
+	root.add_child(light)
+	root.set_meta("light", light)
+	# A shovel left stuck in the earth.
+	var shovel := Node3D.new()
+	shovel.position = Vector3(0.7, 0.0, -0.3)
+	shovel.rotation = Vector3(0.25, 0.6, 0.1)
+	root.add_child(shovel)
+	_box(shovel, Vector3(0.04, 1.1, 0.04), Vector3(0, 0.7, 0), _mat(Color(0.42, 0.28, 0.16)))
+	_box(shovel, Vector3(0.24, 0.3, 0.02), Vector3(0, 0.1, 0), _mat(Color(0.3, 0.3, 0.32), 0.0, 0.4))
+	MeshMerge.merge(shovel, [])
+	return root
+
+
+## A hilltop beacon: a stone plinth, an iron fire basket full of pitch-soaked
+## wood. When lit: flames, a big warm light and a column of smoke.
+func _make_beacon(at: Vector3) -> Node3D:
+	var root := Node3D.new()
+	game.add_child(root)
+	root.global_position = at
+	var stone := _mat(Color(0.46, 0.45, 0.43), 0.0, 0.95)
+	var iron := _mat(Color(0.12, 0.12, 0.13), 0.0, 0.5)
+	iron.metallic = 0.6
+	var wood := _mat(Color(0.3, 0.2, 0.12))
+	_box(root, Vector3(2.2, 0.5, 2.2), Vector3(0, 0.1, 0), stone)
+	_box(root, Vector3(1.6, 0.9, 1.6), Vector3(0, 0.75, 0), stone)
+	_box(root, Vector3(0.5, 1.2, 0.5), Vector3(0, 1.75, 0), stone)
+	for i in 4:
+		var a := TAU * float(i) / 4.0 + PI * 0.25
+		_box(root, Vector3(0.06, 0.9, 0.06), Vector3(cos(a) * 0.55, 2.7, sin(a) * 0.55), iron, Vector3(-sin(a) * 0.3, 0, cos(a) * 0.3))
+	_box(root, Vector3(0.9, 0.06, 0.9), Vector3(0, 2.35, 0), iron)
+	for k in 2:
+		_box(root, Vector3(1.4, 0.05, 1.4), Vector3(0, 2.55 + float(k) * 0.55, 0), iron, Vector3(0, PI * 0.25 * float(k), 0))
+	for i in 6:
+		_box(root, Vector3(0.12, 0.9, 0.12), Vector3(randf_range(-0.25, 0.25), 2.75, randf_range(-0.25, 0.25)), wood, Vector3(randf_range(-0.5, 0.5), randf() * PI, randf_range(-0.5, 0.5)))
+	MeshMerge.merge(root, [])
+	var body := StaticBody3D.new()
+	var cs := CollisionShape3D.new()
+	var sh := BoxShape3D.new()
+	sh.size = Vector3(1.6, 1.4, 1.6)
+	cs.shape = sh
+	cs.position = Vector3(0, 0.6, 0)
+	body.add_child(cs)
+	root.add_child(body)
+	# The fire, hidden until it is lit.
+	var fire := Node3D.new()
+	fire.position = Vector3(0, 3.0, 0)
+	fire.visible = false
+	root.add_child(fire)
+	var flame := _mat(Color(1.0, 0.55, 0.18), 6.0)
+	flame.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	flame.cull_mode = BaseMaterial3D.CULL_DISABLED
+	for i in 3:
+		var q := MeshInstance3D.new()
+		var qm := QuadMesh.new()
+		qm.size = Vector2(1.1, 1.8)
+		q.mesh = qm
+		q.material_override = flame
+		q.rotation.y = PI / 3.0 * float(i)
+		q.position.y = 0.6
+		q.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		fire.add_child(q)
+	var light := OmniLight3D.new()
+	light.light_color = Color(1.0, 0.62, 0.3)
+	light.light_energy = 4.0
+	light.omni_range = 26.0
+	light.position.y = 1.2
+	fire.add_child(light)
+	_beacon_fire = fire
+	return root
+
+
+func _animate_sites(delta: float) -> void:
+	_flicker += delta
+	if _site_nodes.has("mound"):
+		var m := _site_nodes["mound"] as Node3D
+		var l := m.get_meta("light") as OmniLight3D
+		l.light_energy = 1.2 + sin(_flicker * 3.1) * 0.35
+	if _beacon_fire != null and is_instance_valid(_beacon_fire) and _beacon_fire.visible:
+		var f := 1.0 + sin(_flicker * 13.0) * 0.08 + sin(_flicker * 7.3) * 0.06
+		_beacon_fire.scale = Vector3(1.0, f, 1.0)
+		var light := _beacon_fire.get_child(_beacon_fire.get_child_count() - 1) as OmniLight3D
+		light.light_energy = 3.6 + sin(_flicker * 11.0) * 0.6
+		if fmod(_flicker, 0.9) < delta:
+			game.spawn_smoke(_beacon_fire.global_position + Vector3.UP * 1.5, 0.8)

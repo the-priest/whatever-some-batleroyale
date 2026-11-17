@@ -106,6 +106,8 @@ func build(p_terrain: Terrain, p_seed: int) -> void:
 	_signposts()
 	_harbour()
 	_washing_lines()
+	_writ_boards()
+	_wayshrines()
 	_commit_batches()
 	_commit_colliders()
 	print("[villages] %d villages, %d houses, %d towers, %d ruins, %d pieces, %d loot points, %d colliders" % [
@@ -1793,6 +1795,205 @@ func _rowboat(at: Vector3, yaw: float, paint: String) -> void:
 	for sx: float in [-1.0, 1.0]:
 		var ob := b * Basis(Vector3.UP, sx * 0.12) * Basis(Vector3.FORWARD, sx * 0.05)
 		_proc_box(Transform3D(ob.scaled_local(Vector3(0.05, 0.05, 2.4)), at + b * Vector3(sx * 0.25, 0.36, 0.3)), "wood")
+
+
+## Writ boards: one in every town and village, on open ground near the
+## middle, facing it. Each offers one kind of writ (seal and pennant in its
+## colour). The Writs system reads `writ_boards`: [{pos, yaw, town, kind}].
+var writ_boards: Array = []
+const WRIT_KINDS := ["blood", "relic", "beacon"]
+const WRIT_CLOTH := {"blood": "cloth_red", "relic": "cloth_yellow", "beacon": "cloth_blue"}
+
+
+var _seed_off := 0
+
+
+func _writ_boards() -> void:
+	writ_boards.clear()
+	_seed_off = rng.randi() % 3
+	var order: Array = []
+	for v in village_pads:
+		if str(v.name) == "":
+			continue
+		order.append(v)
+	# And at the great landmarks, where the work is.
+	if landmarks != null:
+		for l in landmarks.labels:
+			var lp: Vector2 = l[1]
+			var dup := false
+			for v in order:
+				if (v.center as Vector2).distance_to(lp) < 120.0:
+					dup = true
+			if not dup:
+				order.append({"center": lp, "name": str(l[0])})
+	for vi in order.size():
+		var v: Dictionary = order[vi]
+		var c: Vector2 = v.center
+		var spot := Vector2.INF
+		# Strict first (open, flat, well clear), then less picky.
+		for pass_i in 2:
+			var clear := 1.6 if pass_i == 0 else 1.15
+			var steep := 0.22 if pass_i == 0 else 0.32
+			for ring: float in [5.0, 8.0, 11.0, 14.0, 18.0, 23.0, 29.0, 36.0]:
+				for k in 20:
+					var a := TAU * float(k) / 20.0 + float(vi) * 0.7
+					var q := c + Vector2(cos(a), sin(a)) * ring
+					if terrain.slope_at(q.x, q.y) > steep or terrain.height_at(q.x, q.y) < terrain.water_surface_at(q.x, q.y) + 0.4:
+						continue
+					if not _free_spot(q, clear) or blocks_house(q, 1.2):
+						continue
+					spot = q
+					break
+				if spot != Vector2.INF:
+					break
+			if spot != Vector2.INF:
+				break
+		if spot == Vector2.INF:
+			continue
+		# Kinds in turn, so neighbouring towns offer different work.
+		var kind: String = WRIT_KINDS[(writ_boards.size() + _seed_off) % WRIT_KINDS.size()]
+		var to_c := c - spot
+		var yaw := atan2(to_c.x, to_c.y) if to_c.length() > 0.5 else 0.0
+		_writ_board(spot, yaw, kind)
+		_occupy(spot, 1.6)
+		writ_boards.append({"pos": Vector3(spot.x, terrain.height_at(spot.x, spot.y), spot.y), "yaw": yaw, "town": str(v.name), "kind": kind})
+	print("[villages] %d writ boards" % writ_boards.size())
+
+
+## A notice board under a little shingled roof: two posts, the plank board,
+## three parchment writs with wax seals, a lantern on a bracket and a pennant
+## on top in the writ's colour so you can tell the kind from down the street.
+func _writ_board(at: Vector2, yaw: float, kind: String) -> void:
+	var b := Basis(Vector3.UP, yaw)
+	var lo := INF
+	for sx: float in [-0.95, 0.95]:
+		var q := at + Vector2(b.x.x, b.x.z) * sx
+		lo = minf(lo, terrain.height_at(q.x, q.y))
+	var base := Vector3(at.x, lo, at.y)
+	var cloth: String = WRIT_CLOTH[kind]
+	for sx: float in [-0.95, 0.95]:
+		_proc_box(Transform3D(b.scaled_local(Vector3(0.14, 2.75, 0.14)), base + b * Vector3(sx, 1.3, 0)), "wood_dark")
+	# Board, frame and a little drip shelf.
+	_proc_box(Transform3D(b.scaled_local(Vector3(1.86, 1.15, 0.06)), base + b * Vector3(0, 1.62, 0)), "wood")
+	_proc_box(Transform3D(b.scaled_local(Vector3(2.04, 0.09, 0.12)), base + b * Vector3(0, 2.24, 0.02)), "wood_dark")
+	_proc_box(Transform3D(b.scaled_local(Vector3(2.04, 0.09, 0.12)), base + b * Vector3(0, 1.0, 0.02)), "wood_dark")
+	# Roof: two shingle slopes meeting over the board.
+	for side: float in [-1.0, 1.0]:
+		var rb := b * Basis(Vector3.RIGHT, side * 0.55)
+		_proc_box(Transform3D(rb.scaled_local(Vector3(2.3, 0.05, 0.5)), base + b * Vector3(0, 2.72, side * 0.2)), "wood_dark")
+	# The writs: parchment, slightly askew, each with its seal.
+	for i in 3:
+		var nx := -0.58 + 0.58 * float(i)
+		var tilt: float = [0.05, -0.03, 0.07][i]
+		var nb := b * Basis(Vector3.BACK, tilt)
+		var np := base + b * Vector3(nx, 1.66 - 0.04 * float(i % 2), 0.045)
+		_proc_box(Transform3D(nb.scaled_local(Vector3(0.44, 0.58, 0.012)), np), "cloth_white")
+		_proc_box(Transform3D(nb.scaled_local(Vector3(0.08, 0.08, 0.02)), np + nb * Vector3(0, -0.2, 0.012)), cloth)
+		# A nail at the top of each.
+		_proc_box(Transform3D(b.scaled_local(Vector3(0.025, 0.025, 0.05)), np + nb * Vector3(0, 0.25, 0.01)), "iron")
+	# Lantern on an iron bracket off the left post.
+	var lp := base + b * Vector3(-1.2, 2.05, 0.1)
+	_proc_box(Transform3D(b.scaled_local(Vector3(0.3, 0.03, 0.03)), base + b * Vector3(-1.08, 2.22, 0.1)), "iron")
+	_proc_box(Transform3D(b.scaled_local(Vector3(0.015, 0.14, 0.015)), lp + Vector3(0, 0.11, 0)), "iron")
+	_proc_box(Transform3D(b.scaled_local(Vector3(0.14, 0.18, 0.14)), lp - Vector3(0, 0.04, 0)), "lamp")
+	_proc_box(Transform3D(b.scaled_local(Vector3(0.17, 0.03, 0.17)), lp + Vector3(0, 0.06, 0)), "iron")
+	# Pennant on a pole over the roof.
+	_proc_box(Transform3D(b.scaled_local(Vector3(0.05, 1.2, 0.05)), base + b * Vector3(0.95, 3.15, 0)), "wood_dark")
+	_proc_box(Transform3D(b.scaled_local(Vector3(0.62, 0.36, 0.02)), base + b * Vector3(0.95 + 0.33, 3.55, 0)), cloth)
+	_add_box_collider(base + b * Vector3(0, 1.4, 0), Vector3(2.0, 2.8, 0.3), yaw)
+
+
+## Wayshrines: Embers are spent here. A handful, spread over the island, at
+## the edge of old ruins (or by a town where there are too few ruins).
+## Read by Writs: [{pos (the offering stone), yaw, name}].
+var wayshrines: Array = []
+const SHRINE_COUNT := 9
+
+
+func _wayshrines() -> void:
+	wayshrines.clear()
+	var cands: Array[Vector2] = []
+	for p in poi_pads:
+		if str(p.type) == "ruin":
+			cands.append(p.center)
+	for v in village_pads:
+		if str(v.name) != "":
+			cands.append(v.center)
+	# Spread out: each next one as far as possible from those chosen.
+	var chosen: Array[Vector2] = []
+	if cands.is_empty():
+		return
+	chosen.append(cands[rng.randi() % cands.size()])
+	while chosen.size() < SHRINE_COUNT and chosen.size() < cands.size():
+		var best := Vector2.ZERO
+		var best_d := -1.0
+		for q in cands:
+			var d := INF
+			for ch in chosen:
+				d = minf(d, q.distance_to(ch))
+			if d > best_d:
+				best_d = d
+				best = q
+		chosen.append(best)
+	for ci in chosen.size():
+		var c := chosen[ci]
+		var spot := Vector2.INF
+		for ring: float in [13.0, 16.0, 20.0, 25.0, 31.0, 38.0]:
+			for k in 18:
+				var a := TAU * float(k) / 18.0 + float(ci)
+				var q := c + Vector2(cos(a), sin(a)) * ring
+				if terrain.slope_at(q.x, q.y) > 0.25 or terrain.height_at(q.x, q.y) < terrain.water_surface_at(q.x, q.y) + 0.5:
+					continue
+				if not _free_spot(q, 2.6) or blocks_house(q, 2.0):
+					continue
+				spot = q
+				break
+			if spot != Vector2.INF:
+				break
+		if spot == Vector2.INF:
+			continue
+		var to_c := c - spot
+		var yaw := atan2(to_c.x, to_c.y)
+		var front := _wayshrine(spot, yaw)
+		_occupy(spot, 2.6)
+		wayshrines.append({"pos": front, "yaw": yaw, "name": "WAYSHRINE"})
+	print("[villages] %d wayshrines" % wayshrines.size())
+
+
+## Two stone steps, a carved altar with an iron fire bowl of glowing embers,
+## two standing stones behind it. Returns the top of the offering stone in
+## front, where what you buy is laid out.
+func _wayshrine(at: Vector2, yaw: float) -> Vector3:
+	var b := Basis(Vector3.UP, yaw)
+	var lo := terrain.height_at(at.x, at.y)
+	for k in 4:
+		var q := at + Vector2(cos(TAU * k / 4.0), sin(TAU * k / 4.0)) * 1.6
+		lo = minf(lo, terrain.height_at(q.x, q.y))
+	var base := Vector3(at.x, lo, at.y)
+	_proc_box(Transform3D(b.scaled_local(Vector3(3.4, 0.5, 3.4)), base + Vector3(0, 0.0, 0)), "stone")
+	_proc_box(Transform3D(b.scaled_local(Vector3(2.5, 0.25, 2.5)), base + Vector3(0, 0.375, 0)), "stone")
+	# Altar and its fire bowl.
+	_proc_box(Transform3D(b.scaled_local(Vector3(0.9, 0.95, 0.7)), base + b * Vector3(0, 1.0, -0.35)), "stone")
+	_proc_box(Transform3D(b.scaled_local(Vector3(1.05, 0.12, 0.85)), base + b * Vector3(0, 1.52, -0.35)), "stone")
+	_proc_box(Transform3D(b.scaled_local(Vector3(0.62, 0.16, 0.62)), base + b * Vector3(0, 1.66, -0.35)), "iron")
+	for k in 4:
+		var kb := b * Basis(Vector3.UP, TAU * float(k) / 4.0 + 0.4)
+		_proc_box(Transform3D(kb.scaled_local(Vector3(0.22, 0.09, 0.16)), base + b * Vector3(0, 1.76, -0.35) + kb * Vector3(0.1, 0, 0.08)), "lamp")
+	# Standing stones behind, leaning in a little.
+	for sx: float in [-1.0, 1.0]:
+		var sb := b * Basis(Vector3.BACK, sx * 0.08)
+		_proc_box(Transform3D(sb.scaled_local(Vector3(0.55, 2.3, 0.4)), base + b * Vector3(sx * 0.95, 1.55, -0.95)), "stone")
+		_proc_box(Transform3D(sb.scaled_local(Vector3(0.62, 0.14, 0.46)), base + b * Vector3(sx * 0.95 + sx * 0.04, 2.72, -0.95)), "stone")
+	_proc_box(Transform3D(b.scaled_local(Vector3(2.5, 0.3, 0.45)), base + b * Vector3(0, 2.9, -0.95)), "stone")
+	# Offering stone in front, low and flat.
+	var front := base + b * Vector3(0, 0.62, 0.75)
+	_proc_box(Transform3D(b.scaled_local(Vector3(1.1, 0.16, 0.6)), front - Vector3(0, 0.08, 0)), "stone")
+	_add_box_collider(base + Vector3(0, 0.0, 0), Vector3(3.4, 0.5, 3.4), yaw)
+	_add_box_collider(base + Vector3(0, 0.375, 0), Vector3(2.5, 0.25, 2.5), yaw)
+	_add_box_collider(base + b * Vector3(0, 1.1, -0.35), Vector3(0.9, 1.4, 0.7), yaw)
+	for sx: float in [-1.0, 1.0]:
+		_add_box_collider(base + b * Vector3(sx * 0.95, 1.6, -0.95), Vector3(0.55, 2.4, 0.4), yaw)
+	return front
 
 
 ## Washing hung out behind about one house in four: two posts, a line, and

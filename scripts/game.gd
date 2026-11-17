@@ -84,6 +84,8 @@ func loot_near(pos: Vector3, r: float) -> Array:
 	return out
 var bots: Array = []
 var airdrops: Array = []
+## Writ boards, writs and Embers (see writs.gd).
+var writs: Writs = null
 var alive := 1
 var total_players := 1
 var player_kills := 0
@@ -322,6 +324,8 @@ func _ready() -> void:
 		_run_window_test()
 	elif OS.get_cmdline_user_args().has("--gpubench"):
 		_run_gpu_bench()
+	elif OS.get_cmdline_user_args().has("--writs"):
+		_run_writ_test()
 	elif OS.get_cmdline_user_args().has("--lootaudit"):
 		_run_loot_audit()
 	elif OS.get_cmdline_user_args().has("--loose"):
@@ -365,6 +369,10 @@ func _build_world() -> void:
 	world.progress.connect(hud.show_loading)
 	await world.build(seed_value)
 	terrain = world.terrain
+	writs = Writs.new()
+	writs.name = "Writs"
+	world.add_child(writs)
+	writs.setup(self)
 	if wildlife == null:
 		wildlife = Wildlife.new()
 		wildlife.name = "Wildlife"
@@ -870,6 +878,8 @@ func _spawn_loot(kind: String, id: String, pos: Vector3, mag := -1, reserve := -
 
 func _cleanup_match() -> void:
 	_net_setup_ok = false
+	if writs != null and is_instance_valid(writs):
+		writs.reset()
 	_clear_wardens()
 	if player != null and player.mode == Player.Mode.VEHICLE:
 		player.vehicle = null
@@ -1546,7 +1556,10 @@ func _update_prompt() -> void:
 		return
 	var best := _nearest_loot(player.global_position, 3.0)
 	var car := _nearest_vehicle(player.global_position, 1.7)
-	if _interact_wants_car(player, best, car):
+	var wp := writs.prompt(player.global_position) if writs != null else ""
+	if wp != "" and car == null and (best == null or best.global_position.distance_to(player.global_position) > 1.4):
+		hud.set_prompt(wp)
+	elif _interact_wants_car(player, best, car):
 		var seat := car.free_seat()
 		hud.set_prompt("JEEP IS FULL" if seat < 0 else (("[%s]  DRIVE THE JEEP" if seat == 0 else "[%s]  RIDE AS PASSENGER") % Keybinds.key("interact")))
 	elif best != null:
@@ -1762,9 +1775,22 @@ func _on_player_died(killer: String) -> void:
 		return
 	if player.mode == Player.Mode.VEHICLE:
 		_leave_seat()
+	# Kindling: rise again at a Wayshrine (solo).
+	if player.mode == Player.Mode.GROUND and writs != null and writs.try_rise():
+		hud.killfeed("%s   >   YOU" % killer, HUD.DANGER)
+		return
 	# Hosting: your own kit falls where you did, for the others to take.
 	# (Everyone else's death is a Bot on this machine: _drop_bot_kit.)
 	if net_on() and net.hosting and player.mode == Player.Mode.GROUND:
+		_drop_player_kit()
+	if writs != null:
+		writs.close_shop()
+	_on_player_died_rest(killer)
+
+
+## Everything you carried falls where you stand.
+func _drop_player_kit() -> void:
+	if true:
 		var base := ground_at(player.global_position + Vector3.UP * 0.5) + Vector3(0, 0.3, 0)
 		var items: Array = []
 		for gid: String in player.loadout:
@@ -1789,6 +1815,9 @@ func _on_player_died(killer: String) -> void:
 				_spawn_loot("weapon", it[1], at, int(it[2]), -1).dropped = true
 			else:
 				_spawn_loot(it[0], it[1], at).dropped = true
+
+
+func _on_player_died_rest(killer: String) -> void:
 	if net_on():
 		var k = player.last_killer
 		var kk := node_key(k)
@@ -1829,6 +1858,8 @@ func _on_notice(text: String) -> void:
 
 func _on_bot_eliminated(victim: Bot, killer: String) -> void:
 	alive = maxi(0, alive - 1)
+	if writs != null:
+		writs.on_bot_eliminated(victim)
 	_drop_bot_kit(victim)
 	if net_on() and net.hosting and victim.last_killer_node is Bot and is_instance_valid(victim.last_killer_node) and (victim.last_killer_node as Bot).is_human:
 		anticheat.host_peer_kill((victim.last_killer_node as Bot).peer_id)
@@ -1986,6 +2017,8 @@ func try_pickup(p: Player) -> void:
 	if _interact_wants_car(p, best, car):
 		_enter_vehicle(car)
 		return
+	if p == player and writs != null and car == null and (best == null or best.global_position.distance_to(p.global_position) > 1.4) and writs.interact(p.global_position):
+		return
 	if best == null:
 		return
 	var why := best.block_reason(p)
@@ -2065,17 +2098,24 @@ func _spawn_airdrop() -> void:
 		# Open ground only: not on a roof, a tree or a rock.
 		if h > terrain.water_surface_at(p.x, p.y) + 1.0 and terrain.slope_at(p.x, p.y) < 0.4 and not _on_building(p.x, p.y) \
 				and terrain.forest_density(p.x, p.y) < 0.45:
-			var drop := Airdrop.new()
-			var gy := ground_at(Vector3(p.x, h + 20.0, p.y)).y
-			drop.setup(self, p, gy)
-			add_child(drop)
-			airdrops.append(drop)
-			if net_on():
-				net.send_airdrop(p, gy)
-			hud.show_big("SUPPLY DROP INCOMING", Color(1.0, 0.45, 0.3), 2.6)
-			hud.show_notice("HIGH-TIER LOOT  —  MARKED ON THE MAP", 3.0)
-			sfx.play_ui("zone_warn", -10.0)
+			spawn_airdrop_at(p)
 			return
+
+
+## A supply drop falling on this spot (also what a lit beacon calls in).
+func spawn_airdrop_at(p: Vector2, announce := true) -> void:
+	var h := terrain.height_at(p.x, p.y)
+	var drop := Airdrop.new()
+	var gy := ground_at(Vector3(p.x, h + 20.0, p.y)).y
+	drop.setup(self, p, gy)
+	add_child(drop)
+	airdrops.append(drop)
+	if net_on():
+		net.send_airdrop(p, gy)
+	if announce:
+		hud.show_big("SUPPLY DROP INCOMING", Color(1.0, 0.45, 0.3), 2.6)
+		hud.show_notice("HIGH-TIER LOOT  —  MARKED ON THE MAP", 3.0)
+		sfx.play_ui("zone_warn", -10.0)
 
 
 func on_airdrop_landed(drop: Airdrop) -> void:
@@ -3286,6 +3326,20 @@ func _run_shot() -> void:
 					spot_y = ho.y + 0.1
 				print("[shot] house ", ho, " ", hw, "x", hd, " door ", hh.door_side)
 				break
+	# --board=N / --shrine=N: a writ board or a Wayshrine, from a few metres.
+	for a in OS.get_cmdline_user_args():
+		for key in ["--board=", "--shrine="]:
+			if not a.begins_with(key) or writs == null:
+				continue
+			var lst: Array = writs.boards if key == "--board=" else writs.shrines
+			var idx := int(a.substr(key.length()))
+			if idx < lst.size():
+				var e: Dictionary = lst[idx]
+				var eb := Basis(Vector3.UP, float(e.yaw))
+				var at: Vector3 = e.pos + eb * Vector3(1.6, 0, 4.2)
+				spot = Vector3(at.x, 0.0, at.z)
+				var lk: Vector3 = e.pos - at
+				ang = atan2(-lk.x, -lk.z)
 	if p == null:
 		print("[shot] no player")
 		get_tree().quit()
@@ -5518,6 +5572,159 @@ func _draw_audit() -> void:
 	keys.sort_custom(func(a, b): return groups[a][1] > groups[b][1])
 	for k in keys.slice(0, 40):
 		print("[audit] %-40s nodes=%d surfaces=%d shadow=%d" % [k, groups[k][0], groups[k][1], groups[k][2]])
+
+
+## Takes and finishes one writ of each kind, and checks the pay.
+func _run_writ_test() -> void:
+	_start_match()
+	for i in 30:
+		await get_tree().physics_frame
+	_land_player_now()
+	player.spawn_protect = 99999.0
+	print("[writs] %d boards: %s" % [writs.boards.size(), str(writs.boards.map(func(b): return "%s@%s" % [b.kind, b.town]))])
+	_check("writ boards in the towns and landmarks", writs.boards.size() >= 12)
+	# Let the bots land.
+	for i in 60 * 50:
+		await get_tree().physics_frame
+	var fails := 0
+	for kind in ["blood", "relic", "beacon"]:
+		var bi := -1
+		for i in writs.boards.size():
+			if writs.boards[i].kind == kind and writs.board_cool[i] <= 0.0:
+				bi = i
+				break
+		if bi < 0:
+			_check("a %s board" % kind, false)
+			continue
+		var bp: Vector3 = writs.boards[bi].pos
+		var by: float = writs.boards[bi].yaw
+		player.global_position = ground_at(bp + Basis(Vector3.UP, by) * Vector3(0, 2.0, 1.4)) + Vector3.UP * 0.2
+		player.velocity = Vector3.ZERO
+		for i in 10:
+			await get_tree().physics_frame
+		var pr := writs.prompt(player.global_position)
+		print("[writs] prompt at the %s board: %s" % [kind, pr])
+		var before := writs.my_embers
+		writs.interact(player.global_position)
+		_check("%s writ taken" % kind, writs.active.has(0) and not writs.view.is_empty())
+		if not writs.active.has(0):
+			var st := {}
+			var ds: Array = []
+			for b in bots:
+				if is_instance_valid(b) and b.alive:
+					st[b.state] = int(st.get(b.state, 0)) + 1
+					ds.append(int(b.global_position.distance_to(player.global_position)))
+			ds.sort()
+			print("[writs] not taken: bot states %s, distances %s" % [str(st), str(ds.slice(0, 20))])
+		if not writs.active.has(0):
+			fails += 1
+			continue
+		var w: Dictionary = writs.active[0]
+		match kind:
+			"blood":
+				var t: Bot = w.target
+				print("[writs] mark %s at %d m, armour %d, gun %s" % [t.bot_name, int(t.global_position.distance_to(player.global_position)), t.vest_level, t.weapon_id])
+				_check("mark is far enough to hunt", t.global_position.distance_to(player.global_position) > 120.0)
+				_check("hunt circle on the map", writs.view.has("c") and writs.view.has("r"))
+				var c: Vector2 = writs.view["c"]
+				_check("mark inside the circle", c.distance_to(Vector2(t.global_position.x, t.global_position.z)) <= float(writs.view["r"]) + 2.0)
+				player.global_position = ground_at(t.global_position + Vector3(25, 20, 0)) + Vector3.UP * 0.2
+				for i in 90:
+					await get_tree().physics_frame
+				_check("mark shown exactly when close", writs.view.has("pt"))
+				t.take_damage(999.0, t.global_position + Vector3.UP * 1.6, true, player)
+			"relic":
+				var guard := 0
+				while int(w["stage"]) < Writs.RELIC_RINGS.size() - 1 and guard < 5:
+					guard += 1
+					var cc: Vector2 = w["c"]
+					player.global_position = ground_at(Vector3(cc.x, 400.0, cc.y)) + Vector3.UP * 0.2
+					for i in 50:
+						await get_tree().physics_frame
+				_check("relic circles narrow to the dig spot", int(w["stage"]) == Writs.RELIC_RINGS.size() - 1 and writs.view.get("act", "") == "dig")
+				var site: Vector3 = w.site
+				player.global_position = site + Vector3(1.0, 0.3, 0.0)
+				var loot0 := loot_pool.size()
+				await get_tree().physics_frame
+				print("[writs] at the dig spot: %s" % writs.prompt(player.global_position))
+				writs.act_on(0, "dig")
+				_check("relic cache dug up", loot_pool.size() >= loot0 + 5)
+			"beacon":
+				var site2: Vector3 = w.site
+				print("[writs] beacon on a hill %.0f m up, %d m away" % [site2.y, int(site2.distance_to(bp))])
+				player.global_position = site2 + Vector3(2.0, 0.4, 0.0)
+				for i in 10:
+					await get_tree().physics_frame
+				writs.act_on(0, "light")
+				_check("beacon lit", int(w["stage"]) == 1 and bool(writs.view.get("lit", false)))
+				var drops0 := airdrops.size()
+				for i in 60 * 48:
+					if not writs.active.has(0):
+						break
+					player.global_position = site2 + Vector3(2.0, 0.4, 0.0)
+					player.velocity = Vector3.ZERO
+					await get_tree().physics_frame
+				_check("beacon held: supply drop called", airdrops.size() > drops0)
+		for i in 10:
+			await get_tree().physics_frame
+		_check("%s writ fulfilled" % kind, not writs.active.has(0) and writs.view.is_empty())
+		_check("%s writ paid" % kind, writs.my_embers >= before + Writs.REWARD[kind])
+		print("[writs] %s done, embers %d -> %d" % [kind, before, writs.my_embers])
+	# A kill pays too.
+	var e0 := writs.my_embers
+	for b in bots:
+		if is_instance_valid(b) and b.alive and not b.is_human:
+			b.take_damage(999.0, b.global_position, false, player)
+			break
+	await get_tree().physics_frame
+	_check("a kill pays embers", writs.my_embers >= e0 + Writs.KILL_EMBERS)
+	# Spend them at a Wayshrine.
+	print("[writs] %d wayshrines" % writs.shrines.size())
+	_check("wayshrines spread over the island", writs.shrines.size() >= 6)
+	if not writs.shrines.is_empty():
+		var sh: Dictionary = writs.shrines[0]
+		var sp: Vector3 = sh.pos
+		player.global_position = sp + Basis(Vector3.UP, float(sh.yaw)) * Vector3(0, 0.3, 1.4)
+		player.velocity = Vector3.ZERO
+		for i in 20:
+			await get_tree().physics_frame
+		print("[writs] at the shrine: %s (stands at %.2f, stone at %.2f)" % [writs.prompt(player.global_position), player.global_position.y, sp.y])
+		writs.interact(player.global_position)
+		_check("shrine opens its wares", writs.shop == 0 and hud.shop_open() and input_locked)
+		var e1 := writs.my_embers
+		var l1 := loot_pool.size()
+		writs._buy(0)
+		writs._buy(5)
+		await get_tree().physics_frame
+		_check("bought a medkit and a raven's eye", writs.my_embers == e1 - int(Writs.WARES[0][2]) - int(Writs.WARES[5][2]) and loot_pool.size() == l1 + 1)
+		writs.close_shop()
+		_check("shop closes and frees the player", not hud.shop_open() and not input_locked)
+		# Kindling: fall, rise at a shrine, get the Embers back.
+		writs.purse[0] = 1800
+		writs._embers_here(1800, 0, "")
+		writs.interact(player.global_position)
+		writs._buy(Writs.WARES.size() - 1)
+		writs.close_shop()
+		_check("kindling bought", writs.kindling == 1)
+		player.spawn_protect = 0.0
+		player.global_position = ground_at(sp + Vector3(60, 40, 30)) + Vector3.UP * 0.2
+		await get_tree().physics_frame
+		var fell_at := player.global_position
+		var keep := writs.my_embers
+		player.take_damage(999.0, player.global_position + Vector3.FORWARD, false, null)
+		await get_tree().physics_frame
+		_check("falling with kindling: no death screen", phase == "playing" and writs.rising)
+		_check("embers left in a cinder", not writs.cinder.is_empty() and int(writs.cinder.amount) == keep and writs.my_embers == 0)
+		for i in int(60 * (Writs.RISE_DELAY + 0.5)):
+			await get_tree().physics_frame
+		_check("risen at a wayshrine with a pistol", player.alive and player.has_gun() and player.current_id() == "pistol" and writs.shrine_near(player.global_position + Basis(Vector3.UP, float(writs.shrines[0].yaw)) * Vector3(0, 0, -1.4)) >= -1)
+		print("[writs] rose %d m from where they fell" % int(player.global_position.distance_to(fell_at)))
+		player.global_position = fell_at + Vector3.UP * 0.3
+		for i in 5:
+			await get_tree().physics_frame
+		_check("cinder recovered", writs.cinder.is_empty() and writs.my_embers == keep)
+	print("[writs] done, %d embers" % writs.my_embers)
+	get_tree().quit()
 
 
 func _run_loot_audit() -> void:

@@ -221,6 +221,7 @@ func _ready() -> void:
 	_build_bottom_text()
 	_build_big_map()
 	_build_social()
+	_build_writ()
 	_build_menu()
 	_build_end()
 	_build_pause()
@@ -1496,6 +1497,7 @@ func set_gameplay_visible(v: bool) -> void:
 		n.visible = v
 	if not v:
 		big_map.visible = false
+		hide_shop()
 		set_scope(false)
 		set_reddot(false, false)
 		lbl_prompt.text = ""
@@ -2007,6 +2009,8 @@ func _process_body(delta: float) -> void:
 	for m in damage_marks:
 		m["t"] = float(m["t"]) - delta
 	damage_marks = damage_marks.filter(func(m): return float(m["t"]) > 0.0)
+	if _reveal_t > 0.0:
+		_reveal_t = maxf(0.0, _reveal_t - delta)
 	for p in pings:
 		p["t"] = float(p["t"]) - delta
 	pings = pings.filter(func(p): return float(p["t"]) > 0.0)
@@ -2186,6 +2190,14 @@ func _draw_compass() -> void:
 		var xw := cx + clampf(rel_w, -62.0, 62.0) / 62.0 * half
 		var col_w: Color = wp.color
 		compass.draw_colored_polygon(PackedVector2Array([Vector2(xw, y + 6), Vector2(xw + 5, y + 11), Vector2(xw, y + 16), Vector2(xw - 5, y + 11)]), col_w)
+	var wg := _writ_goal()
+	if wg != Vector3.INF:
+		var to_g := Vector2(wg.x, wg.z) - Vector2(player_pos.x, player_pos.z)
+		var rel_g := wrapf(rad_to_deg(atan2(to_g.x, -to_g.y)) - heading, -180.0, 180.0)
+		var xg := cx + clampf(rel_g, -62.0, 62.0) / 62.0 * half
+		var cg := _writ_tint()
+		compass.draw_rect(Rect2(xg - 5, y + 5, 10, 10), Color(0.02, 0.03, 0.04, 0.8))
+		compass.draw_rect(Rect2(xg - 4, y + 6, 8, 8), cg)
 	for m in mates:
 		if m.size() > 3 and not bool(m[3]):
 			continue
@@ -2522,6 +2534,8 @@ func _draw_markers(ctrl: Control, view: MapView, big: bool) -> void:
 			var dw := font_bold.get_string_size(dtxt, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
 			_text_out(ctrl, wp + Vector2(-dw * 0.5, 15), dtxt, 11, WHITE)
 
+	_draw_writ_map(ctrl, view, big, to_map, inner)
+
 	# You: where you look, then the arrow.
 	if inner.grow(10.0).has_point(me):
 		var ang := deg_to_rad(heading)
@@ -2852,6 +2866,7 @@ func _project(p: Vector3) -> Vector2:
 func _draw_social() -> void:
 	if camera_3d == null or not is_instance_valid(camera_3d) or not camera_3d.is_inside_tree():
 		return
+	_draw_writ_marker()
 	var vp := social_layer.size
 	var eye := camera_3d.global_position
 	for t in tags:
@@ -2918,6 +2933,282 @@ func _draw_squad() -> void:
 			squad_draw.draw_string(font_mono, Vector2(230, y + 19), "%d m" % int(r[4]), HORIZONTAL_ALIGNMENT_RIGHT, 78, 11, MUTED)
 		else:
 			squad_draw.draw_string(font_bold, Vector2(230, y + 19), "OUT", HORIZONTAL_ALIGNMENT_RIGHT, 78, 11, DANGER)
+
+
+# ------------------------------------------------------------ writs --
+## The writ we carry (see Writs._refresh): title, line, t, c/r (circle on the
+## map), pt (exact spot), kind. {} when none.
+var writ: Dictionary = {}
+## Every writ board: [Vector2 position, kind, town].
+var writ_boards: Array = []
+var embers := 0
+var _ember_pop := ""
+var _ember_pop_t := 0.0
+var writ_draw: Control
+var lbl_embers: Label
+
+
+func _build_writ() -> void:
+	lbl_embers = _lv("", 18, Color(1.0, 0.72, 0.36))
+	lbl_embers.position = Vector2(150, 22)
+	lbl_embers.size = Vector2(260, 24)
+	root.add_child(lbl_embers)
+	_hud_nodes.append(lbl_embers)
+	writ_draw = Control.new()
+	writ_draw.position = Vector2(28, 56)
+	writ_draw.size = Vector2(360, 120)
+	writ_draw.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	writ_draw.draw.connect(_draw_writ)
+	root.add_child(writ_draw)
+	_hud_nodes.append(writ_draw)
+	set_embers(0, 0, "")
+
+
+func set_writ(v: Dictionary) -> void:
+	writ = v
+	writ_draw.queue_redraw()
+
+
+var kindling := false
+## Your dropped Embers: {pos, amount} or {}.
+var cinder: Dictionary = {}
+
+
+func set_kindling(v: bool) -> void:
+	kindling = v
+	set_embers(embers, 0, "")
+
+
+func set_embers(total: int, gain: int, why: String) -> void:
+	embers = total
+	lbl_embers.text = "◆ %s" % _thousands(total) + ("     + KINDLING" if kindling else "")
+	if gain != 0:
+		_ember_pop = ("+%d" % gain if gain > 0 else "%d" % gain) + ("   " + why if why != "" else "")
+		_ember_pop_t = 2.4
+		var tw := lbl_embers.create_tween()
+		lbl_embers.pivot_offset = Vector2(0, 12)
+		lbl_embers.scale = Vector2(1.18, 1.18)
+		tw.tween_property(lbl_embers, "scale", Vector2.ONE, 0.25).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	writ_draw.queue_redraw()
+
+
+func _thousands(n: int) -> String:
+	var t := str(absi(n))
+	var out := ""
+	while t.length() > 3:
+		out = "," + t.right(3) + out
+		t = t.left(t.length() - 3)
+	return ("-" if n < 0 else "") + t + out
+
+
+func _writ_tint() -> Color:
+	return Writs.TINT.get(str(writ.get("kind", "")), ACCENT)
+
+
+func _draw_writ() -> void:
+	if _ember_pop_t > 0.0:
+		_ember_pop_t = maxf(0.0, _ember_pop_t - get_process_delta_time())
+		var a := clampf(_ember_pop_t / 0.6, 0.0, 1.0)
+		writ_draw.draw_string(font_bold, Vector2(124, -14), _ember_pop, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(1.0, 0.76, 0.4, a))
+		writ_draw.queue_redraw()
+	if writ.is_empty():
+		return
+	var col := _writ_tint()
+	var w := 330.0
+	var h := 64.0
+	writ_draw.draw_rect(Rect2(0, 0, w, h), Color(0.04, 0.05, 0.06, 0.74))
+	writ_draw.draw_rect(Rect2(0, 0, 4, h), col)
+	writ_draw.draw_string(font_bold, Vector2(14, 18), str(writ.get("title", "WRIT")), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, col)
+	var t := maxf(0.0, float(writ.get("t", 0.0)))
+	var ttxt := "%d:%02d" % [int(t) / 60, int(t) % 60]
+	var tcol := DANGER if t < 30.0 else MUTED
+	writ_draw.draw_string(font_mono, Vector2(w - 12, 18), ttxt, HORIZONTAL_ALIGNMENT_RIGHT, -1, 13, tcol)
+	writ_draw.draw_string(font_bold, Vector2(14, 40), str(writ.get("line", "")), HORIZONTAL_ALIGNMENT_LEFT, w - 24, 15, WHITE)
+	# How far: to the exact spot if we have one, else to the circle.
+	var me := Vector2(player_pos.x, player_pos.z)
+	var dtxt := ""
+	if writ.has("pt"):
+		var pt: Vector3 = writ["pt"]
+		dtxt = _dist_text(me.distance_to(Vector2(pt.x, pt.z)))
+	elif writ.has("c"):
+		var d := me.distance_to(writ["c"]) - float(writ.get("r", 0.0))
+		dtxt = "IN THE CIRCLE" if d <= 0.0 else _dist_text(d) + " TO THE CIRCLE"
+	writ_draw.draw_string(font_mono, Vector2(14, 57), dtxt, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, MUTED)
+	# Time left, as a bar along the bottom.
+	var total: float = Writs.TIME.get(str(writ.get("kind", "")), 300.0)
+	writ_draw.draw_rect(Rect2(4, h - 2, (w - 4) * clampf(t / total, 0.0, 1.0), 2), Color(col.r, col.g, col.b, 0.8))
+	writ_draw.queue_redraw()
+
+
+## The writ's circle and spot on a map; the boards on the full map.
+func _draw_writ_map(ctrl: Control, view: MapView, big: bool, to_map: Callable, inner: Rect2) -> void:
+	if _reveal_t > 0.0:
+		var a := clampf(_reveal_t / 1.5, 0.0, 1.0)
+		for rp in _reveal:
+			var mp: Vector2 = to_map.call(rp)
+			if inner.has_point(mp):
+				ctrl.draw_circle(mp, 5.0, Color(0.02, 0.02, 0.03, 0.8 * a))
+				ctrl.draw_circle(mp, 3.6, Color(0.92, 0.3, 0.28, a))
+	if not cinder.is_empty():
+		var cmp: Vector2 = to_map.call(Vector2(cinder.pos.x, cinder.pos.z))
+		if inner.has_point(cmp):
+			ctrl.draw_circle(cmp, 6.0, Color(0.02, 0.02, 0.03, 0.85))
+			ctrl.draw_circle(cmp, 4.5, Color(1.0, 0.62, 0.3))
+	if big:
+		for sp in shrine_marks:
+			var smp: Vector2 = to_map.call(sp)
+			if not inner.has_point(smp):
+				continue
+			ctrl.draw_colored_polygon(PackedVector2Array([smp + Vector2(0, -8), smp + Vector2(6, 4), smp + Vector2(-6, 4)]), Color(0.02, 0.03, 0.04, 0.85))
+			ctrl.draw_colored_polygon(PackedVector2Array([smp + Vector2(0, -6), smp + Vector2(4.5, 3), smp + Vector2(-4.5, 3)]), Color(1.0, 0.72, 0.36))
+		for b in writ_boards:
+			var bp: Vector2 = to_map.call(b[0])
+			if not inner.has_point(bp):
+				continue
+			var bc: Color = Writs.TINT.get(str(b[1]), ACCENT)
+			var k := 5.0
+			ctrl.draw_rect(Rect2(bp - Vector2(k + 1.5, k + 1.5), Vector2(k * 2 + 3, k * 2 + 3)), Color(0.02, 0.03, 0.04, 0.85))
+			ctrl.draw_rect(Rect2(bp - Vector2(k, k), Vector2(k * 2, k * 2)), Color(0.93, 0.88, 0.76))
+			ctrl.draw_rect(Rect2(bp + Vector2(-2.5, 0.5), Vector2(5, 3.5)), bc)
+	if writ.is_empty():
+		return
+	var col := _writ_tint()
+	if writ.has("c"):
+		var cp: Vector2 = to_map.call(writ["c"])
+		var rr := float(writ.get("r", 0.0)) * view.scale_px()
+		ctrl.draw_circle(cp, rr, Color(col.r, col.g, col.b, 0.16))
+		ctrl.draw_arc(cp, rr, 0, TAU, 64, Color(0.02, 0.03, 0.04, 0.5), 3.5, true)
+		ctrl.draw_arc(cp, rr, 0, TAU, 64, col, 1.8, true)
+	if writ.has("pt"):
+		var pt: Vector3 = writ["pt"]
+		var pp: Vector2 = to_map.call(Vector2(pt.x, pt.z))
+		if inner.has_point(pp):
+			var k2 := 7.0 if big else 5.5
+			ctrl.draw_colored_polygon(PackedVector2Array([pp + Vector2(0, -k2 - 2), pp + Vector2(k2 + 2, 0), pp + Vector2(0, k2 + 2), pp + Vector2(-k2 - 2, 0)]), Color(0.02, 0.03, 0.04, 0.85))
+			ctrl.draw_colored_polygon(PackedVector2Array([pp + Vector2(0, -k2), pp + Vector2(k2, 0), pp + Vector2(0, k2), pp + Vector2(-k2, 0)]), col)
+
+
+## Wayshrines on the full map, and Raven's Eye sightings: [Vector2] for t s.
+var shrine_marks: Array = []
+var _reveal: Array = []
+var _reveal_t := 0.0
+var _shop: Control = null
+var _shop_wares: Array = []
+var _shop_embers := 0
+
+
+func reveal(pts: Array, dur: float) -> void:
+	_reveal = pts
+	_reveal_t = dur
+
+
+func show_shop(wares: Array, purse: int) -> void:
+	_shop_wares = wares
+	_shop_embers = purse
+	if _shop == null:
+		_shop = Control.new()
+		_shop.set_anchors_preset(Control.PRESET_CENTER)
+		_shop.offset_left = -290
+		_shop.offset_right = 290
+		_shop.offset_top = -190
+		_shop.offset_bottom = 190
+		_shop.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_shop.draw.connect(_draw_shop)
+		root.add_child(_shop)
+	_shop.visible = true
+	_shop.queue_redraw()
+
+
+func hide_shop() -> void:
+	if _shop != null:
+		_shop.visible = false
+
+
+func shop_open() -> bool:
+	return _shop != null and _shop.visible
+
+
+func _draw_shop() -> void:
+	var w := _shop.size.x
+	var row := 38.0
+	var h := 96.0 + row * float(_shop_wares.size())
+	var ember := Color(1.0, 0.72, 0.36)
+	_shop.draw_rect(Rect2(0, 0, w, h), Color(0.03, 0.035, 0.04, 0.93))
+	_shop.draw_rect(Rect2(0, 0, w, 3), ember)
+	_shop.draw_string(font_bold, Vector2(22, 36), "WAYSHRINE", HORIZONTAL_ALIGNMENT_LEFT, -1, 22, WHITE)
+	_shop.draw_string(font_bold, Vector2(w - 22, 36), "◆ %s" % _thousands(_shop_embers), HORIZONTAL_ALIGNMENT_RIGHT, -1, 20, ember)
+	_shop.draw_string(font_body, Vector2(22, 58), "Trade your embers. What you buy is laid on the offering stone.", HORIZONTAL_ALIGNMENT_LEFT, w - 44, 12, MUTED)
+	for i in _shop_wares.size():
+		var ware: Array = _shop_wares[i]
+		var y := 72.0 + row * float(i)
+		var cost := int(ware[2])
+		var can := _shop_embers >= cost
+		_shop.draw_rect(Rect2(14, y, w - 28, row - 6), Color(1, 1, 1, 0.05 if can else 0.02))
+		var kc := Vector2(30, y + row * 0.5 - 3)
+		_shop.draw_rect(Rect2(kc.x - 12, kc.y - 12, 24, 24), Color(1, 1, 1, 0.9 if can else 0.25), false, 1.5)
+		_shop.draw_string(font_bold, kc + Vector2(-5, 6), str(i + 1), HORIZONTAL_ALIGNMENT_LEFT, -1, 15, WHITE if can else DIM)
+		_shop.draw_string(font_bold, Vector2(56, y + row * 0.5 + 2), str(ware[1]), HORIZONTAL_ALIGNMENT_LEFT, w - 190, 14, WHITE if can else DIM)
+		_shop.draw_string(font_mono, Vector2(w - 26, y + row * 0.5 + 2), "◆ %d" % cost, HORIZONTAL_ALIGNMENT_RIGHT, -1, 14, ember if can else DIM)
+	_shop.draw_string(font_bold, Vector2(22, h - 10), "[1-%d]  BUY        [%s] / [ESC]  LEAVE" % [_shop_wares.size(), Keybinds.key("interact")], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, MUTED)
+
+
+## Where the writ wants you, as a 3D point (or INF once you are in its circle).
+func _writ_goal() -> Vector3:
+	if writ.is_empty():
+		return Vector3.INF
+	if writ.has("pt"):
+		return writ["pt"]
+	if writ.has("c"):
+		var c: Vector2 = writ["c"]
+		var me := Vector2(player_pos.x, player_pos.z)
+		if me.distance_to(c) < float(writ.get("r", 0.0)):
+			return Vector3.INF
+		return Vector3(c.x, player_pos.y, c.y)
+	return Vector3.INF
+
+
+func _draw_cinder_marker() -> void:
+	if cinder.is_empty() or camera_3d == null:
+		return
+	var p: Vector3 = cinder.pos + Vector3(0, 1.2, 0)
+	if camera_3d.is_position_behind(p):
+		return
+	var sp := _project(p)
+	var d := camera_3d.global_position.distance_to(p)
+	var col := Color(1.0, 0.62, 0.3)
+	social_layer.draw_colored_polygon(PackedVector2Array([sp + Vector2(0, -9), sp + Vector2(7, 0), sp + Vector2(0, 9), sp + Vector2(-7, 0)]), Color(0, 0, 0, 0.55))
+	social_layer.draw_colored_polygon(PackedVector2Array([sp + Vector2(0, -7), sp + Vector2(5, 0), sp + Vector2(0, 7), sp + Vector2(-5, 0)]), col)
+	var txt := "YOUR EMBERS  ◆ %s   %d m" % [_thousands(int(cinder.amount)), int(d)]
+	var tw := font_bold.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x
+	social_layer.draw_string(font_bold, sp + Vector2(-tw * 0.5 + 1, -13), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0, 0, 0, 0.7))
+	social_layer.draw_string(font_bold, sp + Vector2(-tw * 0.5, -14), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, col)
+
+
+func _draw_writ_marker() -> void:
+	_draw_cinder_marker()
+	var g := _writ_goal()
+	if g == Vector3.INF or camera_3d == null:
+		return
+	var vp := social_layer.size
+	var eye := camera_3d.global_position
+	var p := g + Vector3(0, 1.0, 0)
+	var behind := camera_3d.is_position_behind(p)
+	var sp := _project(p)
+	if behind:
+		sp = vp - sp
+	var m := 40.0
+	var at := Vector2(clampf(sp.x, m, vp.x - m), clampf(sp.y, m + 60.0, vp.y - m))
+	if behind:
+		at.y = vp.y - m
+	var col := _writ_tint()
+	var k := 8.0
+	social_layer.draw_rect(Rect2(at - Vector2(k + 2, k + 2), Vector2(k * 2 + 4, k * 2 + 4)), Color(0, 0, 0, 0.55))
+	social_layer.draw_rect(Rect2(at - Vector2(k, k), Vector2(k * 2, k * 2)), col)
+	social_layer.draw_rect(Rect2(at - Vector2(3, 3), Vector2(6, 6)), Color(0.05, 0.05, 0.06))
+	var txt := "%d m" % int(eye.distance_to(g))
+	var tw := font_mono.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x
+	social_layer.draw_string(font_mono, at + Vector2(-tw * 0.5 + 1, k + 17), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0, 0, 0, 0.7))
+	social_layer.draw_string(font_mono, at + Vector2(-tw * 0.5, k + 16), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, col)
 
 
 func open_chat() -> void:
