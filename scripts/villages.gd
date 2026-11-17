@@ -105,6 +105,7 @@ func build(p_terrain: Terrain, p_seed: int) -> void:
 	landmarks.build(terrain, self, p_seed)
 	_signposts()
 	_harbour()
+	_washing_lines()
 	_commit_batches()
 	_commit_colliders()
 	print("[villages] %d villages, %d houses, %d towers, %d ruins, %d pieces, %d loot points, %d colliders" % [
@@ -1792,6 +1793,58 @@ func _rowboat(at: Vector3, yaw: float, paint: String) -> void:
 	for sx: float in [-1.0, 1.0]:
 		var ob := b * Basis(Vector3.UP, sx * 0.12) * Basis(Vector3.FORWARD, sx * 0.05)
 		_proc_box(Transform3D(ob.scaled_local(Vector3(0.05, 0.05, 2.4)), at + b * Vector3(sx * 0.25, 0.36, 0.3)), "wood")
+
+
+## Washing hung out behind about one house in four: two posts, a line, and
+## sheets and shirts pegged along it, clear of roads and other houses.
+func _washing_lines() -> void:
+	var n := 0
+	var cloths := ["cloth_white", "cloth_white", "cloth_blue", "cloth_red", "cloth_yellow", "cloth_green"]
+	for h in houses:
+		var hc: Vector2 = h.center
+		var hv := int(absf(sin(hc.x * 3.71 + hc.y * 9.13)) * 10000.0)
+		if hv % 4 != 0:
+			continue
+		var hb := Basis(Vector3.UP, float(h.yaw))
+		var back_side := (int(h.door_side) + 2) % 4
+		var nrm: Vector3 = [Vector3(0, 0, 1), Vector3(1, 0, 0), Vector3(0, 0, -1), Vector3(-1, 0, 0)][back_side]
+		var along: Vector3 = Vector3(nrm.z, 0, -nrm.x)
+		var depth := float(h.d) if back_side % 2 == 0 else float(h.w)
+		var mid_l: Vector3 = nrm * (depth * 0.5 + 3.2)
+		var ends: Array[Vector3] = []
+		var ok := true
+		for sx: float in [-2.1, 2.1]:
+			var lp: Vector3 = mid_l + along * sx
+			var wp := Vector3(hc.x, 0, hc.y) + hb * lp
+			var q := Vector2(wp.x, wp.z)
+			if blocks_house(q, 0.7) or _on_road(q, 0.8) or terrain.slope_at(q.x, q.y) > 0.3 or not _free_spot(q, 0.6):
+				ok = false
+				break
+			wp.y = terrain.height_at(q.x, q.y)
+			ends.append(wp)
+		if not ok:
+			continue
+		var top_y := maxf(ends[0].y, ends[1].y) + 1.85
+		for e in ends:
+			var ph := top_y - e.y + 0.05
+			_proc_box(Transform3D(hb.scaled_local(Vector3(0.09, ph, 0.09)), Vector3(e.x, e.y + ph * 0.5, e.z)), "wood_dark")
+			_add_box_collider(Vector3(e.x, e.y + ph * 0.5, e.z), Vector3(0.1, ph, 0.1), float(h.yaw))
+		var a0 := Vector3(ends[0].x, top_y - 0.05, ends[0].z)
+		var a1 := Vector3(ends[1].x, top_y - 0.05, ends[1].z)
+		var line := a1 - a0
+		var lb := Basis.looking_at(line.normalized(), Vector3.UP)
+		_proc_box(Transform3D(lb.scaled_local(Vector3(0.018, 0.018, line.length())), (a0 + a1) * 0.5 - Vector3(0, 0.03, 0)), "iron")
+		# Pegged along the line, sagging a little toward the middle.
+		var count := 3 + hv % 2
+		for i in count:
+			var t := (float(i) + 0.5) / float(count)
+			var at := a0.lerp(a1, t) - Vector3(0, 0.08 * sin(t * PI), 0)
+			var wide := 0.55 + 0.25 * float((hv / (i + 1)) % 2)
+			var tall := 0.5 + 0.35 * float((hv / (i + 3)) % 2)
+			var cb := lb * Basis(Vector3.RIGHT, 0.06 * float(i % 2 * 2 - 1))
+			_proc_box(Transform3D(cb.scaled_local(Vector3(0.025, tall, wide)), at - Vector3(0, tall * 0.5 + 0.02, 0)), cloths[(hv + i * 7) % cloths.size()])
+		n += 1
+	print("[villages] %d washing lines" % n)
 
 
 ## A box of flowers under about one plaster window in three (picked by
