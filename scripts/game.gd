@@ -324,6 +324,8 @@ func _ready() -> void:
 		_run_window_test()
 	elif OS.get_cmdline_user_args().has("--gpubench"):
 		_run_gpu_bench()
+	elif OS.get_cmdline_user_args().has("--revenant"):
+		_run_revenant_test()
 	elif OS.get_cmdline_user_args().has("--writs"):
 		_run_writ_test()
 	elif OS.get_cmdline_user_args().has("--lootaudit"):
@@ -706,6 +708,8 @@ func _start_match() -> void:
 		b.set_meta("jump_at", clampf(jump_t + randf_range(-0.02, 0.02), 0.03, 0.93))
 		b.eliminated.connect(_on_bot_eliminated)
 		bots.append(b)
+
+	_spawn_revenants()
 
 	# Zone.
 	zone = Zone.new()
@@ -1390,6 +1394,7 @@ var _pt := 0
 func _update_play(delta: float) -> void:
 	match_time += delta
 	survive_time += delta
+	_update_boss_bar()
 	_pt = Time.get_ticks_usec()
 	_update_wind(delta)
 	Prof.add("g_update_wind", Time.get_ticks_usec() - _pt)
@@ -1857,7 +1862,10 @@ func _on_notice(text: String) -> void:
 
 
 func _on_bot_eliminated(victim: Bot, killer: String) -> void:
-	alive = maxi(0, alive - 1)
+	if victim is Revenant:
+		_revenant_fell(victim as Revenant, killer)
+	else:
+		alive = maxi(0, alive - 1)
 	if writs != null:
 		writs.on_bot_eliminated(victim)
 	_drop_bot_kit(victim)
@@ -1919,6 +1927,94 @@ func _on_bot_eliminated(victim: Bot, killer: String) -> void:
 		_net_check_win()
 	elif alive <= 1 and player != null and player.alive and phase == "playing":
 		_win()
+
+
+# -------------------------------------------------------------- revenants --
+const REVENANT_COUNT := 3
+const REVENANT_GUNS := ["lmg", "axmc", "dmr", "m24"]
+
+
+## Host / solo: three Revenants, each holding a landmark of its own.
+func _spawn_revenants() -> void:
+	if world == null or world.villages == null or world.villages.landmarks == null:
+		return
+	var sites: Array = []
+	for l in world.villages.landmarks.labels:
+		sites.append(l)
+	sites.shuffle()
+	var names := Revenant.NAMES.duplicate()
+	names.shuffle()
+	var made := 0
+	for l in sites:
+		if made >= REVENANT_COUNT:
+			break
+		var c: Vector2 = l[1]
+		var at := Vector3.INF
+		for k in 40:
+			var a := randf() * TAU
+			var r := randf_range(4.0, 34.0)
+			var q := c + Vector2(cos(a), sin(a)) * r
+			var h := terrain.height_at(q.x, q.y)
+			if h < terrain.water_surface_at(q.x, q.y) + 0.8 or terrain.slope_at(q.x, q.y) > 0.35 or _on_building(q.x, q.y):
+				continue
+			var g := ground_at(Vector3(q.x, h + 30.0, q.y))
+			if absf(g.y - h) > 0.8:
+				continue
+			at = g
+			break
+		if at == Vector3.INF:
+			continue
+		var rv := Revenant.new()
+		var nm: Array = names[made % names.size()]
+		rv.setup_revenant(str(nm[0]), "%s OF %s" % [str(nm[1]), str(l[0])] if str(nm[1]).begins_with("THE") else str(nm[1]), at, self)
+		add_child(rv)
+		rv.global_position = at + Vector3.UP * 0.3
+		rv.arm_weapon(REVENANT_GUNS[randi() % REVENANT_GUNS.size()])
+		rv.eliminated.connect(_on_bot_eliminated)
+		bots.append(rv)
+		made += 1
+	print("[revenants] %d hold the island: %s" % [made, str(bots.filter(func(b): return is_instance_valid(b) and b is Revenant).map(func(b): return "%s @ %s" % [b.display_name(), str(Vector3(b.arena).round())]))])
+
+
+## A Revenant fell: a bell over the whole island, and its hoard on the ground.
+func _revenant_fell(r: Revenant, killer: String) -> void:
+	sfx.play_ui("writ_done", -1.0)
+	hud.show_big("REVENANT FELLED", Color(1.0, 0.82, 0.38), 3.2)
+	hud.show_notice("%s  —  SLAIN BY %s" % [r.display_name(), killer if killer != "" else "THE STORM"], 4.0)
+	if net_is_client():
+		return
+	var base := ground_at(r.global_position + Vector3.UP)
+	var items: Array = [["armor", "3"], ["helmet", "3"], ["med", ""], ["med", ""], ["scope", "8x"], ["grenade", ""]]
+	for i in items.size():
+		var a := TAU * float(i) / float(items.size())
+		var at := _loot_spot(base + Vector3(cos(a), 0.0, sin(a)) * 1.6, 0.4, 2.2)
+		if at != Vector3.INF:
+			_spawn_loot(items[i][0], items[i][1], at)
+
+
+## Where the boss bar points: the nearest live Revenant you are close to.
+func _update_boss_bar() -> void:
+	if player == null or not player.alive or phase != "playing":
+		hud.set_boss({})
+		return
+	var best: Revenant = null
+	var best_d := 85.0
+	for b in bots:
+		if is_instance_valid(b) and b is Revenant and (b as Bot).alive:
+			var d: float = (b as Node3D).global_position.distance_to(player.global_position)
+			if d < best_d:
+				best_d = d
+				best = b
+	if best == null:
+		hud.set_boss({})
+		return
+	var raged := best.hp <= 50.0
+	if raged and not best.has_meta("rage_told"):
+		best.set_meta("rage_told", true)
+		hud.show_big("%s RAGES" % best.bot_name, HUD.DANGER, 2.4)
+		hud.show_notice("THE PACK ANSWERS ITS CALL", 2.6)
+		sfx.play_ui("writ_fail", -4.0)
+	hud.set_boss({"name": best.bot_name, "title": best.title, "hp": clampf(best.hp / 100.0, 0.0, 1.0), "raged": raged})
 
 
 func _drop_bot_loot(b: Bot) -> void:
@@ -3327,7 +3423,17 @@ func _run_shot() -> void:
 				print("[shot] house ", ho, " ", hw, "x", hd, " door ", hh.door_side)
 				break
 	# --board=N / --shrine=N: a writ board or a Wayshrine, from a few metres.
+	# --rev=N: the Nth Revenant, close up.
 	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--rev="):
+			var rv: Array = bots.filter(func(b): return is_instance_valid(b) and b is Revenant)
+			var ri := int(a.substr(6))
+			if ri < rv.size():
+				var rp: Vector3 = (rv[ri] as Node3D).global_position
+				spot = Vector3(rp.x + 3.2, 0.0, rp.z + 2.0)
+				ang = atan2(3.2, 2.0)
+				(rv[ri] as Bot).set_physics_process(false)
+				(rv[ri] as Node3D).rotation.y = ang + PI
 		for key in ["--board=", "--shrine="]:
 			if not a.begins_with(key) or writs == null:
 				continue
@@ -4497,8 +4603,12 @@ func _net_send_setup() -> void:
 	var raw := fl.to_byte_array()
 	var loot := [names_t, raw.size(), raw.compress(FileAccess.COMPRESSION_ZSTD)]
 	var bot_names: Array = []
-	for b in bots:
+	var revs: Array = []
+	for bi in bots.size():
+		var b = bots[bi]
 		bot_names.append(b.bot_name)
+		if is_instance_valid(b) and b is Revenant:
+			revs.append([bi, (b as Revenant).title, (b as Revenant).arena])
 	var list: Array = []
 	for id in net.roster:
 		list.append([id, net.roster[id]])
@@ -4509,7 +4619,7 @@ func _net_send_setup() -> void:
 		"seed": seed_value, "squad": net.squad, "plane": [plane_start, plane_end],
 		"loot": loot, "bots": bot_names, "humans": list, "total": total_players,
 		"loadout": loadout_enabled, "vehicles": _match_vehicles, "weather": _match_weather,
-		"match_id": randi() % 1000000000 + 1,
+		"match_id": randi() % 1000000000 + 1, "revenants": revs,
 	}
 	_last_setup = setup
 	human_inv.clear()
@@ -4566,11 +4676,20 @@ func net_start_match(setup: Dictionary) -> void:
 			l.position = pos
 	bots.clear()
 	var names: Array = setup["bots"]
+	var rev_at := {}
+	for r in setup.get("revenants", []):
+		rev_at[int(r[0])] = r
 	for i in names.size():
-		var b := Bot.new()
+		var b: Bot = null
+		if rev_at.has(i):
+			var rv := Revenant.new()
+			rv.setup_revenant(str(names[i]), str(rev_at[i][1]), rev_at[i][2], self)
+			b = rv
+		else:
+			b = Bot.new()
+			b.setup(str(names[i]), Vector2.ZERO, self, i)
 		b.puppet = true
 		b.net_index = i
-		b.setup(str(names[i]), Vector2.ZERO, self, i)
 		add_child(b)
 		b.global_position = plane.seat_position()
 		bots.append(b)
@@ -4620,6 +4739,11 @@ func net_snapshot() -> Array:
 			bp.append_array(PackedFloat32Array([0, -500, 0, 0, float(Bot.State.DEAD), 0, -1, 0]))
 	var zp := zone.net_pack() if zone != null else PackedFloat32Array()
 	var misc := PackedFloat32Array([plane.t if plane != null and is_instance_valid(plane) else 1.0, float(alive), float(total_players), match_time])
+	# Revenants' health, for everyone's boss bar.
+	for bi in bots.size():
+		var rb = bots[bi]
+		if is_instance_valid(rb) and rb is Revenant and (rb as Bot).alive:
+			misc.append_array(PackedFloat32Array([float(bi), (rb as Bot).hp]))
 	return [bp, zp, misc]
 
 
@@ -4647,6 +4771,10 @@ func net_apply_snapshot(bp: PackedFloat32Array, zp: PackedFloat32Array, misc: Pa
 			plane.t = maxf(plane.t, misc[0])
 		alive = int(misc[1])
 		total_players = int(misc[2])
+		for k in range(4, misc.size() - 1, 2):
+			var ri := int(misc[k])
+			if ri >= 0 and ri < bots.size() and is_instance_valid(bots[ri]):
+				(bots[ri] as Bot).hp = misc[k + 1]
 		if last_hud_alive != alive:
 			last_hud_alive = alive
 			hud.set_alive(alive, total_players)
@@ -4900,6 +5028,8 @@ func net_elim(e: Dictionary) -> void:
 	_show_elim(e)
 	var victim: String = e["victim"]
 	var v := node_for_key(victim)
+	if v is Revenant and (v as Bot).alive:
+		_revenant_fell(v as Revenant, str(e.get("killer_name", "")))
 	if v is Bot and v != player:
 		(v as Bot).puppet_die()
 	alive = int(e.get("alive", alive))
@@ -5572,6 +5702,76 @@ func _draw_audit() -> void:
 	keys.sort_custom(func(a, b): return groups[a][1] > groups[b][1])
 	for k in keys.slice(0, 40):
 		print("[audit] %-40s nodes=%d surfaces=%d shadow=%d" % [k, groups[k][0], groups[k][1], groups[k][2]])
+
+
+## Finds a Revenant, fights it through its rage and leash, and kills it.
+func _run_revenant_test() -> void:
+	_start_match()
+	for i in 30:
+		await get_tree().physics_frame
+	_land_player_now()
+	player.spawn_protect = 99999.0
+	player.give_weapon("rifle")
+	var revs: Array = bots.filter(func(b): return is_instance_valid(b) and b is Revenant)
+	_check("three revenants hold the island", revs.size() == REVENANT_COUNT)
+	_check("revenants are not counted among the living", alive == total_players)
+	if revs.is_empty():
+		get_tree().quit()
+		return
+	var r: Revenant = revs[0]
+	for i in 60:
+		await get_tree().physics_frame
+	_check("revenant stays home after the drop", r.global_position.distance_to(r.arena) < Revenant.LEASH)
+	# Walk up to it.
+	player.global_position = ground_at(r.global_position + Vector3(14, 20, 0)) + Vector3.UP * 0.2
+	var engaged := false
+	var rings := false
+	var bar := false
+	for i in 60 * 20:
+		await get_tree().physics_frame
+		if r.enemy == player:
+			engaged = true
+		if not r._rings.is_empty():
+			rings = true
+		if not hud.boss.is_empty():
+			bar = true
+		if engaged and rings and bar:
+			break
+	_check("it fights you", engaged)
+	_check("its grenade volley is marked on the ground first", rings)
+	_check("boss bar shows its name", bar and str(hud.boss.get("name", "")) == r.bot_name)
+	# Five rifle hits barely dent it.
+	var hp0 := r.hp
+	for i in 5:
+		r.take_damage(30.0, r.global_position + Vector3.UP, false, player)
+	print("[revenant] five 30-damage hits: hp %.0f -> %.0f" % [hp0, r.hp])
+	_check("it shrugs off bullets", r.hp > hp0 - 40.0 and r.alive)
+	while r.hp > 52.0:
+		r.take_damage(40.0, r.global_position + Vector3.UP, false, player)
+	r.take_damage(40.0, r.global_position + Vector3.UP, false, player)
+	await get_tree().physics_frame
+	_check("it rages at half health", r.raged and r.shoot_skill >= 0.9)
+	# Lure it away: it goes home.
+	r.global_position = ground_at(r.arena + Vector3(85, 30, 0)) + Vector3.UP * 0.3
+	player.global_position = ground_at(r.arena + Vector3(160, 30, 0)) + Vector3.UP * 0.3
+	for i in 60 * 25:
+		await get_tree().physics_frame
+	print("[revenant] after luring: %d m from home" % int(r.global_position.distance_to(r.arena)))
+	_check("leashed: it walks back to its arena", r.global_position.distance_to(r.arena) < Revenant.LEASH + 10.0)
+	var e0 := writs.my_embers
+	var l0 := loot_pool.size()
+	var alive0 := alive
+	var guard := 0
+	while r.alive and guard < 200:
+		guard += 1
+		r.take_damage(60.0, r.global_position + Vector3.UP * 1.7, true, player)
+	await get_tree().physics_frame
+	_check("revenant felled", not r.alive)
+	_check("its hoard drops", loot_pool.size() >= l0 + 6)
+	_check("felling it pays", writs.my_embers >= e0 + 1200)
+	_check("the living count is unchanged", alive == alive0)
+	print("[revenant] done: %s felled, embers %d -> %d" % [r.display_name(), e0, writs.my_embers])
+	get_tree().quit()
 
 
 ## Takes and finishes one writ of each kind, and checks the pay.

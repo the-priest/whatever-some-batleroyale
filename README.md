@@ -65,8 +65,26 @@ The island is full of work for those brave enough to take it.
   they are gone. Once the circle is small the fires go out and Kindling no longer works.
 - Writs, Embers and Wayshrines work for every player in a LAN game; the host keeps the score.
 
-The plan for what comes next (Revenants guarding vaults, Branded players, living-island events,
-Oaths and Renown) is in [docs/PLAN.md](docs/PLAN.md).
+- **Branded**: five kills inside 90 seconds and you are Branded. Every soldier within 500 m comes
+  for you and the other players see you on their maps. Survive 90 seconds for 1,000 Embers; whoever
+  kills a Branded player takes half of that.
+
+## Revenants
+
+Three **Revenants** hold the island's landmarks: named champions in black and crimson plate with
+burning eyes ("MAELIS, THE ASH WARDEN OF KINGSBRIDGE"). Get close and their name and health bar
+show at the top of the screen.
+
+- They shrug off most of a bullet's damage. Bring friends, grenades and patience.
+- Before a grenade volley, red rings mark where the grenades will land. Move.
+- At half health they rage: faster, deadlier, and the armed soldiers nearby answer their call.
+- They will not leave their ground: lure one far enough and it turns back home, healing as it goes.
+- When one falls, a bell tolls across the island. It drops level 3 armour and helmet, medkits, an 8x
+  scope and a grenade, and pays its killer 1,200 Embers on top of the kill.
+- Revenants are not players: they do not count toward who is left alive.
+
+The plan for what comes next (vaults and sigils, living-island events, Oaths and Renown) is in
+[docs/PLAN.md](docs/PLAN.md).
 
 ## Gunplay
 

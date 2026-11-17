@@ -725,6 +725,9 @@ func on_bot_eliminated(victim: Bot) -> void:
 		if src is Node3D and (src as Node3D).global_position.distance_to(victim.global_position) > 150.0:
 			n += LONG_SHOT_EMBERS
 			why = "LONG SHOT" if why == "KILL" else why + " · LONG SHOT"
+		if victim is Revenant:
+			n += 1200
+			why = "REVENANT FELLED"
 		award(killer_o, n, why)
 		_count_kill(killer_o)
 	if victim.is_human and branded.has(victim.peer_id):

@@ -3162,6 +3162,53 @@ func _draw_shop() -> void:
 	_shop.draw_string(font_bold, Vector2(22, h - 10), "[1-%d]  BUY        [%s] / [ESC]  LEAVE" % [_shop_wares.size(), Keybinds.key("interact")], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, MUTED)
 
 
+## The Revenant you are fighting: {name, title, hp 0..1, raged} or {}.
+var boss: Dictionary = {}
+var _boss_draw: Control = null
+var _boss_shown := 0.0
+
+
+func set_boss(b: Dictionary) -> void:
+	if b.is_empty() and boss.is_empty():
+		return
+	boss = b
+	if _boss_draw == null:
+		_boss_draw = Control.new()
+		_boss_draw.set_anchors_preset(Control.PRESET_CENTER_TOP)
+		_boss_draw.offset_left = -300
+		_boss_draw.offset_right = 300
+		_boss_draw.offset_top = 124
+		_boss_draw.offset_bottom = 180
+		_boss_draw.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_boss_draw.draw.connect(_draw_boss)
+		root.add_child(_boss_draw)
+		_hud_nodes.append(_boss_draw)
+	_boss_draw.queue_redraw()
+
+
+func _draw_boss() -> void:
+	if boss.is_empty():
+		return
+	var w := _boss_draw.size.x
+	var hp := float(boss.get("hp", 1.0))
+	var raged := bool(boss.get("raged", false))
+	var nm := str(boss.get("name", ""))
+	var tt := str(boss.get("title", ""))
+	var nw := font_bold.get_string_size(nm, HORIZONTAL_ALIGNMENT_LEFT, -1, 20).x
+	_text_out(_boss_draw, Vector2((w - nw) * 0.5, 18), nm, 20, Color(0.95, 0.88, 0.8), 5)
+	var tw := font_bold.get_string_size(tt, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
+	_text_out(_boss_draw, Vector2((w - tw) * 0.5, 33), tt, 11, Color(0.8, 0.62, 0.5), 4)
+	var bar := Rect2(20, 40, w - 40, 9)
+	_boss_draw.draw_rect(bar.grow(2.0), Color(0.02, 0.02, 0.02, 0.85))
+	_boss_draw.draw_rect(bar, Color(0.18, 0.04, 0.03, 0.9))
+	var col := Color(0.86, 0.16, 0.12) if not raged else Color(1.0, 0.32, 0.12).lerp(Color(0.86, 0.1, 0.08), 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.01))
+	_boss_draw.draw_rect(Rect2(bar.position, Vector2(bar.size.x * hp, bar.size.y)), col)
+	# The half-way mark, where it rages.
+	_boss_draw.draw_rect(Rect2(bar.position.x + bar.size.x * 0.5 - 1, bar.position.y - 2, 2, bar.size.y + 4), Color(1, 1, 1, 0.35))
+	if raged:
+		_boss_draw.queue_redraw()
+
+
 ## Where the writ wants you, as a 3D point (or INF once you are in its circle).
 func _writ_goal() -> Vector3:
 	if writ.is_empty():
