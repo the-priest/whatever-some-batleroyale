@@ -54,7 +54,8 @@ var _crash_cd := 0.0
 var _burn_t := -1.0
 var _smoke_t := 0.0
 var _body_mats: Array[StandardMaterial3D] = []
-var _lights: Array[MeshInstance3D] = []
+## The headlamp and tail-lamp materials (dark once the car is a wreck).
+var _lamp_mats: Array[StandardMaterial3D] = []
 var _flip_t := 0.0
 var _last_vel := Vector3.ZERO
 
@@ -190,9 +191,11 @@ func _build_model(paint: Color) -> void:
 	tail.emission_enabled = true
 	tail.emission = Color(1.0, 0.08, 0.05)
 	tail.emission_energy_multiplier = 0.8
+	_lamp_mats.append(lamp)
+	_lamp_mats.append(tail)
 	for sx in [-0.62, 0.62]:
 		_cyl(body, 0.13, 0.08, Vector3(sx, 1.06, -2.04), chrome, Vector3(PI * 0.5, 0, 0))
-		_lights.append(_cyl(body, 0.1, 0.09, Vector3(sx, 1.06, -2.06), lamp, Vector3(PI * 0.5, 0, 0)))
+		_cyl(body, 0.1, 0.09, Vector3(sx, 1.06, -2.06), lamp, Vector3(PI * 0.5, 0, 0))
 		_box(body, Vector3(0.22, 0.14, 0.06), Vector3(sx * 1.25, 1.02, 1.82), tail)
 	# Windshield frame and glass.
 	_box(body, Vector3(1.76, 0.07, 0.07), Vector3(0, 1.95, -0.48), trim)
@@ -232,8 +235,14 @@ func _build_model(paint: Color) -> void:
 			_box(spin, Vector3(0.38, 0.06, 0.12), Vector3(0, cos(a) * WHEEL_R, sin(a) * WHEEL_R), tyre, Vector3(a, 0, 0))
 		_cyl(spin, 0.26, 0.38, Vector3.ZERO, hub, Vector3(0, 0, PI * 0.5), 10)
 		_wheel_nodes.append(pivot)
+	# Dozens of little boxes are one mesh per material (a car used to cost
+	# about a hundred draw calls, and as many again for its shadow).
+	MeshMerge.merge(body, [wheel_s])
+	for wn in _wheel_nodes:
+		MeshMerge.merge(wn.get_child(0) as Node3D, [])
 	for mi in find_children("*", "MeshInstance3D", true, false):
 		(mi as MeshInstance3D).visibility_range_end = 900.0
+
 
 
 func _build_audio() -> void:
@@ -716,8 +725,9 @@ func explode(source: Node = null) -> void:
 		game.vehicle_exploded(self, source)
 	for m in _body_mats:
 		m.albedo_color = m.albedo_color.darkened(0.75)
-	for l in _lights:
-		l.visible = false
+	for l in _lamp_mats:
+		l.emission_enabled = false
+		l.albedo_color = l.albedo_color.darkened(0.8)
 	_burn_t = 25.0
 	if is_local():
 		apply_central_impulse(Vector3.UP * mass * 5.0)
@@ -734,8 +744,9 @@ func wreck_quiet() -> void:
 	throttle = 0.0
 	for m in _body_mats:
 		m.albedo_color = m.albedo_color.darkened(0.75)
-	for l in _lights:
-		l.visible = false
+	for l in _lamp_mats:
+		l.emission_enabled = false
+		l.albedo_color = l.albedo_color.darkened(0.8)
 
 
 func _burn(delta: float) -> void:

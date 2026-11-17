@@ -170,6 +170,15 @@ func _build() -> void:
 		var sp := _cyl(Vector3(side * 1.55, -1.1, 0.5), 0.55, 0.55, 5.0, _paint, along, 16)
 		sp.scale = Vector3(0.8, 1.0, 0.7)
 
+	# One mesh per material for the airframe, each wing and each propeller
+	# (the plane is in view for the whole drop).
+	MeshMerge.merge(self, [ramp])
+	for c in get_children():
+		if c is Node3D and not (c is MeshInstance3D) and not (c is Light3D):
+			MeshMerge.merge(c as Node3D, prop_discs)
+	for prop in propellers:
+		MeshMerge.merge(prop, [])
+
 	# Anti-collision strobe on the belly.
 	strobe = OmniLight3D.new()
 	strobe.position = Vector3(0, -1.7, 0)

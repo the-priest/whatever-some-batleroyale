@@ -1673,24 +1673,38 @@ func _build_clouds() -> void:
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mat.billboard_keep_scale = true
 	mat.disable_receive_shadows = true
 	mat.vertex_color_use_as_albedo = true
+	var quad := QuadMesh.new()
+	quad.size = Vector2.ONE * float(tex.get_width()) / 128.0
 	for i in 64:
 		var dist := rng.randf_range(200.0, 2600.0)
 		var ang := rng.randf() * TAU
 		var base := Vector3(cos(ang) * dist, rng.randf_range(330.0, 460.0), sin(ang) * dist)
 		var size := rng.randf_range(60.0, 140.0)
-		# A cloud is a cluster of overlapping puffs.
-		for j in rng.randi_range(4, 7):
-			var s := Sprite3D.new()
-			s.texture = tex
-			s.material_override = mat
-			s.pixel_size = 1.0 / 128.0
-			s.modulate = Color(1, 1, 1, rng.randf_range(0.55, 0.85))
-			s.position = base + Vector3(rng.randf_range(-1.0, 1.0) * size, rng.randf_range(-0.15, 0.25) * size, rng.randf_range(-0.6, 0.6) * size)
-			s.scale = Vector3.ONE * size * rng.randf_range(0.7, 1.3)
-			s.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			add_child(s)
+		# A cloud is a cluster of overlapping puffs, drawn together (one draw
+		# call a cloud rather than one a puff).
+		var puffs := rng.randi_range(4, 7)
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.use_colors = true
+		mm.mesh = quad
+		mm.instance_count = puffs
+		for j in puffs:
+			var a := rng.randf_range(0.55, 0.85)
+			var off := Vector3(rng.randf_range(-1.0, 1.0) * size, rng.randf_range(-0.15, 0.25) * size, rng.randf_range(-0.6, 0.6) * size)
+			var sc := size * rng.randf_range(0.7, 1.3)
+			mm.set_instance_transform(j, Transform3D(Basis.IDENTITY.scaled(Vector3.ONE * sc), off))
+			mm.set_instance_color(j, Color(1, 1, 1, a))
+		var mmi := MultiMeshInstance3D.new()
+		mmi.multimesh = mm
+		mmi.material_override = mat
+		mmi.position = base
+		# Puffs turn to face the camera, so the box has to hold them any way round.
+		mmi.custom_aabb = AABB(Vector3(-2.0, -1.2, -2.0) * size, Vector3(4.0, 2.6, 4.0) * size)
+		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(mmi)
 
 
 ## Bakes what the map shader draws from (shaders/map_base.gdshader): the

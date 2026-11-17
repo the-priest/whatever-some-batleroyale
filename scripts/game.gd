@@ -5454,8 +5454,70 @@ func _run_gpu_bench() -> void:
 		var sum := 0.0
 		for t in times:
 			sum += t
+		var vrid := get_viewport().get_viewport_rid()
+		RenderingServer.viewport_set_measure_render_time(vrid, true)
+		for i in 4:
+			await get_tree().process_frame
+		var info := ""
+		for ty: Array in [[RenderingServer.VIEWPORT_RENDER_INFO_TYPE_VISIBLE, "main"], [RenderingServer.VIEWPORT_RENDER_INFO_TYPE_SHADOW, "shadow"]]:
+			info += " %s obj=%d draws=%d prims=%dk" % [ty[1],
+				RenderingServer.viewport_get_render_info(vrid, ty[0], RenderingServer.VIEWPORT_RENDER_INFO_OBJECTS_IN_FRAME),
+				RenderingServer.viewport_get_render_info(vrid, ty[0], RenderingServer.VIEWPORT_RENDER_INFO_DRAW_CALLS_IN_FRAME),
+				RenderingServer.viewport_get_render_info(vrid, ty[0], RenderingServer.VIEWPORT_RENDER_INFO_PRIMITIVES_IN_FRAME) / 1000]
+		if OS.get_environment("GB_AUDIT") != "":
+			_draw_audit()
+		print("[gpubench] render cpu %.2f ms gpu %.2f ms, process %.2f ms physics %.2f ms |%s" % [RenderingServer.viewport_get_measured_render_time_cpu(vrid) + RenderingServer.get_frame_setup_time_cpu(), RenderingServer.viewport_get_measured_render_time_gpu(vrid), Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0, Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0, info])
 		print("[gpubench] quality %s at %s: avg %.1f ms, median %.1f ms, 95%% %.1f ms, worst %.1f ms, draws=%d prims=%dk" % [Graphics.NAMES[graphics_quality], str(sp.round()), sum / times.size(), times[times.size() / 2], times[int(times.size() * 0.95)], times[times.size() - 1], int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)), int(Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)) / 1000])
 	get_tree().quit()
+
+
+## What is drawn from where the camera is: visible instances grouped by
+## the node they hang under, biggest first.
+func _draw_audit() -> void:
+	var cam := get_viewport().get_camera_3d()
+	var planes := cam.get_frustum()
+	var groups := {}
+	var stack: Array[Node] = [get_tree().root]
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		for c in n.get_children():
+			stack.append(c)
+		if not (n is GeometryInstance3D):
+			continue
+		var g := n as GeometryInstance3D
+		if not g.is_visible_in_tree():
+			continue
+		var ab := g.global_transform * g.get_aabb()
+		var d := cam.global_position.distance_to(ab.get_center())
+		if g.visibility_range_end > 0.0 and d > g.visibility_range_end + g.visibility_range_end_margin:
+			continue
+		if g.visibility_range_begin > 0.0 and d < g.visibility_range_begin:
+			continue
+		var inside := true
+		for pl: Plane in planes:
+			var far := ab.get_support(-pl.normal)
+			if pl.distance_to(far) > 0.0:
+				inside = false
+				break
+		if not inside:
+			continue
+		var key := str(g.get_parent().name) + "/" + str(g.name).left(10)
+		if g.get_parent() == world or g.get_parent().get_parent() == world:
+			key = str(g.get_parent().name) + "/" + str(g.name).left(10)
+		var surf := 1
+		if g is MeshInstance3D and (g as MeshInstance3D).mesh:
+			surf = (g as MeshInstance3D).mesh.get_surface_count()
+		elif g is MultiMeshInstance3D and (g as MultiMeshInstance3D).multimesh and (g as MultiMeshInstance3D).multimesh.mesh:
+			surf = (g as MultiMeshInstance3D).multimesh.mesh.get_surface_count()
+		var e: Array = groups.get(key, [0, 0, 0])
+		e[0] += 1
+		e[1] += surf
+		e[2] += 1 if g.cast_shadow != GeometryInstance3D.SHADOW_CASTING_SETTING_OFF else 0
+		groups[key] = e
+	var keys := groups.keys()
+	keys.sort_custom(func(a, b): return groups[a][1] > groups[b][1])
+	for k in keys.slice(0, 40):
+		print("[audit] %-40s nodes=%d surfaces=%d shadow=%d" % [k, groups[k][0], groups[k][1], groups[k][2]])
 
 
 func _run_loot_audit() -> void:

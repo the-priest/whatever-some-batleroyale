@@ -582,6 +582,8 @@ static func build_optic(optic: String, axis_above_rail: float) -> Node3D:
 			var base := BoxMesh.new()
 			base.size = Vector3(r * 2.4, 0.006, 0.018)
 			_opart(root, base, _omat("mount"), Vector3(0, -axis_above_rail + 0.003, zr))
+	# A dozen and more parts, always on screen: one mesh per finish.
+	MeshMerge.merge(root, [root.get_node_or_null("Reticle")])
 	return root
 
 

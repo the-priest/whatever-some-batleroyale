@@ -51,7 +51,10 @@ static func apply(q: int, env: Environment, sun: DirectionalLight3D, fill: Direc
 		sun.shadow_enabled = o_sh != 1
 		sun.directional_shadow_max_distance = [90.0, 140.0, 200.0, 260.0][sq]
 		sun.shadow_blur = [0.6, 1.0, 1.2, 1.4][sq]
-		sun.directional_shadow_split_1 = 0.07 if sq >= 2 else 0.10
+		# LOW and MEDIUM draw the shadow casters twice (two cascades), not
+		# four times: the biggest single saving on a slow machine.
+		sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS if sq >= 2 else DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+		sun.directional_shadow_split_1 = 0.07 if sq >= 2 else 0.22
 		sun.directional_shadow_split_2 = 0.18 if sq >= 2 else 0.22
 		sun.directional_shadow_split_3 = 0.42 if sq >= 2 else 0.48
 		# (A light size turns on contact-hardening shadows: costly, and the
