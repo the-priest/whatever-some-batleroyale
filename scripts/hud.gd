@@ -3189,7 +3189,7 @@ func _build_writ() -> void:
 	root.add_child(lbl_embers)
 	_hud_nodes.append(lbl_embers)
 	writ_draw = Control.new()
-	writ_draw.position = Vector2(28, 56)
+	writ_draw.position = Vector2(28, 64)
 	writ_draw.size = Vector2(360, 120)
 	writ_draw.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	writ_draw.draw.connect(_draw_writ)
@@ -3259,20 +3259,22 @@ func _writ_tint() -> Color:
 func _draw_writ() -> void:
 	if not _blessings.is_empty():
 		var bt := "BLESSED  ·  " + "  ·  ".join(PackedStringArray(_blessings))
-		writ_draw.draw_string(font_bold, Vector2(1, -2), bt, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0, 0, 0, 0.6))
-		writ_draw.draw_string(font_bold, Vector2(0, -3), bt, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.6, 1.0, 0.78))
+		writ_draw.draw_string(font_bold, Vector2(1, -5), bt, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0, 0, 0, 0.6))
+		writ_draw.draw_string(font_bold, Vector2(0, -6), bt, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.6, 1.0, 0.78))
 	if _ember_pop_t > 0.0:
 		_ember_pop_t = maxf(0.0, _ember_pop_t - get_process_delta_time())
 		var a := clampf(_ember_pop_t / 0.6, 0.0, 1.0)
-		writ_draw.draw_string(font_bold, Vector2(124, -14), _ember_pop, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(1.0, 0.76, 0.4, a))
+		var lw := font_bold.get_string_size(lbl_embers.text, HORIZONTAL_ALIGNMENT_LEFT, -1, 18).x
+		var at := Vector2(lbl_embers.position.x + lw + 14.0, lbl_embers.position.y + 18.0) - writ_draw.position
+		writ_draw.draw_string(font_bold, at, _ember_pop, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(1.0, 0.76, 0.4, a))
 		writ_draw.queue_redraw()
 	var by := 0.0 if writ.is_empty() else 72.0
 	if branded_t > 0.0:
 		var pulse := 0.75 + 0.25 * sin(Time.get_ticks_msec() * 0.008)
 		writ_draw.draw_rect(Rect2(0, by, 330, 30), Color(0.35, 0.03, 0.03, 0.82 * pulse))
 		writ_draw.draw_rect(Rect2(0, by, 4, 30), DANGER)
-		writ_draw.draw_string(font_bold, Vector2(14, by + 20), "BRANDED  ·  THEY KNOW WHERE YOU ARE", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, WHITE)
-		writ_draw.draw_string(font_mono, Vector2(318, by + 20), "%d:%02d" % [int(branded_t) / 60, int(branded_t) % 60], HORIZONTAL_ALIGNMENT_RIGHT, -1, 13, WHITE)
+		writ_draw.draw_string(font_bold, Vector2(14, by + 20), "BRANDED  ·  ALL HUNT YOU", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, WHITE)
+		writ_draw.draw_string(font_mono, Vector2(0, by + 20), "%d:%02d" % [int(branded_t) / 60, int(branded_t) % 60], HORIZONTAL_ALIGNMENT_RIGHT, 318, 13, WHITE)
 		writ_draw.queue_redraw()
 	if writ.is_empty():
 		return
@@ -3285,7 +3287,7 @@ func _draw_writ() -> void:
 	var t := maxf(0.0, float(writ.get("t", 0.0)))
 	var ttxt := "%d:%02d" % [int(t) / 60, int(t) % 60]
 	var tcol := DANGER if t < 30.0 else MUTED
-	writ_draw.draw_string(font_mono, Vector2(w - 12, 18), ttxt, HORIZONTAL_ALIGNMENT_RIGHT, -1, 13, tcol)
+	writ_draw.draw_string(font_mono, Vector2(0, 18), ttxt, HORIZONTAL_ALIGNMENT_RIGHT, w - 12, 13, tcol)
 	writ_draw.draw_string(font_bold, Vector2(14, 40), str(writ.get("line", "")), HORIZONTAL_ALIGNMENT_LEFT, w - 24, 15, WHITE)
 	# How far: to the exact spot if we have one, else to the circle.
 	var me := Vector2(player_pos.x, player_pos.z)
@@ -3409,7 +3411,7 @@ func _draw_shop() -> void:
 	_shop.draw_rect(Rect2(0, 0, w, h), Color(0.03, 0.035, 0.04, 0.93))
 	_shop.draw_rect(Rect2(0, 0, w, 3), ember)
 	_shop.draw_string(font_bold, Vector2(22, 36), "WAYSHRINE", HORIZONTAL_ALIGNMENT_LEFT, -1, 22, WHITE)
-	_shop.draw_string(font_bold, Vector2(w - 22, 36), "◆ %s" % _thousands(_shop_embers), HORIZONTAL_ALIGNMENT_RIGHT, -1, 20, ember)
+	_shop.draw_string(font_bold, Vector2(0, 36), "◆ %s" % _thousands(_shop_embers), HORIZONTAL_ALIGNMENT_RIGHT, w - 22, 20, ember)
 	_shop.draw_string(font_body, Vector2(22, 58), "Trade your embers. What you buy is laid on the offering stone.", HORIZONTAL_ALIGNMENT_LEFT, w - 44, 12, MUTED)
 	for i in _shop_wares.size():
 		var ware: Array = _shop_wares[i]
@@ -3421,7 +3423,7 @@ func _draw_shop() -> void:
 		_shop.draw_rect(Rect2(kc.x - 12, kc.y - 12, 24, 24), Color(1, 1, 1, 0.9 if can else 0.25), false, 1.5)
 		_shop.draw_string(font_bold, kc + Vector2(-5, 6), str(i + 1), HORIZONTAL_ALIGNMENT_LEFT, -1, 15, WHITE if can else DIM)
 		_shop.draw_string(font_bold, Vector2(56, y + row * 0.5 + 2), str(ware[1]), HORIZONTAL_ALIGNMENT_LEFT, w - 190, 14, WHITE if can else DIM)
-		_shop.draw_string(font_mono, Vector2(w - 26, y + row * 0.5 + 2), "◆ %d" % cost, HORIZONTAL_ALIGNMENT_RIGHT, -1, 14, ember if can else DIM)
+		_shop.draw_string(font_mono, Vector2(0, y + row * 0.5 + 2), "◆ %d" % cost, HORIZONTAL_ALIGNMENT_RIGHT, w - 26, 14, ember if can else DIM)
 	_shop.draw_string(font_bold, Vector2(22, h - 10), "[1-%d]  BUY        [%s] / [ESC]  LEAVE" % [_shop_wares.size(), Keybinds.key("interact")], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, MUTED)
 
 
@@ -3555,9 +3557,13 @@ func _draw_writ_marker() -> void:
 	if behind:
 		sp = vp - sp
 	var m := 40.0
-	var at := Vector2(clampf(sp.x, m, vp.x - m), clampf(sp.y, m + 60.0, vp.y - m))
+	# Off screen it rides the edge, kept clear of the panels at the bottom.
+	var at := Vector2(clampf(sp.x, m, vp.x - m), clampf(sp.y, m + 60.0, vp.y - 190.0))
 	if behind:
-		at.y = vp.y - m
+		at.y = vp.y - 190.0
+	# ...and off the minimap in the corner.
+	if at.x > vp.x - 300.0 and at.y > vp.y - 410.0:
+		at.y = vp.y - 410.0
 	var col := _writ_tint()
 	var k := 8.0
 	social_layer.draw_rect(Rect2(at - Vector2(k + 2, k + 2), Vector2(k * 2 + 4, k * 2 + 4)), Color(0, 0, 0, 0.55))

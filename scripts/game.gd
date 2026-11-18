@@ -4562,6 +4562,20 @@ func _run_perf() -> void:
 func _shot_state(st: String) -> void:
 	var p := player
 	match st:
+		"hudfull":
+			# Everything the new systems put on screen, at once.
+			hud.root.visible = true
+			hud.set_gameplay_visible(true)
+			hud.set_kindling(true)
+			hud.set_sigils(1)
+			hud.set_embers(2450, 150, "HEADSHOT")
+			hud.set_blessings(["SWIFTNESS", "VIGOUR"])
+			hud.branded_t = 64.0
+			hud.set_writ({"kind": "blood", "title": "BLOOD WRIT", "t": 187.0, "line": "HUNT KESTREL", "c": Vector2(p.global_position.x + 120, p.global_position.z - 60), "r": 70.0})
+			hud.set_boss({"name": "MAELIS", "title": "THE ASH WARDEN OF KINGSBRIDGE", "hp": 0.62, "raged": false})
+			hud.set_prompt("HOLD [F]  KNEEL BEFORE THE GREEN MOTHER   (VIGOUR)")
+			for i in 10:
+				await get_tree().process_frame
 		"page":
 			hud.root.visible = true
 			hud.show_codex_page(23, str(Codex.PAGES[23][0]), str(Codex.PAGES[23][1]), 7, Codex.PAGES.size(), Codex.RENOWN_PER_PAGE)
