@@ -767,7 +767,9 @@ func _build_menu() -> void:
 	title.add_theme_constant_override("shadow_offset_y", 4)
 	col.add_child(title)
 	col.add_child(_lv("DROP  ·  LOOT  ·  OUTLAST", 18, MUTED, false))
-	col.add_child(_spacer(30))
+	menu_rank = _lv("", 14, Color(1.0, 0.76, 0.42))
+	col.add_child(menu_rank)
+	col.add_child(_spacer(18))
 
 	play_button = _button("P L A Y   S O L O", true)
 	play_button.custom_minimum_size = Vector2(340, 64)
@@ -784,7 +786,7 @@ func _build_menu() -> void:
 	jb.pressed.connect(func(): sfx_click(); join_lan_pressed.emit())
 	lan.add_child(jb)
 	col.add_child(lan)
-	for item in [["LOADOUT", "_open_loadout"], ["SETTINGS", "_open_settings"], ["QUIT", "_quit"]]:
+	for item in [["LOADOUT", "_open_loadout"], ["OATHS", "_open_oaths"], ["SETTINGS", "_open_settings"], ["QUIT", "_quit"]]:
 		var b := _button(item[0], false)
 		b.custom_minimum_size = Vector2(340, 48)
 		b.pressed.connect(Callable(self, item[1]))
@@ -829,6 +831,112 @@ func _build_menu() -> void:
 	loadout_screen.closed.connect(func(): sfx_click(); loadout_screen.visible = false)
 	root.add_child(loadout_screen)
 	loadout_screen.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+
+
+# ------------------------------------------------------- renown and oaths --
+var menu_rank: Label
+var _oaths_panel: Control = null
+var _oath_buttons: Dictionary = {}
+var _oath_mult: Label
+var _no_minimap := false
+
+
+func refresh_rank() -> void:
+	Renown.load_profile()
+	if menu_rank == null:
+		return
+	var pr: Array = Renown.progress()
+	var nxt := "" if int(pr[1]) == 0 else "   ·   %s / %s TO THE NEXT RANK" % [_thousands(int(pr[0])), _thousands(int(pr[1]))]
+	var oaths := "" if Renown.sworn.is_empty() else "   ·   %d OATH%s SWORN" % [Renown.sworn.size(), "" if Renown.sworn.size() == 1 else "S"]
+	menu_rank.text = "%s   ·   %s RENOWN%s%s" % [Renown.rank_name(), _thousands(Renown.total), nxt, oaths]
+
+
+func set_minimap_forbidden(v: bool) -> void:
+	_no_minimap = v
+	if minimap != null and v:
+		minimap.visible = false
+
+
+func _open_oaths() -> void:
+	sfx_click()
+	Renown.load_profile()
+	if _oaths_panel == null:
+		_build_oaths()
+	_sync_oaths()
+	_oaths_panel.visible = true
+
+
+func _build_oaths() -> void:
+	_oaths_panel = ColorRect.new()
+	(_oaths_panel as ColorRect).color = Color(0.01, 0.012, 0.016, 0.82)
+	_oaths_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_oaths_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_oaths_panel.z_index = 25
+	root.add_child(_oaths_panel)
+	var box := _panel(0.96)
+	box.set_anchors_preset(Control.PRESET_CENTER)
+	box.offset_left = -360
+	box.offset_right = 360
+	box.offset_top = -280
+	box.offset_bottom = 280
+	_oaths_panel.add_child(box)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 10)
+	box.add_child(vb)
+	vb.add_child(_lv("SWEAR AN OATH", 26, WHITE))
+	var sub := _lv("Each oath you swear makes a solo match harder, and pays a quarter more Renown. They hold until you break them.", 13, MUTED, false)
+	sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	sub.custom_minimum_size = Vector2(660, 0)
+	vb.add_child(sub)
+	vb.add_child(_spacer(6))
+	for o in Renown.OATHS:
+		var b := _button("", false)
+		b.toggle_mode = true
+		b.custom_minimum_size = Vector2(660, 50)
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		var id: String = o[0]
+		b.toggled.connect(func(on: bool):
+			sfx_click()
+			if on:
+				Renown.sworn[id] = true
+			else:
+				Renown.sworn.erase(id)
+			Renown.save_profile()
+			_sync_oaths()
+			refresh_rank())
+		vb.add_child(b)
+		_oath_buttons[id] = b
+	_oath_mult = _lv("", 16, Color(1.0, 0.76, 0.42))
+	vb.add_child(_oath_mult)
+	var done := _button("DONE", true)
+	done.custom_minimum_size = Vector2(660, 52)
+	done.pressed.connect(func(): sfx_click(); _oaths_panel.visible = false)
+	vb.add_child(done)
+
+
+func _sync_oaths() -> void:
+	for o in Renown.OATHS:
+		var b: Button = _oath_buttons.get(o[0])
+		if b == null:
+			continue
+		var on := Renown.sworn.has(o[0])
+		b.set_pressed_no_signal(on)
+		b.text = "  %s   %s  —  %s" % ["■" if on else "□", str(o[1]), str(o[2]).to_upper()]
+	_oath_mult.text = "RENOWN  ×%.2f   ·   SOLO MATCHES ONLY" % Renown.oath_mult()
+
+
+## End of the match: what it paid in Renown, and where that leaves you.
+func show_renown(lines: Array, gained: int, before: int, after: int) -> void:
+	var parts: Array = []
+	for l in lines:
+		if int(l[1]) > 0:
+			parts.append("%s +%d" % [str(l[0]), int(l[1])])
+	var up := Renown.rank_of(after) > Renown.rank_of(before)
+	var pr: Array = Renown.progress(after)
+	var rank_line := "RANK  %s%s" % [Renown.rank_name(after), "" if int(pr[1]) == 0 else "   (%s / %s)" % [_thousands(int(pr[0])), _thousands(int(pr[1]))]]
+	end_stats.text += "\n\nRENOWN  +%s\n%s\n%s%s" % [_thousands(gained), "   ·   ".join(PackedStringArray(parts)), rank_line,
+		"\nNEW RANK!  YOU ARE NOW  %s" % Renown.rank_name(after) if up else ""]
+	refresh_rank()
 
 
 func set_loadout(p: String, s: String, o: String, e: bool) -> void:
@@ -1495,6 +1603,8 @@ func set_settings(sens: float, vol: float, fov: float = 82.0, players: int = 50)
 func set_gameplay_visible(v: bool) -> void:
 	for n in _hud_nodes:
 		n.visible = v
+	if v and _no_minimap:
+		minimap.visible = false
 	if not v:
 		big_map.visible = false
 		hide_shop()
@@ -1862,6 +1972,7 @@ func set_match_size(n: int) -> void:
 
 
 func show_menu(seed_text: String) -> void:
+	refresh_rank()
 	menu.visible = true
 	end_panel.visible = false
 	pause_panel.visible = false
@@ -3189,6 +3300,44 @@ func _draw_shop() -> void:
 		_shop.draw_string(font_bold, Vector2(56, y + row * 0.5 + 2), str(ware[1]), HORIZONTAL_ALIGNMENT_LEFT, w - 190, 14, WHITE if can else DIM)
 		_shop.draw_string(font_mono, Vector2(w - 26, y + row * 0.5 + 2), "◆ %d" % cost, HORIZONTAL_ALIGNMENT_RIGHT, -1, 14, ember if can else DIM)
 	_shop.draw_string(font_bold, Vector2(22, h - 10), "[1-%d]  BUY        [%s] / [ESC]  LEAVE" % [_shop_wares.size(), Keybinds.key("interact")], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, MUTED)
+
+
+## Seconds of bleed left while you are down (-1 when not).
+var _bleed := -1.0
+var _down_draw: Control = null
+
+
+func set_downed(bleed_left: float) -> void:
+	if bleed_left < 0.0 and _bleed < 0.0:
+		return
+	_bleed = bleed_left
+	if _down_draw == null:
+		_down_draw = Control.new()
+		_down_draw.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_down_draw.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_down_draw.draw.connect(_draw_downed)
+		root.add_child(_down_draw)
+	_down_draw.queue_redraw()
+
+
+func _draw_downed() -> void:
+	if _bleed < 0.0:
+		return
+	var vp := _down_draw.size
+	# Red creeping in from the edges as the blood runs out.
+	var k := 1.0 - clampf(_bleed / 30.0, 0.0, 1.0)
+	var edge := Color(0.45, 0.0, 0.0, 0.35 + 0.4 * k)
+	var w := vp.x * (0.12 + 0.1 * k)
+	_down_draw.draw_rect(Rect2(0, 0, vp.x, w * 0.6), edge)
+	_down_draw.draw_rect(Rect2(0, vp.y - w * 0.6, vp.x, w * 0.6), edge)
+	_down_draw.draw_rect(Rect2(0, 0, w * 0.6, vp.y), edge)
+	_down_draw.draw_rect(Rect2(vp.x - w * 0.6, 0, w * 0.6, vp.y), edge)
+	var t := "BLEEDING OUT   %d" % int(ceil(_bleed))
+	var tw := font_bold.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1, 26).x
+	_text_out(_down_draw, Vector2((vp.x - tw) * 0.5, vp.y * 0.62), t, 26, Color(1.0, 0.4, 0.35), 5)
+	var s2 := "CRAWL TO COVER  ·  A SQUAD MATE HOLDS %s TO REVIVE YOU" % Keybinds.key("interact")
+	var sw := font_bold.get_string_size(s2, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
+	_text_out(_down_draw, Vector2((vp.x - sw) * 0.5, vp.y * 0.62 + 24), s2, 13, WHITE, 4)
 
 
 ## The Revenant you are fighting: {name, title, hp 0..1, raged} or {}.

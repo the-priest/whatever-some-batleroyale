@@ -140,6 +140,8 @@ const NF_HEAL_BANDAGE := 32
 const NF_HEAL_MED := 64
 const NF_HEAL_DRINK := 128
 const NF_SWIM := 256
+## A squad player who is down and crawling, waiting for a revive.
+const NF_DOWN := 512
 const HEAL_FLAGS := {"bandage": NF_HEAL_BANDAGE, "med": NF_HEAL_MED, "energy": NF_HEAL_DRINK}
 const HEAL_START_SFX := {"bandage": "bandage_tear", "med": "kit_zip_open", "energy": "can_open"}
 
@@ -1604,6 +1606,13 @@ func _puppet_tick(delta: float) -> void:
 			chute_node.rotation.y = sin(Time.get_ticks_msec() * 0.0009) * 0.08
 		State.GROUND:
 			var planar := Vector2(velocity.x, velocity.z).length()
+			if body != null:
+				body.downed = (_net_flags & NF_DOWN) != 0
+			if (_net_flags & NF_DOWN) != 0:
+				# Down: lying flat, dragging themselves along.
+				_play("Swim_Fwd", clampf(planar / 1.2, 0.4, 1.0) if planar > 0.2 else 0.15)
+				body.set_arms("")
+				return
 			if (_net_flags & NF_SWIM) != 0:
 				_animate_swim(planar, delta)
 				if body != null:
@@ -1633,6 +1642,10 @@ func _puppet_tick(delta: float) -> void:
 		else:
 			body.set_arms("")
 		body.set_gear(vest_level, helmet_level)
+
+
+func is_downed() -> bool:
+	return alive and (_net_flags & NF_DOWN) != 0
 
 
 ## Pack this bot's state for a snapshot (host side).
@@ -1968,6 +1981,9 @@ func take_damage(amount: float, _pos: Vector3 = Vector3.ZERO, headshot: bool = f
 			game.net_route_hit(self, amount, _pos, headshot, source)
 		return false
 	var dmg := amount
+	# The Oath of Iron: soldiers shrug off a third of it.
+	if game != null and game.has_method("oath") and game.oath("iron"):
+		dmg *= 0.67
 	if source != null:
 		if headshot and helmet_level > 0:
 			dmg *= 1.0 - Player.ABSORB[helmet_level]

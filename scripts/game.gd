@@ -90,6 +90,30 @@ var writs: Writs = null
 var events: IslandEvents = null
 ## The next supply drop spawned is a Reliquary.
 var reliquary_next := false
+## What this match is worth in Renown, counted as it happens.
+var match_tally: Dictionary = {}
+var _renown_paid := false
+
+
+## Oaths sworn for this match (solo games only).
+func oath(id: String) -> bool:
+	return not net_on() and Renown.sworn.has(id)
+
+
+## The match is over for you: count it up, pay it, show it.
+func _pay_renown(won: bool, placement: int) -> void:
+	if _renown_paid:
+		return
+	_renown_paid = true
+	var t := match_tally.duplicate()
+	t["kills"] = player_kills
+	t["won"] = won
+	t["placement"] = placement
+	t["field"] = total_players
+	var r: Array = Renown.tally(t, not net_on())
+	var before := Renown.total
+	Renown.add(int(r[1]))
+	hud.show_renown(r[0], int(r[1]), before, Renown.total)
 var alive := 1
 var total_players := 1
 var player_kills := 0
@@ -328,6 +352,8 @@ func _ready() -> void:
 		_run_window_test()
 	elif OS.get_cmdline_user_args().has("--gpubench"):
 		_run_gpu_bench()
+	elif OS.get_cmdline_user_args().has("--renown"):
+		_run_renown_test()
 	elif OS.get_cmdline_user_args().has("--gods"):
 		_run_gods_test()
 	elif OS.get_cmdline_user_args().has("--events"):
@@ -762,6 +788,9 @@ func _start_match() -> void:
 func _after_match_setup() -> void:
 	if events != null:
 		events.reset()
+	match_tally = {"writs": 0, "revenants": 0, "vaults": 0, "blessings": 0}
+	_renown_paid = false
+	hud.set_minimap_forbidden(oath("silence"))
 	reliquary_next = false
 	last_hud_alive = -1
 	end_cam_target = null
@@ -1413,6 +1442,7 @@ func _update_play(delta: float) -> void:
 	match_time += delta
 	survive_time += delta
 	_update_boss_bar()
+	_update_revive(delta)
 	_pt = Time.get_ticks_usec()
 	_update_wind(delta)
 	Prof.add("g_update_wind", Time.get_ticks_usec() - _pt)
@@ -1582,7 +1612,10 @@ func _update_prompt() -> void:
 	var best := _nearest_loot(player.global_position, 3.0)
 	var car := _nearest_vehicle(player.global_position, 1.7)
 	var wp := writs.prompt(player.global_position) if writs != null else ""
-	if wp != "" and car == null and (best == null or best.global_position.distance_to(player.global_position) > 1.4):
+	var mate := _downed_mate_near()
+	if mate != null:
+		hud.set_prompt("HOLD [%s]  REVIVE %s" % [Keybinds.key("interact"), mate.bot_name])
+	elif wp != "" and car == null and (best == null or best.global_position.distance_to(player.global_position) > 1.4):
 		hud.set_prompt(wp)
 	elif _interact_wants_car(player, best, car):
 		var seat := car.free_seat()
@@ -1796,6 +1829,8 @@ func _on_player_damaged(amount: float, from_dir: Vector3) -> void:
 
 
 func _on_player_died(killer: String) -> void:
+	if OS.get_cmdline_user_args().has("--netjoin") or OS.get_cmdline_user_args().has("--nethost"):
+		print("[net] player died: killer=%s mode=%d downed=%s can_go_down=%s" % [killer, player.mode, str(player.downed), str(can_go_down())])
 	if phase == "end":
 		return
 	if player.mode == Player.Mode.VEHICLE:
@@ -1811,6 +1846,89 @@ func _on_player_died(killer: String) -> void:
 	if writs != null:
 		writs.close_shop()
 	_on_player_died_rest(killer)
+
+
+# ------------------------------------------------------- down and revive --
+const REVIVE_TIME := 5.0
+var _revive_t := 0.0
+var _revive_who: Bot = null
+
+
+## Squad games: someone else on your side still standing, so you go down
+## (and can be picked up) instead of dying.
+func can_go_down() -> bool:
+	if not net_on() or not net.squad:
+		return false
+	for id in humans:
+		var h = humans[id]
+		if h != null and is_instance_valid(h) and (h as Bot).alive and not (h as Bot).is_downed() and (h as Bot).state == Bot.State.GROUND:
+			return true
+	return false
+
+
+func on_player_downed() -> void:
+	if player.mode == Player.Mode.VEHICLE:
+		_leave_seat()
+	if writs != null:
+		writs.close_shop()
+	sfx.play_ui("defeat", -10.0)
+	hud.show_big("YOU ARE DOWN", HUD.DANGER, 2.6)
+	hud.show_notice("CRAWL TO COVER  —  A SQUAD MATE CAN PICK YOU UP", 3.5)
+
+
+func on_player_revived() -> void:
+	sfx.play_ui("writ_done", -8.0)
+	hud.show_big("BACK ON YOUR FEET", Color(0.6, 1.0, 0.78), 2.0)
+
+
+## A downed squad mate within reach of you, or null.
+func _downed_mate_near() -> Bot:
+	if player == null or not player.alive or player.downed or player.mode != Player.Mode.GROUND or not net_on() or not net.squad:
+		return null
+	for id in humans:
+		var h = humans[id]
+		if h != null and is_instance_valid(h) and (h as Bot).is_downed() and (h as Node3D).global_position.distance_to(player.global_position) < 2.4:
+			return h
+	return null
+
+
+## Every frame: holding F over a downed mate, your own bleed-out, and the
+## squad all down at once.
+func _update_revive(delta: float) -> void:
+	if player == null:
+		return
+	hud.set_downed(player.bleed if player.downed else -1.0)
+	if player.downed and not can_go_down():
+		# Nobody left standing to pick you up.
+		player.bleed_out()
+		return
+	var mate := _downed_mate_near()
+	if mate != null and Input.is_action_pressed("interact") and not input_locked:
+		if mate != _revive_who:
+			_revive_who = mate
+			_revive_t = 0.0
+		_revive_t += delta
+		hud.set_progress("REVIVING %s ..." % mate.bot_name, clampf(_revive_t / REVIVE_TIME, 0.0, 1.0))
+		if _revive_t >= REVIVE_TIME:
+			_revive_t = -999.0
+			hud.set_progress("", 0.0)
+			net.send_revive(mate.peer_id)
+	elif _revive_t != 0.0:
+		_revive_t = 0.0
+		_revive_who = null
+		hud.set_progress("", 0.0)
+
+
+## Host: `reviver` finished picking up `pid`. Both must be up and close.
+func net_revive(reviver: int, pid: int) -> void:
+	var rp: Vector3 = player.global_position if reviver == 1 else net_peer_position(reviver)
+	var tp: Vector3 = player.global_position if pid == 1 else net_peer_position(pid)
+	if rp == Vector3.INF or tp == Vector3.INF or rp.distance_to(tp) > 4.0:
+		return
+	if pid == 1:
+		player.revive()
+	else:
+		net.send_revive_do(pid)
 
 
 ## Everything you carried falls where you stand.
@@ -1863,6 +1981,7 @@ func _on_player_died_rest(killer: String) -> void:
 	_stop_ambience()
 	hud.killfeed("%s   >   YOU" % killer, HUD.DANGER)
 	hud.show_death(killer, placement, _stats())
+	_pay_renown(false, placement)
 	_net_end_hint()
 	sfx.play_ui("defeat", -4.0)
 	hud.set_prompt("")
@@ -2070,6 +2189,7 @@ func _win() -> void:
 	hud.set_storm(false)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	hud.show_victory(_stats())
+	_pay_renown(true, 1)
 	_net_end_hint()
 	sfx.play_ui("victory", -3.0)
 	hud.set_prompt("")
@@ -2078,6 +2198,11 @@ func _win() -> void:
 
 func on_player_landed() -> void:
 	sfx.play_ui("land_thud", -6.0)
+	if oath("glass"):
+		player.hp = minf(player.hp, player.max_hp())
+		player._emit_health()
+	if oath("hunted") and writs != null:
+		writs.brand(0)
 	hud.set_plane_path(Vector3.ZERO, Vector3.ZERO)
 	if loadout_enabled:
 		_give_loadout()
@@ -2132,6 +2257,8 @@ func try_pickup(p: Player) -> void:
 		car = null
 	if _interact_wants_car(p, best, car):
 		_enter_vehicle(car)
+		return
+	if p == player and _downed_mate_near() != null:
 		return
 	if p == player and writs != null and car == null and (best == null or best.global_position.distance_to(p.global_position) > 1.4) and writs.interact(p.global_position):
 		return
@@ -3451,6 +3578,24 @@ func _run_shot() -> void:
 	# --board=N / --shrine=N: a writ board or a Wayshrine, from a few metres.
 	# --rev=N: the Nth Revenant, close up.
 	for a in OS.get_cmdline_user_args():
+		if a == "--downbot":
+			# The nearest soldier, lying down as a downed squad mate does.
+			var db: Bot = null
+			for b in bots:
+				if is_instance_valid(b) and not (b is Revenant):
+					db = b
+					break
+			if db != null:
+				var gp: Vector3 = ground_at(Vector3(spot.x + 2.5, 200.0, spot.z + 1.0))
+				db.state = Bot.State.GROUND
+				db.global_position = gp
+				db.visible = true
+				db.set_physics_process(false)
+				db.body.downed = true
+				db.body.global_transform = db.global_transform
+				db.body.set_legs("Swim_Fwd", 0.3)
+				db.body.set_arms("")
+				ang = atan2(-2.5, -1.0)
 		if a.begins_with("--rev="):
 			var rv: Array = bots.filter(func(b): return is_instance_valid(b) and b is Revenant)
 			var ri := int(a.substr(6))
@@ -4401,10 +4546,13 @@ func _run_perf() -> void:
 func _shot_state(st: String) -> void:
 	var p := player
 	match st:
-		"menu":
+		"menu", "oaths":
 			hud.root.visible = true
 			hud.show_menu("SEED %d" % seed_value)
 			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+			if st == "oaths":
+				Renown.sworn = {"iron": true, "silence": true}
+				hud._open_oaths()
 			for i in 10:
 				await get_tree().process_frame
 		"freefall":
@@ -4850,6 +4998,8 @@ func net_player_state() -> Variant:
 		flags |= int(Bot.HEAL_FLAGS.get(player.heal_item, 0))
 	if player.swimming:
 		flags |= Bot.NF_SWIM
+	if player.downed:
+		flags |= Bot.NF_DOWN
 	return [player.global_position, player.yaw, player.pitch, st, flags, player.current_id() if player.has_gun() else "", player.vest_level, player.helmet_level,
 		player.hp, player_kills, damage_dealt,
 		player.vehicle.net_id if player.mode == Player.Mode.VEHICLE and player.vehicle != null else -1, player.seat]
@@ -5748,6 +5898,49 @@ func _draw_audit() -> void:
 		print("[audit] %-40s nodes=%d surfaces=%d shadow=%d" % [k, groups[k][0], groups[k][1], groups[k][2]])
 
 
+## Swears every Oath, checks each one bites, then dies and is paid Renown.
+func _run_renown_test() -> void:
+	Renown.load_profile()
+	var keep: Dictionary = Renown.sworn.duplicate()
+	var r0 := Renown.total
+	for o in Renown.OATHS:
+		Renown.sworn[o[0]] = true
+	_start_match()
+	for i in 30:
+		await get_tree().physics_frame
+	_land_player_now()
+	await get_tree().physics_frame
+	_check("oath of glass: 75 health", player.max_hp() == 75.0 and player.hp <= 75.0)
+	_check("oath of the hunted: you land branded", writs.branded.has(0))
+	_check("oath of silence: no minimap", not hud.minimap.visible)
+	_check("oath of embers: wayshrines charge double", writs.ware_cost(0) == int(Writs.WARES[0][2]) * 2)
+	var b: Bot = null
+	for x in bots:
+		if is_instance_valid(x) and not (x is Revenant) and x.alive:
+			b = x
+			break
+	var hp0 := b.hp
+	b.vest_level = 0
+	b.helmet_level = 0
+	b.take_damage(30.0, b.global_position, false, player)
+	_check("oath of iron: soldiers take a third less", absf((hp0 - b.hp) - 30.0 * 0.67) < 0.5)
+	print("[renown] oath multiplier x%.2f" % Renown.oath_mult())
+	player_kills = 3
+	match_tally["writs"] = 1
+	player.spawn_protect = 0.0
+	player.take_damage(999.0, player.global_position + Vector3.FORWARD, false, b)
+	for i in 10:
+		await get_tree().physics_frame
+	print("[renown] %d -> %d (%s)" % [r0, Renown.total, Renown.rank_name()])
+	print("[renown] end screen: %s" % hud.end_stats.text.replace("\n", " | "))
+	_check("the match pays renown", Renown.total > r0)
+	_check("the end screen shows it", hud.end_stats.text.contains("RENOWN"))
+	Renown.sworn = keep
+	Renown.total = r0
+	Renown.save_profile()
+	get_tree().quit()
+
+
 ## Kneels at every Old God's idol and checks each blessing.
 func _run_gods_test() -> void:
 	_start_match()
@@ -5777,6 +5970,17 @@ func _run_gods_test() -> void:
 	player.global_position = (g0.pos as Vector3) + Vector3.UP * 0.4
 	await get_tree().physics_frame
 	_check("a spent idol is silent", writs.prompt(player.global_position) == "")
+	# A lookout tower: survey the land from the top.
+	if not world.villages.towers.is_empty():
+		var tc: Vector2 = world.villages.towers[0].center
+		var top := ground_at(Vector3(tc.x, terrain.height_at(tc.x, tc.y) + 80.0, tc.y))
+		player.global_position = top + Vector3.UP * 0.2
+		await get_tree().physics_frame
+		print("[gods] tower top %.1f m up: %s" % [top.y - terrain.height_at(tc.x, tc.y), writs.prompt(player.global_position)])
+		_check("survey prompt on a tower top", writs.prompt(player.global_position).contains("SURVEY"))
+		writs.interact(player.global_position)
+		_check("survey reveals soldiers on the map", hud._reveal_t > 0.0)
+		_check("a tower surveys once a match", not writs.prompt(player.global_position).contains("SURVEY"))
 	print("[gods] done: %s" % str(player.blessings.keys()))
 	get_tree().quit()
 
@@ -6647,6 +6851,35 @@ func _run_net_test(as_host: bool) -> void:
 			for id in humans:
 				print("[net] host hits human ", id)
 				net_route_hit(humans[id], 30.0, humans[id].global_position + Vector3(0, 1, 0), false, near if near != null else player)
+		# Down and revive: the client falls, the host picks them up.
+		# (Both kept out of real fights from here, so the check is about the revive.)
+		if i >= 26:
+			player.spawn_protect = 9999.0
+		if i == 67 and not as_host:
+			player.spawn_protect = 0.0
+			var src: Node = near if near != null else null
+			player.take_damage(999.0, player.global_position + Vector3.FORWARD, false, src)
+			player.spawn_protect = 9999.0
+			print("[net] %s client goes down instead of dying (downed=%s alive=%s)" % ["PASS" if player.downed and player.alive else "FAIL", str(player.downed), str(player.alive)])
+		if i == 64 and as_host:
+			var seen := false
+			var w0 := Time.get_ticks_msec()
+			while not seen and Time.get_ticks_msec() - w0 < 25000:
+				await get_tree().create_timer(0.5).timeout
+				for id in humans:
+					var hh: Bot = humans[id]
+					if hh.is_downed():
+						seen = true
+						player.global_position = hh.global_position + Vector3(1.2, 0.4, 0.0)
+						player.velocity = Vector3.ZERO
+						await get_tree().create_timer(0.6).timeout
+						net.send_revive(int(id))
+			print("[net] %s host sees the client down and revives them" % ("PASS" if seen else "FAIL"))
+		if i == 68 and not as_host:
+			var w1 := Time.get_ticks_msec()
+			while player.downed and Time.get_ticks_msec() - w1 < 25000:
+				await get_tree().create_timer(0.5).timeout
+			print("[net] %s client revived (downed=%s hp=%.0f)" % ["PASS" if not player.downed and player.alive and player.hp > 0.0 else "FAIL", str(player.downed), player.hp])
 		if i == 62 and not as_host:
 			# Take some loot and drop a gun: both must show on the host.
 			var l := _nearest_loot(player.global_position, 4000.0)
@@ -6751,10 +6984,11 @@ func _update_social(delta: float) -> void:
 				continue
 			var b := h as Bot
 			var col := net.color_of(id)
-			rows.append([b.bot_name, col, b.hp, b.alive, eye.distance_to(b.global_position)])
+			var down := b.is_downed()
+			rows.append([b.bot_name + ("  ·  DOWN" if down else ""), col if not down else HUD.DANGER, b.hp, b.alive, eye.distance_to(b.global_position)])
 			mates.append([b.bot_name, Vector2(b.global_position.x, b.global_position.z), col, b.alive])
 			if b.alive and b.state != Bot.State.PLANE:
-				tags.append({"pos": b.global_position + Vector3(0, 2.15, 0), "name": b.bot_name, "color": col})
+				tags.append({"pos": b.global_position + Vector3(0, 0.9 if down else 2.15, 0), "name": ("DOWN  ·  REVIVE %s" % b.bot_name) if down else b.bot_name, "color": HUD.DANGER if down else col})
 	hud.tags = tags
 	hud.set_squad_rows(rows)
 	hud.set_mates(mates)

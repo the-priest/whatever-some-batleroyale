@@ -105,12 +105,23 @@ var kick_rot_vel := Vector3.ZERO
 var _cam_roll := 0.0
 var _bolt_sound := false
 var _reload_dur := 1.0
+## Squad games: at 0 HP you go down instead of dying, crawl, and bleed out
+## unless a squad mate revives you. Damage while down drains the bleed.
+var downed := false
+var bleed := 0.0
+const BLEED_TIME := 30.0
+const DOWN_EYE := 0.42
+var _down_source: Node = null
+var _down_hid_view := false
 ## Old Gods' blessings held this match: swift, steady, quick, vigour, warding, ember.
 var blessings: Dictionary = {}
 
 
 func max_hp() -> float:
-	return 125.0 if blessings.has("vigour") else 100.0
+	var m := 100.0
+	if game != null and game.has_method("oath") and game.oath("glass"):
+		m = 75.0
+	return m + (25.0 if blessings.has("vigour") else 0.0)
 var _reload_need := 1
 var _reload_was_empty := false
 var _reload_events: Dictionary = {}
@@ -271,6 +282,8 @@ var _crouch_on := false
 
 
 func _ap(action: String) -> bool:
+	if downed and not action.begins_with("move_"):
+		return false
 	if test_hold.has(action):
 		return true
 	if _locked():
@@ -285,6 +298,8 @@ func _ap(action: String) -> bool:
 
 
 func _ajp(action: String) -> bool:
+	if downed and action != "map" and action != "marker":
+		return false
 	if action == "jump" and test_jump:
 		test_jump = false
 		return true
@@ -562,6 +577,16 @@ func _physics_process_body(delta: float) -> void:
 	flash.visible = flash_time > 0.0
 	flash_light.light_energy = 2.2 if flash_time > 0.0 else 0.0
 	spawn_protect = maxf(0.0, spawn_protect - delta)
+	if downed:
+		bleed -= delta
+		if view != null and view.visible:
+			view.visible = false
+			_down_hid_view = true
+		if bleed <= 0.0:
+			bleed_out()
+	elif _down_hid_view and view != null:
+		view.visible = true
+		_down_hid_view = false
 
 	match mode:
 		Mode.PLANE:
@@ -766,6 +791,8 @@ func _ground(delta: float) -> void:
 		_sprint_on = false
 	sprinting = _ap("sprint") and input.y < -0.3 and not crouch and not aiming and not healing and _sprint_lock <= 0.0 and is_on_floor() and absf(lean) < 0.2
 	var speed := (CROUCH if crouch else (SPRINT if sprinting else WALK)) * (1.08 if blessings.has("swift") else 1.0)
+	if downed:
+		speed = 1.1
 	if aiming:
 		speed *= 0.62
 	if reloading:
@@ -1246,6 +1273,8 @@ func _update_camera(delta: float) -> void:
 	# Smooth crouch + land dip + foot bob.
 	var crouching := (_ap("crouch") or _crouch_box) and mode == Mode.GROUND
 	var target_y := CROUCH_EYE if (crouching or vaulting_window()) else EYE
+	if downed:
+		target_y = DOWN_EYE
 	if mode == Mode.FREEFALL or mode == Mode.CHUTE:
 		target_y = cam_base.y
 	cam_base.y = lerpf(cam_base.y, target_y, delta * 12.0)
@@ -2148,18 +2177,74 @@ func take_damage(amount: float, from_pos: Vector3 = Vector3.ZERO, headshot: bool
 	if game != null and game.has_method("on_player_damaged"):
 		game.on_player_damaged(dmg, from_pos)
 	_emit_health()
+	if downed:
+		# Already down: every hit drains what blood is left.
+		hp = 0.0
+		bleed -= dmg * 0.35
+		if source != null:
+			_down_source = source
+		if bleed <= 0.0:
+			_die_now(_down_source)
+		return true
 	if hp <= 0.0:
-		alive = false
-		cancel_heal()
-		reloading = false
-		flash.visible = false
-		gun_holder.visible = false
-		var killer := "THE STORM"
-		if source != null and source.has_method("display_name"):
-			killer = source.call("display_name")
-		last_killer = source
-		died.emit(killer)
+		if source != null and game != null and game.has_method("can_go_down") and game.can_go_down():
+			_go_down(source)
+			return true
+		_die_now(source)
 	return true
+
+
+func _go_down(source: Node) -> void:
+	downed = true
+	hp = 0.0
+	bleed = BLEED_TIME
+	_down_source = source
+	cancel_heal()
+	reloading = false
+	aiming = false
+	sprinting = false
+	flash.visible = false
+	gun_holder.visible = false
+	_emit_health()
+	if game != null and game.has_method("on_player_downed"):
+		game.on_player_downed()
+
+
+## A squad mate picked you up.
+func revive() -> void:
+	if not downed or not alive:
+		return
+	downed = false
+	bleed = 0.0
+	hp = 30.0
+	_down_source = null
+	gun_holder.visible = true
+	spawn_protect = 1.0
+	_emit_health()
+	if game != null and game.has_method("on_player_revived"):
+		game.on_player_revived()
+
+
+## Bled out (or no squad mate left standing).
+func bleed_out() -> void:
+	if downed:
+		_die_now(_down_source)
+
+
+func _die_now(source: Node) -> void:
+	downed = false
+	bleed = 0.0
+	hp = 0.0
+	alive = false
+	cancel_heal()
+	reloading = false
+	flash.visible = false
+	gun_holder.visible = false
+	var killer := "THE STORM"
+	if source != null and is_instance_valid(source) and source.has_method("display_name"):
+		killer = source.call("display_name")
+	last_killer = source if source != null and is_instance_valid(source) else null
+	died.emit(killer)
 
 
 var last_killer: Node = null
@@ -2489,6 +2574,9 @@ func apply_net_inventory(d: Dictionary) -> void:
 
 func reset_for_match() -> void:
 	blessings.clear()
+	downed = false
+	bleed = 0.0
+	_down_source = null
 	_throw_t = -1.0
 	_mantle = []
 	alive = true

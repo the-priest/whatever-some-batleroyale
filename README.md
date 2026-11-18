@@ -109,6 +109,25 @@ takes it.
 
 Blessings are lost if you fall (even if Kindling brings you back).
 
+## Renown and Oaths
+
+**Renown** is what you are known for, kept across every match you play. A match pays it for how long
+you lasted, for winning, for kills, writs, Revenants felled, vaults opened and blessings taken; the
+end screen shows the reckoning, and your rank shows under the title on the main menu:
+Ashen, Wanderer, Sellsword, Hunter, Warden, Champion, Revenant-Slayer, and Legend of the Isle.
+
+**Oaths** (main menu, OATHS) are vows you swear before a solo match. Each makes the match harder and
+pays a quarter more Renown; they hold until you break them.
+
+| Oath | You swear to... |
+| --- | --- |
+| Oath of Iron | Soldiers take a third less damage |
+| Oath of Embers | Wayshrines charge double |
+| Oath of the Hunted | You land Branded |
+| Oath of Silence | No minimap |
+| Oath of Ash | No Kindling |
+| Oath of Glass | You have 75 health |
+
 ## The living island
 
 Every match, the island throws things at you. A horn sounds and a banner names it.
@@ -121,7 +140,7 @@ Every match, the island throws things at you. A horn sounds and a banner names i
 - **Blood Moon** (late game): the sky turns red and stays red. Soldiers hunt the nearest player in
   packs, and every kill pays double Embers.
 
-The plan for what comes next (Oaths, Renown and co-op revives) is in [docs/PLAN.md](docs/PLAN.md).
+The full plan, and what is left of it, is in [docs/PLAN.md](docs/PLAN.md).
 
 ## Gunplay
 
@@ -199,6 +218,11 @@ In a match:
 
 - In squad mode, team mates appear on the squad panel (health and distance), with coloured
   name tags, on the compass and on the map. There is no friendly fire.
+- **Down, not out** (squad games): drop to 0 health while a team mate is still standing and you go
+  down instead of dying. You can only crawl, the screen reddens, and you bleed out in 30 seconds;
+  every hit you take while down drains it faster. A team mate holds **F** beside you for 5 seconds to
+  pick you up at 30 health. Downed mates show "DOWN" on the squad panel and over their heads. If the
+  whole squad is down at once, it is over.
 - When the match ends, Space or Esc returns everyone to the lobby to ready up again.
 
 Joining players load the host's island automatically.

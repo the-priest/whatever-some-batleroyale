@@ -1882,6 +1882,37 @@ func _vault_open(vi: int) -> void:
 	game.writs.apply_vault_open(vi)
 
 
+## Revive: the reviver asks the host, which checks and tells the downed
+## player's machine (their health lives there).
+func send_revive(pid: int) -> void:
+	if not active:
+		return
+	if hosting:
+		game.net_revive(1, pid)
+	else:
+		_revive_ask.rpc_id(1, pid)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _revive_ask(pid: int) -> void:
+	var sender := multiplayer.get_remote_sender_id()
+	if not hosting or not _gate(sender, "writ") or game == null:
+		return
+	game.net_revive(sender, pid)
+
+
+func send_revive_do(pid: int) -> void:
+	if active and hosting and roster.has(pid):
+		_revive_do.rpc_id(pid)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _revive_do() -> void:
+	if multiplayer.get_remote_sender_id() != 1 or game == null or game.player == null:
+		return
+	game.player.revive()
+
+
 func send_embers(pid: int, total: int, gain: int, why: String) -> void:
 	if active and hosting and roster.has(pid):
 		_embers.rpc_id(pid, total, gain, why)

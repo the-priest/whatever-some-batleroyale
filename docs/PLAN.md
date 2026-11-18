@@ -138,7 +138,7 @@ from it.
 
 ---
 
-## Phase 3: Death that matters — Kindling and Cinders DONE (downed/revive still to do)
+## Phase 3: Death that matters — DONE (Kindling, Cinders, downed and revive)
 
 **Cinders.** When you die, your unspent Embers drop as a glowing Cinder. If you come back through
 Kindling or a squad revive, you can recover it. Anyone else who reaches it first takes half.
@@ -195,7 +195,7 @@ These are announced with a horn and a banner, and appear on the map.
 
 ---
 
-## Phase 6: Oaths, Renown and the long game
+## Phase 6: Oaths, Renown and the long game — Oaths and Renown ranks DONE
 
 **Oaths** are picked in the lobby before the drop (the host picks them in LAN). Each adds Renown
 on a win or a top-10 finish.

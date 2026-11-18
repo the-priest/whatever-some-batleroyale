@@ -90,6 +90,9 @@ var ember_mult := 1
 var idols: Array = []
 var idol_used: Array[bool] = []
 var _idol_eyes: Array[Node3D] = []
+## Lookout towers you have surveyed from this match (index -> true).
+var _surveyed: Dictionary = {}
+const SURVEY_RANGE := 300.0
 ## Host: owners blessed by the Ember King (kills pay half again).
 var ember_blessed: Dictionary = {}
 const KNEEL_TIME := 2.0
@@ -163,6 +166,7 @@ func reset() -> void:
 	my_sigils = 0
 	ember_mult = 1
 	ember_blessed.clear()
+	_surveyed.clear()
 	for i in idol_used.size():
 		idol_used[i] = false
 		if i < _idol_eyes.size() and is_instance_valid(_idol_eyes[i]):
@@ -217,6 +221,9 @@ func prompt(p: Vector3) -> String:
 		return "HOLD [%s]  %s" % [key, "DIG UP THE RELIC" if act == "dig" else "LIGHT THE BEACON"]
 	if shrine_near(p) >= 0:
 		return "[%s]  WAYSHRINE  —  SPEND YOUR EMBERS   (◆ %d)" % [key, my_embers]
+	var ti := tower_top(p)
+	if ti >= 0 and not _surveyed.has(ti):
+		return "[%s]  SURVEY THE LAND FROM UP HERE" % key
 	var vi := vault_near(p)
 	if vi >= 0:
 		if my_sigils > 0:
@@ -232,6 +239,10 @@ func interact(p: Vector3) -> bool:
 		var si := shrine_near(p)
 		if si >= 0:
 			open_shop(si)
+			return true
+		var ti := tower_top(p)
+		if ti >= 0 and not _surveyed.has(ti):
+			survey(ti)
 			return true
 		var vi := vault_near(p)
 		if vi >= 0:
@@ -327,8 +338,15 @@ func shrine_near(p: Vector3) -> int:
 func open_shop(si: int) -> void:
 	shop = si
 	game.input_locked = true
-	game.hud.show_shop(WARES, my_embers)
+	game.hud.show_shop(_priced_wares(), my_embers)
 	game.sfx.play_ui("ui_click", -8.0)
+
+
+func _priced_wares() -> Array:
+	var out: Array = []
+	for i in WARES.size():
+		out.append([WARES[i][0], WARES[i][1], ware_cost(i)])
+	return out
 
 
 func close_shop() -> void:
@@ -355,8 +373,13 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 
+## What ware `n` costs owner `o` (the Oath of Embers doubles it).
+func ware_cost(n: int, o: int = 0) -> int:
+	return int(WARES[n][2]) * (2 if o == 0 and game.oath("embers") else 1)
+
+
 func _buy(n: int) -> void:
-	var cost := int(WARES[n][2])
+	var cost := ware_cost(n)
 	if my_embers < cost:
 		game.hud.show_notice("NOT ENOUGH EMBERS  —  %d MORE" % (cost - my_embers), 1.8)
 		game.sfx.play_ui("empty_click", -6.0)
@@ -376,6 +399,9 @@ func buy_on(o: int, si: int, n: int) -> void:
 	if at == Vector3.INF or Vector2(at.x - sp.x, at.z - sp.z).length() > 4.0:
 		return
 	var ware: Array = WARES[n]
+	if str(ware[0]) == "kindling" and o == 0 and game.oath("ash"):
+		_tell(o, "YOU SWORE THE OATH OF ASH  —  NO KINDLING FOR YOU")
+		return
 	if str(ware[0]) == "kindling":
 		if game.net_on():
 			_tell(o, "KINDLING ONLY BURNS IN A SOLO GAME")
@@ -386,7 +412,7 @@ func buy_on(o: int, si: int, n: int) -> void:
 		if game.zone != null and game.zone.radius < KINDLING_MIN_RADIUS:
 			_tell(o, "THE FIRES HAVE GONE OUT  —  TOO LATE FOR KINDLING")
 			return
-	if not spend(o, int(ware[2])):
+	if not spend(o, ware_cost(n, o)):
 		return
 	var yaw: float = shrines[si].yaw
 	var side := Basis(Vector3.UP, yaw) * Vector3.RIGHT
@@ -596,6 +622,40 @@ func _kneel(o: int) -> void:
 				game.net.send_writ_event(int(pid), {"ev": "idol_used", "i": ii})
 	apply_event({"ev": "idol_used", "i": ii})
 	_send_event(o, {"ev": "blessing", "kind": kind, "god": str(idols[ii].god)})
+
+
+# --------------------------------------------------------- lookout towers --
+
+## A lookout tower whose top you are standing on (high above the ground by
+## it), or -1.
+func tower_top(p: Vector3) -> int:
+	var towers: Array = game.world.villages.towers
+	for i in towers.size():
+		var c: Vector2 = towers[i].center
+		if Vector2(p.x, p.z).distance_to(c) < 6.0 and p.y - game.terrain.height_at(c.x, c.y) > 8.0:
+			return i
+	return -1
+
+
+## From the top of a tower: every soldier within range shows on your map.
+func survey(ti: int) -> void:
+	_surveyed[ti] = true
+	var at: Vector3 = game.player.global_position
+	var pts: Array = []
+	for b in game.bots:
+		if not is_instance_valid(b) or not b.alive or b.state != Bot.State.GROUND or b.friendly:
+			continue
+		if Vector2(b.global_position.x - at.x, b.global_position.z - at.z).length() < SURVEY_RANGE:
+			pts.append(Vector2(b.global_position.x, b.global_position.z))
+	for id in game.humans:
+		var h = game.humans[id]
+		if h != null and is_instance_valid(h) and (h as Bot).alive and not (h as Bot).friendly and (h as Bot).state == Bot.State.GROUND:
+			if Vector2((h as Node3D).global_position.x - at.x, (h as Node3D).global_position.z - at.z).length() < SURVEY_RANGE:
+				pts.append(Vector2((h as Node3D).global_position.x, (h as Node3D).global_position.z))
+	game.hud.reveal(pts, 12.0)
+	game.sfx.play_ui("writ_ping", -4.0)
+	game.hud.show_big("THE LAND LIES BELOW YOU", Color(0.75, 0.85, 1.0), 2.2)
+	game.hud.show_notice("%d SOLDIER%s WITHIN %d M  —  ON YOUR MAP" % [pts.size(), "" if pts.size() == 1 else "S", int(SURVEY_RANGE)], 3.5)
 
 
 # --------------------------------------------------------------- vaults --
@@ -1004,8 +1064,16 @@ func _count_kill(o: int) -> void:
 	times = times.filter(func(t): return now - float(t) <= BRAND_WINDOW)
 	_kill_times[o] = times
 	if times.size() >= BRAND_KILLS and not branded.has(o):
-		branded[o] = BRAND_TIME
 		_kill_times[o] = []
+		brand(o)
+
+
+## Mark owner `o` as Branded (too many kills, or the Oath of the Hunted).
+func brand(o: int) -> void:
+	if branded.has(o):
+		return
+	if true:
+		branded[o] = BRAND_TIME
 		_brand_call = 0.0
 		_send_event(o, {"ev": "branded", "t": BRAND_TIME})
 		# Everyone else hears of it.
@@ -1188,6 +1256,7 @@ func apply_event(e: Dictionary) -> void:
 			hud.show_big("THE BEACON IS LIT", TINT["beacon"], 2.2)
 			hud.show_notice("HOLD IT FOR %d SECONDS  —  THEY HAVE SEEN THE FIRE" % int(HOLD_TIME), 3.0)
 		"done":
+			game.match_tally["writs"] = int(game.match_tally.get("writs", 0)) + 1
 			game.sfx.play_ui("writ_done", -2.0)
 			hud.show_big("WRIT FULFILLED", Color(1.0, 0.82, 0.38), 3.2)
 			hud.show_notice("%s   ·   +%d EMBERS" % [str(e.get("why", "")), int(e.get("reward", 0))], 3.5)
@@ -1230,6 +1299,7 @@ func apply_event(e: Dictionary) -> void:
 			var bk := str(e.get("kind", ""))
 			if BLESSINGS.has(bk) and game.player != null:
 				game.player.blessings[bk] = true
+				game.match_tally["blessings"] = int(game.match_tally.get("blessings", 0)) + 1
 				if bk == "vigour":
 					game.player.hp = minf(game.player.max_hp(), game.player.hp + 25.0)
 					game.player._emit_health()
@@ -1252,9 +1322,13 @@ func apply_event(e: Dictionary) -> void:
 
 func _embers_here(total: int, gain: int, why: String) -> void:
 	my_embers = total
+	if why == "REVENANT FELLED" or why.begins_with("REVENANT"):
+		game.match_tally["revenants"] = int(game.match_tally.get("revenants", 0)) + 1
+	elif why == "VAULT OPENED":
+		game.match_tally["vaults"] = int(game.match_tally.get("vaults", 0)) + 1
 	game.hud.set_embers(total, gain, why)
 	if shop >= 0:
-		game.hud.show_shop(WARES, my_embers)
+		game.hud.show_shop(_priced_wares(), my_embers)
 	if gain > 0:
 		game.sfx.play_ui("ember", -12.0 if gain < 300 else -6.0)
 

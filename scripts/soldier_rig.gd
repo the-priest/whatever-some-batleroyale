@@ -39,6 +39,9 @@ const HEAL_ARMS := {"bandage": "Idle_Talking", "med": "Interact", "energy": "Idl
 ## The swim stroke clip lies the body flat at hip height; lift it to the
 ## surface (the soldier floats chest-deep, 1.38 m under the waterline).
 const SWIM_LIFT := 1.12
+## A downed squad player lies in the swim-stroke pose, on the ground.
+const DOWN_LIFT := 0.12
+var downed := false
 const UPPER_BONES := ["spine_02", "spine_03", "neck_01", "Head", "clavicle_l", "upperarm_l", "lowerarm_l", "hand_l",
 	"clavicle_r", "upperarm_r", "lowerarm_r", "hand_r"]
 
@@ -578,11 +581,11 @@ func _process_body(delta: float) -> void:
 			_busy = false
 			_arms = "?"
 	# Swim strokes lie the body flat: float it up to the waterline.
-	var lift := SWIM_LIFT if _legs == "Swim_Fwd" else 0.0
+	var lift := (DOWN_LIFT if downed else SWIM_LIFT) if _legs == "Swim_Fwd" else 0.0
 	if absf(_swim_lift - lift) > 0.001:
 		_swim_lift = move_toward(_swim_lift, lift, delta * 2.5)
 		model.position.y = _swim_lift
-	var hide_gun := _busy or is_swimming()
+	var hide_gun := _busy or is_swimming() or downed
 	if gun_holder.visible == hide_gun and model.visible:
 		gun_holder.visible = not hide_gun
 	if not _armed or hand_r == null or _dead or not model.visible or hide_gun:
