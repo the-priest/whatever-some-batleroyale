@@ -798,6 +798,8 @@ func _after_match_setup() -> void:
 	if events != null:
 		events.reset()
 	match_tally = {"writs": 0, "revenants": 0, "vaults": 0, "blessings": 0}
+	_tip_t = 3.0
+	_tip_i = randi() % PLANE_TIPS.size()
 	_renown_paid = false
 	hud.set_minimap_forbidden(oath("silence"))
 	reliquary_next = false
@@ -1608,6 +1610,7 @@ func _update_prompt() -> void:
 		return
 	if player.mode == Player.Mode.PLANE:
 		hud.set_prompt("%s  —  JUMP FROM THE PLANE" % Keybinds.key("jump"))
+		_plane_tips()
 		return
 	if player.mode == Player.Mode.FREEFALL:
 		hud.set_prompt("%s  DIVE  ·  %s  DEPLOY PARACHUTE" % [Keybinds.key("move_forward"), Keybinds.key("jump")])
@@ -1660,6 +1663,30 @@ func _update_prompt() -> void:
 			l.ring.visible = true
 			l.label.visible = l == best
 		_lit_loot = near_now
+
+
+## While the plane flies: what is waiting on the island, one line at a time.
+const PLANE_TIPS := [
+	"WRIT BOARDS STAND IN EVERY TOWN  —  TAKE A JOB, EARN EMBERS",
+	"EMBERS BUY KIT AT THE WAYSHRINES  ·  A STONE SHRINE WITH A FIRE BOWL",
+	"THREE REVENANTS HOLD THE LANDMARKS  —  EACH CARRIES A SIGIL",
+	"A SIGIL OPENS A SEALED VAULT  ·  THE BEST LOOT ON THE ISLAND",
+	"KNEEL AT AN OLD GOD'S IDOL FOR A BLESSING  ·  FIRST COME, FIRST BLESSED",
+	"TORN PAGES OF THE ISLAND'S STORY GLOW IN THE RUINS  —  READ THEM",
+	"CLIMB A TOWER AND SURVEY THE LAND  ·  EVERY SOLDIER WITHIN 300 M",
+	"FIVE KILLS IN NINETY SECONDS AND YOU ARE BRANDED  —  EVERYONE COMES FOR YOU",
+]
+var _tip_t := 2.0
+var _tip_i := 0
+
+
+func _plane_tips() -> void:
+	_tip_t -= get_process_delta_time()
+	if _tip_t > 0.0:
+		return
+	_tip_t = 5.5
+	hud.show_notice(PLANE_TIPS[_tip_i % PLANE_TIPS.size()], 5.0)
+	_tip_i += 1
 
 
 func _update_minimap() -> void:

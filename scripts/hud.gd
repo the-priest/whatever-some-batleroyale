@@ -2930,12 +2930,25 @@ func _draw_big_map() -> void:
 		var ky := inner.position.y + 6.0
 		d.draw_string(font_bold, Vector2(kx, ky + 11.0), "MAP KEY", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, MUTED)
 		ky += 34.0
-		var key := [["you", "YOU"], ["mate", "SQUAD MATE"], ["mark", "YOUR MARK"], ["safe", "NEXT SAFE ZONE"], ["storm", "THE STORM"], ["drop", "SUPPLY DROP"], ["shot", "GUNFIRE"], ["tower", "LOOKOUT TOWER"], ["ruin", "RUINS"], ["landmark", "LANDMARK"]]
+		var key := [["you", "YOU"], ["mate", "SQUAD MATE"], ["mark", "YOUR MARK"], ["safe", "NEXT SAFE ZONE"], ["storm", "THE STORM"], ["drop", "SUPPLY DROP"], ["shot", "GUNFIRE"], ["tower", "LOOKOUT TOWER"], ["ruin", "RUINS"], ["landmark", "LANDMARK"],
+			["board", "WRIT BOARD"], ["shrine", "WAYSHRINE"], ["vault", "SEALED VAULT"]]
+		if not writ.is_empty():
+			key.append(["writ", "YOUR WRIT"])
 		if plane_path.size() == 2:
 			key.append(["route", "FLIGHT PATH"])
 		for e in key:
 			var ic := Vector2(kx + 9.0, ky - 4.0)
-			if e[0] == "mark":
+			if e[0] == "board":
+				_icon_board(d, ic, Writs.TINT["blood"])
+			elif e[0] == "shrine":
+				_icon_shrine(d, ic)
+			elif e[0] == "vault":
+				_icon_vault(d, ic, false)
+			elif e[0] == "writ":
+				var wc := _writ_tint()
+				d.draw_circle(ic, 7.0, Color(wc.r, wc.g, wc.b, 0.2))
+				d.draw_arc(ic, 7.0, 0, TAU, 20, wc, 1.6, true)
+			elif e[0] == "mark":
 				_map_icon(d, "mark", ic + Vector2(0, 6), 0.8, ACCENT)
 			elif e[0] == "mate":
 				_map_icon(d, "mate", ic, 0.9, Color(0.45, 0.95, 0.55))
@@ -3305,6 +3318,28 @@ func _draw_writ() -> void:
 	writ_draw.queue_redraw()
 
 
+func _icon_board(ctrl: Control, bp: Vector2, bc: Color) -> void:
+	var k := 5.0
+	ctrl.draw_rect(Rect2(bp - Vector2(k + 1.5, k + 1.5), Vector2(k * 2 + 3, k * 2 + 3)), Color(0.02, 0.03, 0.04, 0.85))
+	ctrl.draw_rect(Rect2(bp - Vector2(k, k), Vector2(k * 2, k * 2)), Color(0.93, 0.88, 0.76))
+	ctrl.draw_rect(Rect2(bp + Vector2(-2.5, 0.5), Vector2(5, 3.5)), bc)
+
+
+## A Wayshrine: a glowing ember (round, so it is not mistaken for a tower).
+func _icon_shrine(ctrl: Control, smp: Vector2) -> void:
+	ctrl.draw_circle(smp, 6.5, Color(0.02, 0.03, 0.04, 0.85))
+	ctrl.draw_circle(smp, 5.0, Color(0.95, 0.45, 0.15))
+	ctrl.draw_circle(smp, 2.4, Color(1.0, 0.86, 0.5))
+
+
+func _icon_vault(ctrl: Control, vp: Vector2, opened: bool) -> void:
+	ctrl.draw_rect(Rect2(vp - Vector2(7, 7), Vector2(14, 14)), Color(0.02, 0.02, 0.03, 0.9))
+	ctrl.draw_rect(Rect2(vp - Vector2(5.5, 5.5), Vector2(11, 11)), Color(0.32, 0.3, 0.3) if opened else Color(0.16, 0.14, 0.13))
+	var kc := Color(0.55, 0.55, 0.55) if opened else Color(1.0, 0.75, 0.3)
+	ctrl.draw_circle(vp + Vector2(0, -1.5), 2.0, kc)
+	ctrl.draw_rect(Rect2(vp + Vector2(-1, -0.5), Vector2(2, 4)), kc)
+
+
 ## The writ's circle and spot on a map; the boards on the full map.
 func _draw_writ_map(ctrl: Control, view: MapView, big: bool, to_map: Callable, inner: Rect2) -> void:
 	if _reveal_t > 0.0:
@@ -3324,27 +3359,17 @@ func _draw_writ_map(ctrl: Control, view: MapView, big: bool, to_map: Callable, i
 			var vp: Vector2 = to_map.call(vm[0])
 			if not inner.has_point(vp):
 				continue
-			var opened: bool = vm[1]
-			ctrl.draw_rect(Rect2(vp - Vector2(7, 7), Vector2(14, 14)), Color(0.02, 0.02, 0.03, 0.9))
-			ctrl.draw_rect(Rect2(vp - Vector2(5.5, 5.5), Vector2(11, 11)), Color(0.32, 0.3, 0.3) if opened else Color(0.16, 0.14, 0.13))
-			var kc := Color(0.55, 0.55, 0.55) if opened else Color(1.0, 0.75, 0.3)
-			ctrl.draw_circle(vp + Vector2(0, -1.5), 2.0, kc)
-			ctrl.draw_rect(Rect2(vp + Vector2(-1, -0.5), Vector2(2, 4)), kc)
+			_icon_vault(ctrl, vp, bool(vm[1]))
 		for sp in shrine_marks:
 			var smp: Vector2 = to_map.call(sp)
 			if not inner.has_point(smp):
 				continue
-			ctrl.draw_colored_polygon(PackedVector2Array([smp + Vector2(0, -8), smp + Vector2(6, 4), smp + Vector2(-6, 4)]), Color(0.02, 0.03, 0.04, 0.85))
-			ctrl.draw_colored_polygon(PackedVector2Array([smp + Vector2(0, -6), smp + Vector2(4.5, 3), smp + Vector2(-4.5, 3)]), Color(1.0, 0.72, 0.36))
+			_icon_shrine(ctrl, smp)
 		for b in writ_boards:
 			var bp: Vector2 = to_map.call(b[0])
 			if not inner.has_point(bp):
 				continue
-			var bc: Color = Writs.TINT.get(str(b[1]), ACCENT)
-			var k := 5.0
-			ctrl.draw_rect(Rect2(bp - Vector2(k + 1.5, k + 1.5), Vector2(k * 2 + 3, k * 2 + 3)), Color(0.02, 0.03, 0.04, 0.85))
-			ctrl.draw_rect(Rect2(bp - Vector2(k, k), Vector2(k * 2, k * 2)), Color(0.93, 0.88, 0.76))
-			ctrl.draw_rect(Rect2(bp + Vector2(-2.5, 0.5), Vector2(5, 3.5)), bc)
+			_icon_board(ctrl, bp, Writs.TINT.get(str(b[1]), ACCENT))
 	if writ.is_empty():
 		return
 	var col := _writ_tint()
