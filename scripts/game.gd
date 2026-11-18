@@ -365,6 +365,8 @@ func _ready() -> void:
 		_run_events_test()
 	elif OS.get_cmdline_user_args().has("--vault"):
 		_run_vault_test()
+	elif OS.get_cmdline_user_args().has("--colossus"):
+		_run_colossus_test()
 	elif OS.get_cmdline_user_args().has("--revenant"):
 		_run_revenant_test()
 	elif OS.get_cmdline_user_args().has("--writs"):
@@ -1457,6 +1459,7 @@ func _update_play(delta: float) -> void:
 	survive_time += delta
 	_update_boss_bar()
 	_update_revive(delta)
+	_update_gift_line()
 	_pt = Time.get_ticks_usec()
 	_update_wind(delta)
 	Prof.add("g_update_wind", Time.get_ticks_usec() - _pt)
@@ -1520,8 +1523,11 @@ func _update_world_sim(delta: float) -> void:
 	zone_acc -= 1.0
 	var dps := zone.damage_per_second()
 	if phase == "playing" and player.alive and zone.is_outside(player.global_position) and (player.mode == Player.Mode.GROUND or player.mode == Player.Mode.VEHICLE):
-		player.take_damage(dps, Vector3.ZERO, false, null)
-		hud.show_notice("YOU ARE IN THE STORM  —  FOLLOW THE ARROW ON THE COMPASS", 1.4)
+		if player.gifts.has("storm"):
+			hud.show_notice("STORMWALKER  —  THE STORM CANNOT TOUCH YOU", 1.4)
+		else:
+			player.take_damage(dps, Vector3.ZERO, false, null)
+			hud.show_notice("YOU ARE IN THE STORM  —  FOLLOW THE ARROW ON THE COMPASS", 1.4)
 	if net_is_client():
 		return
 	for b in bots:
@@ -2111,6 +2117,7 @@ func _on_bot_eliminated(victim: Bot, killer: String) -> void:
 
 # -------------------------------------------------------------- revenants --
 const REVENANT_COUNT := 3
+const COLOSSUS_COUNT := 2
 const REVENANT_GUNS := ["lmg", "axmc", "dmr", "m24"]
 
 
@@ -2153,23 +2160,130 @@ func _spawn_revenants() -> void:
 		rv.eliminated.connect(_on_bot_eliminated)
 		bots.append(rv)
 		made += 1
-	print("[revenants] %d hold the island: %s" % [made, str(bots.filter(func(b): return is_instance_valid(b) and b is Revenant).map(func(b): return "%s @ %s" % [b.display_name(), str(Vector3(b.arena).round())]))])
+	# The great bosses: two Colossi, on open ground by landmarks of their own.
+	var cnames := Colossus.GIANT_NAMES.duplicate()
+	cnames.shuffle()
+	var giants := 0
+	for l in sites:
+		if giants >= COLOSSUS_COUNT:
+			break
+		var c: Vector2 = l[1]
+		var taken := false
+		for b in bots:
+			if is_instance_valid(b) and b is Revenant and Vector2((b as Revenant).arena.x, (b as Revenant).arena.z).distance_to(c) < 200.0:
+				taken = true
+		if taken:
+			continue
+		var at := Vector3.INF
+		for k in 120:
+			var a := randf() * TAU
+			var q := c + Vector2(cos(a), sin(a)) * randf_range(10.0, 60.0)
+			var h := terrain.height_at(q.x, q.y)
+			if h < terrain.water_surface_at(q.x, q.y) + 0.8 or terrain.slope_at(q.x, q.y) > 0.3 or terrain.roughness(q.x, q.y, 10.0) > 2.0:
+				continue
+			if _on_building(q.x, q.y) or not world.villages.house_at(q, 14.0).is_empty():
+				continue
+			var g := ground_at(Vector3(q.x, h + 30.0, q.y))
+			if absf(g.y - h) > 0.8:
+				continue
+			# Room for a giant to fight: nothing standing within ten metres.
+			var space := get_world_3d().direct_space_state
+			var open := true
+			for hy: float in [2.0, 5.0]:
+				for k2 in 8:
+					var a2 := TAU * float(k2) / 8.0
+					var o2 := g + Vector3.UP * hy
+					var qq := PhysicsRayQueryParameters3D.create(o2, o2 + Vector3(cos(a2), 0.0, sin(a2)) * 10.0, 1)
+					if not space.intersect_ray(qq).is_empty():
+						open = false
+						break
+				if not open:
+					break
+			if not open:
+				continue
+			at = g
+			break
+		if at == Vector3.INF:
+			continue
+		var cg := Colossus.new()
+		var cn: Array = cnames[giants % cnames.size()]
+		cg.setup_colossus(str(cn[0]), str(cn[1]), at, self)
+		add_child(cg)
+		cg.global_position = at + Vector3.UP * 0.5
+		cg.arm_weapon("lmg")
+		cg.eliminated.connect(_on_bot_eliminated)
+		bots.append(cg)
+		giants += 1
+	print("[revenants] %d hold the island: %s" % [made + giants, str(bots.filter(func(b): return is_instance_valid(b) and b is Revenant).map(func(b): return "%s @ %s" % [b.display_name(), str(Vector3(b.arena).round())]))])
 
 
 ## A Revenant fell: a bell over the whole island, and its hoard on the ground.
 func _revenant_fell(r: Revenant, killer: String) -> void:
 	sfx.play_ui("writ_done", -1.0)
-	hud.show_big("REVENANT FELLED", Color(1.0, 0.82, 0.38), 3.2)
+	hud.show_big("COLOSSUS FELLED" if r is Colossus else "REVENANT FELLED", Color(1.0, 0.82, 0.38), 3.6)
 	hud.show_notice("%s  —  SLAIN BY %s" % [r.display_name(), killer if killer != "" else "THE STORM"], 4.0)
 	if net_is_client():
 		return
 	var base := ground_at(r.global_position + Vector3.UP)
 	var items: Array = [["armor", "3"], ["helmet", "3"], ["med", ""], ["med", ""], ["scope", "8x"], ["grenade", ""]]
+	if r is Colossus:
+		var g1: String = AIRDROP_WEAPONS[randi() % AIRDROP_WEAPONS.size()]
+		items.append_array([["weapon", g1], ["ammo", Weapons.caliber(g1)], ["ammo", Weapons.caliber(g1)], ["med", ""], ["energy", ""], ["grenade", ""]])
 	for i in items.size():
 		var a := TAU * float(i) / float(items.size())
 		var at := _loot_spot(base + Vector3(cos(a), 0.0, sin(a)) * 1.6, 0.4, 2.2)
 		if at != Vector3.INF:
 			_spawn_loot(items[i][0], items[i][1], at)
+
+
+func _update_gift_line() -> void:
+	if player == null or player.gifts.is_empty():
+		hud.gift_line = ""
+		return
+	var parts: Array = []
+	for k in player.gifts:
+		var nm: String = str(Writs.GIFTS[k][0]) if Writs.GIFTS.has(k) else str(k)
+		match k:
+			"blink":
+				nm += ("  [%s]" % Keybinds.key("ability")) if player.blink_cd <= 0.0 else "  %d s" % int(ceil(player.blink_cd))
+			"aegis":
+				nm += "  %d" % int(player.aegis)
+			"second":
+				if player._second_used:
+					continue
+		parts.append(nm)
+	hud.gift_line = "GIFTS  ·  " + "  ·  ".join(PackedStringArray(parts))
+
+
+## Hawk's Eye: the soldiers near you, on your map, every so often.
+func hawk_reveal() -> void:
+	if player == null or not player.alive:
+		return
+	var at := player.global_position
+	var pts: Array = []
+	for b in bots:
+		if is_instance_valid(b) and b.alive and b.state == Bot.State.GROUND and not b.friendly and b.global_position.distance_to(at) < 160.0:
+			pts.append(Vector2(b.global_position.x, b.global_position.z))
+	for id in humans:
+		var h = humans[id]
+		if h != null and is_instance_valid(h) and (h as Bot).alive and not (h as Bot).friendly and (h as Node3D).global_position.distance_to(at) < 160.0:
+			pts.append(Vector2((h as Node3D).global_position.x, (h as Node3D).global_position.z))
+	hud.reveal(pts, 5.0)
+	sfx.play_ui("writ_ping", -14.0)
+
+
+func on_second_wind() -> void:
+	sfx.play_ui("writ_done", -6.0)
+	hud.show_big("SECOND WIND", Color(1.0, 0.86, 0.45), 2.0)
+
+
+## A Colossus's telegraphs and fire, on every machine.
+func boss_fx(fx: Dictionary) -> void:
+	Colossus.show_fx(self, fx)
+	if net_on() and net.hosting:
+		for pid in net.roster:
+			if int(pid) != 1:
+				net.send_writ_event(int(pid), {"ev": "boss_fx", "fx": fx})
 
 
 ## Where the boss bar points: the nearest live Revenant you are close to.
@@ -2178,15 +2292,30 @@ func _update_boss_bar() -> void:
 		hud.set_boss({})
 		return
 	var best: Revenant = null
-	var best_d := 85.0
+	var best_d := 130.0
 	for b in bots:
 		if is_instance_valid(b) and b is Revenant and (b as Bot).alive:
 			var d: float = (b as Node3D).global_position.distance_to(player.global_position)
-			if d < best_d:
+			if d < (130.0 if b is Colossus else 85.0) and d < best_d:
 				best_d = d
 				best = b
 	if best == null:
 		hud.set_boss({})
+		return
+	# The first time you come upon one: its name, the way the old tales say it.
+	if not best.has_meta("met") and best_d < (70.0 if best is Colossus else 45.0):
+		best.set_meta("met", true)
+		hud.show_big(best.bot_name, Color(0.95, 0.85, 0.7), 3.4)
+		hud.show_notice(best.title, 3.4)
+		sfx.play_ui("event_horn", -3.0)
+	if best is Colossus:
+		var st := 3 if best.hp <= 33.0 else (2 if best.hp <= 66.0 else 1)
+		if st > int(best.get_meta("stage_told", 1)):
+			best.set_meta("stage_told", st)
+			hud.show_big("%s %s" % [best.bot_name, "GROWS QUICKER" if st == 2 else "IS FURIOUS"], HUD.DANGER, 2.6)
+			hud.show_notice("MORE FIRE, MORE OFTEN  —  WATCH THE GROUND" if st == 2 else "IT WILL NOT STOP NOW  —  END IT", 3.0)
+			sfx.play_ui("event_horn", -4.0)
+		hud.set_boss({"name": best.bot_name, "title": best.title, "hp": clampf(best.hp / 100.0, 0.0, 1.0), "raged": st == 3, "big": true})
 		return
 	var raged := best.hp <= 50.0
 	if raged and not best.has_meta("rage_told"):
@@ -2267,6 +2396,8 @@ func on_player_hit(_pos: Vector3, dmg: float, _headshot: bool) -> void:
 	# The hitmarker and sound are the feedback; floating numbers only for
 	# those who switch them on (Settings, GAME).
 	damage_dealt += dmg
+	if player != null and player.alive and player.gifts.has("blood"):
+		player.heal(dmg * 0.2)
 	if int(options.get("damage_numbers", 0)) == 1:
 		spawn_damage_number(_pos, dmg, _headshot)
 	if player != null:
@@ -3644,8 +3775,11 @@ func _run_shot() -> void:
 			var ri := int(a.substr(6))
 			if ri < rv.size():
 				var rp: Vector3 = (rv[ri] as Node3D).global_position
-				spot = Vector3(rp.x + 3.2, 0.0, rp.z + 2.0)
+				var far := 3.0 if rv[ri] is Colossus else 1.0
+				spot = Vector3(rp.x + 3.2 * far, 0.0, rp.z + 2.0 * far)
 				ang = atan2(3.2, 2.0)
+				if rv[ri] is Colossus and OS.get_cmdline_user_args().has("--slamfx"):
+					Colossus.show_fx(self, {"k": "slam", "p": rp, "r": Colossus.SLAM_R, "w": 30.0})
 				(rv[ri] as Bot).set_physics_process(false)
 				(rv[ri] as Node3D).rotation.y = ang + PI
 		if a.begins_with("--crypt=") and writs != null and int(a.substr(8)) < writs.vaults.size():
@@ -4860,7 +4994,7 @@ func _net_send_setup() -> void:
 		var b = bots[bi]
 		bot_names.append(b.bot_name)
 		if is_instance_valid(b) and b is Revenant:
-			revs.append([bi, (b as Revenant).title, (b as Revenant).arena])
+			revs.append([bi, (b as Revenant).title, (b as Revenant).arena, b is Colossus])
 	var list: Array = []
 	for id in net.roster:
 		list.append([id, net.roster[id]])
@@ -4934,9 +5068,14 @@ func net_start_match(setup: Dictionary) -> void:
 	for i in names.size():
 		var b: Bot = null
 		if rev_at.has(i):
-			var rv := Revenant.new()
-			rv.setup_revenant(str(names[i]), str(rev_at[i][1]), rev_at[i][2], self)
-			b = rv
+			if (rev_at[i] as Array).size() > 3 and bool(rev_at[i][3]):
+				var cg := Colossus.new()
+				cg.setup_colossus(str(names[i]), str(rev_at[i][1]), rev_at[i][2], self)
+				b = cg
+			else:
+				var rv := Revenant.new()
+				rv.setup_revenant(str(names[i]), str(rev_at[i][1]), rev_at[i][2], self)
+				b = rv
 		else:
 			b = Bot.new()
 			b.setup(str(names[i]), Vector2.ZERO, self, i)
@@ -6232,6 +6371,124 @@ func _run_vault_test() -> void:
 	get_tree().quit()
 
 
+## Fights a Colossus through its slam, fire and phases, kills it, and tries
+## every Gift.
+func _run_colossus_test() -> void:
+	_start_match()
+	for i in 30:
+		await get_tree().physics_frame
+	_land_player_now()
+	player.give_weapon("rifle")
+	var giants: Array = bots.filter(func(b): return is_instance_valid(b) and b is Colossus)
+	print("[colossus] %s" % str(giants.map(func(g): return "%s @ %s" % [g.display_name(), str(Vector3(g.arena).round())])))
+	_check("two colossi on the island", giants.size() == COLOSSUS_COUNT)
+	_check("they are not counted among the living", alive == total_players)
+	if giants.is_empty():
+		get_tree().quit()
+		return
+	var c: Colossus = giants[0]
+	_check("a colossus towers over a man", c.head_offset > 3.5 and c._cap.height > 4.0)
+	# Close in: it slams.
+	player.spawn_protect = 0.0
+	player.hp = 100.0
+	player.global_position = ground_at(c.global_position + Vector3(5.0, 20.0, 0.0)) + Vector3.UP * 0.2
+	var slammed := false
+	var hp_before := player.hp
+	for i in 60 * 25:
+		player.global_position = ground_at(c.global_position + Vector3(5.0, 20.0, 0.0)) + Vector3.UP * 0.2
+		player.hp = maxf(player.hp, 1.0)
+		await get_tree().physics_frame
+		if c._busy == "slam":
+			slammed = true
+			hp_before = player.hp
+			for k in int(60 * (Colossus.SLAM_WINDUP + 0.3)):
+				await get_tree().physics_frame
+			break
+	_check("close in and it slams the ground", slammed)
+	print("[colossus] slam: hp %.0f -> %.0f" % [hp_before, player.hp])
+	_check("the slam hurts", player.hp < hp_before - 20.0 or not player.alive)
+	if not player.alive:
+		print("[colossus] (the slam killed us)")
+		get_tree().quit()
+		return
+	player.spawn_protect = 99999.0
+	player.hp = 100.0
+	# Stand off: it throws fire.
+	player.global_position = ground_at(c.global_position + Vector3(32.0, 20.0, 0.0)) + Vector3.UP * 0.2
+	var orbs := 0
+	for i in 60 * 20:
+		player.global_position = ground_at(c.global_position + Vector3(32.0, 20.0, 0.0)) + Vector3.UP * 0.2
+		await get_tree().physics_frame
+		orbs = maxi(orbs, find_children("*", "BossOrb", false, false).size())
+		var n := 0
+		for ch in get_children():
+			if ch is BossOrb:
+				n += 1
+		orbs = maxi(orbs, n)
+		if orbs >= 3:
+			break
+	_check("from range it hurls fire", orbs >= 3)
+	# It shrugs off bullets.
+	var h0 := c.hp
+	for i in 30:
+		c.take_damage(30.0, c.global_position + Vector3.UP * 3.0, false, player)
+	print("[colossus] thirty rifle hits: hp %.1f -> %.1f" % [h0, c.hp])
+	_check("thirty rifle hits barely scratch it", c.hp > h0 - 45.0 and c.alive)
+	# Phases.
+	c.hp = 60.0
+	for i in 3:
+		await get_tree().physics_frame
+	_check("below two thirds: second phase", c.stage == 2)
+	c.hp = 30.0
+	for i in 3:
+		await get_tree().physics_frame
+	_check("below a third: furious", c.stage == 3)
+	# Fell it.
+	var e0 := writs.my_embers
+	player.global_position = ground_at(c.global_position + Vector3(20.0, 20.0, 0.0)) + Vector3.UP * 0.2
+	var guard := 0
+	while c.alive and guard < 500:
+		guard += 1
+		c.take_damage(200.0, c.global_position + Vector3.UP * 4.0, true, player)
+	await get_tree().physics_frame
+	_check("colossus felled", not c.alive)
+	print("[colossus] gifts: %s, embers %d -> %d, sigils %d" % [str(player.gifts.keys()), e0, writs.my_embers, writs.my_sigils])
+	_check("its killer gets two gifts", player.gifts.size() >= 2)
+	_check("and a fortune in embers", writs.my_embers >= e0 + 2500)
+	_check("and its sigil", writs.my_sigils >= 1)
+	# Every gift works.
+	player.spawn_protect = 0.0
+	player.gifts = {"blink": true, "aegis": true, "second": true, "titan": true, "storm": true, "hawk": true, "blood": true}
+	player.mode = Player.Mode.GROUND
+	var p0 := player.global_position
+	player.blink_cd = 0.0
+	player._blink()
+	await get_tree().physics_frame
+	print("[colossus] blink moved %.1f m" % p0.distance_to(player.global_position))
+	_check("blink: a step through the air", p0.distance_to(player.global_position) > 3.0)
+	_check("titan: +50 health", player.max_hp() >= 150.0)
+	player.hp = 100.0
+	player.aegis = Player.AEGIS_MAX
+	var src: Bot = null
+	for b in bots:
+		if is_instance_valid(b) and b.alive and not (b is Revenant):
+			src = b
+			break
+	player.vest_level = 0
+	player.helmet_level = 0
+	player.take_damage(40.0, player.global_position + Vector3.FORWARD, false, src)
+	_check("ember aegis soaks the hit", player.hp == 100.0 and player.aegis < Player.AEGIS_MAX)
+	player.aegis = 0.0
+	player.hp = 10.0
+	player.take_damage(60.0, player.global_position + Vector3.FORWARD, false, src)
+	_check("second wind: the killing blow leaves you standing", player.alive and player.hp >= 40.0)
+	var hp1 := player.hp
+	on_player_hit(player.global_position, 50.0, false)
+	_check("bloodthirst: your hits heal you", player.hp > hp1)
+	print("[colossus] done")
+	get_tree().quit()
+
+
 ## Finds a Revenant, fights it through its rage and leash, and kills it.
 func _run_revenant_test() -> void:
 	_start_match()
@@ -6240,7 +6497,7 @@ func _run_revenant_test() -> void:
 	_land_player_now()
 	player.spawn_protect = 99999.0
 	player.give_weapon("rifle")
-	var revs: Array = bots.filter(func(b): return is_instance_valid(b) and b is Revenant)
+	var revs: Array = bots.filter(func(b): return is_instance_valid(b) and b is Revenant and not (b is Colossus))
 	_check("three revenants hold the island", revs.size() == REVENANT_COUNT)
 	_check("revenants are not counted among the living", alive == total_players)
 	if revs.is_empty():
@@ -6891,6 +7148,7 @@ func _run_net_test(as_host: bool) -> void:
 	player.landed = true
 	player.velocity = Vector3.ZERO
 	player.give_weapon("rifle")
+	player.spawn_protect = 9999.0
 	for i in 75:
 		await get_tree().create_timer(1.0).timeout
 		var moving := 0
@@ -6988,8 +7246,7 @@ func _run_net_test(as_host: bool) -> void:
 				net_route_hit(humans[id], 30.0, humans[id].global_position + Vector3(0, 1, 0), false, near if near != null else player)
 		# Down and revive: the client falls, the host picks them up.
 		# (Both kept out of real fights from here, so the check is about the revive.)
-		if i >= 26:
-			player.spawn_protect = 9999.0
+		player.spawn_protect = 9999.0
 		if i == 67 and not as_host:
 			player.spawn_protect = 0.0
 			var src: Node = near if near != null else null

@@ -26,6 +26,7 @@ Open the project in Godot 4.7 and press Play, or export with the presets in `exp
 | H | Use the best healing item |
 | 4 / 5 / 6 | Bandage / medkit / energy drink |
 | G | Throw frag grenade |
+| V | Use a Gift (Blink) |
 | M | Full map (frees the mouse: left click marks a spot, e.g. where to land; right click removes it) |
 | M then mouse wheel | Zoom the map on the cursor |
 | Esc | Pause menu (sensitivity, volume) |
@@ -82,6 +83,34 @@ show at the top of the screen.
 - When one falls, a bell tolls across the island. It drops level 3 armour and helmet, medkits, an 8x
   scope and a grenade, and pays its killer 1,200 Embers on top of the kill.
 - Revenants are not players: they do not count toward who is left alive.
+
+## Colossi and Gifts
+
+Two **Colossi** stand on open ground by the landmarks: giants two and a half times the height of
+a man, black stone cracked with fire. They are the hardest thing on the island. Bring friends.
+
+- A rifle needs well over a hundred hits to fell one. They do not shoot; everything they do to you,
+  you can see coming:
+  - **Slam**: a red ring spreads round its feet, then the ground breaks. Get out of the ring.
+  - **Fire**: balls of flame that fly dead straight. Sidestep them, or get behind a wall.
+  - **Charge**: it roars, then runs you down. Run it into a wall and it stops, stunned.
+- Three phases: below two thirds it is quicker; below a third it is furious and throws more fire.
+- It goes after players before soldiers. Hide long enough and it slowly heals.
+- When one falls everyone who stood within 90 m is given a **Gift**, and whoever felled it gets two.
+  It also drops its Sigil, 2,500 Embers and a hoard of top-tier kit. Revenants give their killer one
+  Gift too.
+
+**Gifts** are powers for the rest of the match (lost if you fall):
+
+| Gift | What it does |
+| --- | --- |
+| Blink | Press **V**: step nine metres through the air (5 s to recover) |
+| Second Wind | The next blow that would fell you leaves you standing at 50 |
+| Ember Aegis | A shield of 60 that rebuilds when you are not being hit |
+| Stormwalker | The storm cannot hurt you |
+| Hawk's Eye | Every 20 seconds the soldiers near you show on your map |
+| Bloodthirst | A fifth of the damage you deal heals you |
+| Titan | +50 maximum health |
 
 ## Vaults and Sigils
 

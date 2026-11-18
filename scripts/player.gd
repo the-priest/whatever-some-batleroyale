@@ -113,6 +113,17 @@ const BLEED_TIME := 30.0
 const DOWN_EYE := 0.42
 var _down_source: Node = null
 var _down_hid_view := false
+## Gifts: superpowers for the rest of the match, given by fallen bosses.
+## blink, second, aegis, storm, hawk, blood, titan.
+var gifts: Dictionary = {}
+var blink_cd := 0.0
+const BLINK_CD := 5.0
+const BLINK_DIST := 9.0
+var aegis := 0.0
+const AEGIS_MAX := 60.0
+var _aegis_rest := 0.0
+var _hawk_t := 5.0
+var _second_used := false
 ## Old Gods' blessings held this match: swift, steady, quick, vigour, warding, ember.
 var blessings: Dictionary = {}
 
@@ -121,7 +132,7 @@ func max_hp() -> float:
 	var m := 100.0
 	if game != null and game.has_method("oath") and game.oath("glass"):
 		m = 75.0
-	return m + (25.0 if blessings.has("vigour") else 0.0)
+	return m + (25.0 if blessings.has("vigour") else 0.0) + (50.0 if gifts.has("titan") else 0.0)
 var _reload_need := 1
 var _reload_was_empty := false
 var _reload_events: Dictionary = {}
@@ -577,6 +588,8 @@ func _physics_process_body(delta: float) -> void:
 	flash.visible = flash_time > 0.0
 	flash_light.light_energy = 2.2 if flash_time > 0.0 else 0.0
 	spawn_protect = maxf(0.0, spawn_protect - delta)
+	if not gifts.is_empty():
+		_tick_gifts(delta)
 	if downed:
 		bleed -= delta
 		if view != null and view.visible:
@@ -906,6 +919,8 @@ func _ground(delta: float) -> void:
 		use_item("med")
 	if _ajp("use_energy"):
 		use_item("energy")
+	if gifts.has("blink") and _ajp("ability"):
+		_blink()
 	_throw_cd = maxf(0.0, _throw_cd - delta)
 	_tick_throw(delta)
 	# Hold the grenade key to see where it will land; let go to throw.
@@ -2168,6 +2183,20 @@ func take_damage(amount: float, from_pos: Vector3 = Vector3.ZERO, headshot: bool
 				armor = 0.0
 				notice.emit("VEST DESTROYED")
 				inventory_changed.emit()
+	if aegis > 0.0 and source != null:
+		var soak := minf(aegis, dmg)
+		aegis -= soak
+		dmg -= soak
+	_aegis_rest = 6.0
+	if gifts.has("second") and not _second_used and hp - dmg <= 0.0 and not downed:
+		# Second Wind: the blow that should have felled you does not.
+		_second_used = true
+		dmg = 0.0
+		hp = 50.0
+		spawn_protect = 1.5
+		notice.emit("SECOND WIND  —  NOT YET")
+		if game != null and game.has_method("on_second_wind"):
+			game.on_second_wind()
 	hp -= dmg
 	_damage_flash = 1.0
 	if source != null and source != self:
@@ -2192,6 +2221,55 @@ func take_damage(amount: float, from_pos: Vector3 = Vector3.ZERO, headshot: bool
 			return true
 		_die_now(source)
 	return true
+
+
+func _tick_gifts(delta: float) -> void:
+	blink_cd = maxf(0.0, blink_cd - delta)
+	if gifts.has("aegis"):
+		_aegis_rest -= delta
+		if _aegis_rest <= 0.0 and aegis < AEGIS_MAX:
+			aegis = minf(AEGIS_MAX, aegis + 15.0 * delta)
+	if gifts.has("hawk"):
+		_hawk_t -= delta
+		if _hawk_t <= 0.0:
+			_hawk_t = 20.0
+			if game != null and game.has_method("hawk_reveal"):
+				game.hawk_reveal()
+
+
+## Blink: a step through the air, nine metres the way you look (stopping
+## short of walls), landing on whatever is below.
+func _blink() -> void:
+	if blink_cd > 0.0 or mode != Mode.GROUND or downed or swimming:
+		return
+	var fwd := -camera.global_basis.z
+	fwd.y = clampf(fwd.y, -0.3, 0.35)
+	fwd = fwd.normalized()
+	var eye := global_position + Vector3.UP * 1.2
+	var space := get_world_3d().direct_space_state
+	var q := PhysicsRayQueryParameters3D.create(eye, eye + fwd * BLINK_DIST, 1)
+	q.exclude = [get_rid()]
+	var hit := space.intersect_ray(q)
+	var dest: Vector3 = eye + fwd * BLINK_DIST
+	if not hit.is_empty():
+		dest = (hit.position as Vector3) - fwd * 0.7
+	var down := PhysicsRayQueryParameters3D.create(dest + Vector3.UP * 0.5, dest + Vector3.DOWN * 12.0, 1)
+	down.exclude = [get_rid()]
+	var g := space.intersect_ray(down)
+	var land: Vector3 = (g.position as Vector3) + Vector3.UP * 0.05 if not g.is_empty() else dest - Vector3.UP * 1.2
+	if land.distance_to(global_position) < 1.5:
+		return
+	if game != null and game.get("anticheat") != null:
+		game.anticheat.grace(1.0)
+	var from := global_position
+	global_position = land
+	velocity = Vector3(velocity.x, 0.0, velocity.z) * 0.5
+	blink_cd = BLINK_CD
+	add_trauma(0.15)
+	if game != null:
+		game.play_sfx_at("jump_whoosh", from, 0.0)
+		if game.has_method("spawn_smoke"):
+			game.spawn_smoke(from + Vector3.UP, 0.7)
 
 
 func _go_down(source: Node) -> void:
@@ -2574,6 +2652,10 @@ func apply_net_inventory(d: Dictionary) -> void:
 
 func reset_for_match() -> void:
 	blessings.clear()
+	gifts.clear()
+	blink_cd = 0.0
+	aegis = 0.0
+	_second_used = false
 	downed = false
 	bleed = 0.0
 	_down_source = null

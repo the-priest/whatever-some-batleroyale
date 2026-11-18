@@ -3219,6 +3219,8 @@ func set_writ(v: Dictionary) -> void:
 var kindling := false
 var sigils := 0
 var _blessings: Array = []
+## Your Gifts as one line ("GIFTS  ·  BLINK [V]  ·  AEGIS 60"), or "".
+var gift_line := ""
 
 
 func set_blessings(names: Array) -> void:
@@ -3270,6 +3272,13 @@ func _writ_tint() -> Color:
 
 
 func _draw_writ() -> void:
+	if gift_line != "":
+		var gx := 0.0
+		if not _blessings.is_empty():
+			gx = font_bold.get_string_size("BLESSED  ·  " + "  ·  ".join(PackedStringArray(_blessings)), HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x + 18.0
+		writ_draw.draw_string(font_bold, Vector2(gx + 1, -5), gift_line, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0, 0, 0, 0.6))
+		writ_draw.draw_string(font_bold, Vector2(gx, -6), gift_line, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(1.0, 0.86, 0.45))
+		writ_draw.queue_redraw()
 	if not _blessings.is_empty():
 		var bt := "BLESSED  ·  " + "  ·  ".join(PackedStringArray(_blessings))
 		writ_draw.draw_string(font_bold, Vector2(1, -5), bt, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0, 0, 0, 0.6))
@@ -3526,13 +3535,17 @@ func _draw_boss() -> void:
 	_text_out(_boss_draw, Vector2((w - nw) * 0.5, 18), nm, 20, Color(0.95, 0.88, 0.8), 5)
 	var tw := font_bold.get_string_size(tt, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
 	_text_out(_boss_draw, Vector2((w - tw) * 0.5, 33), tt, 11, Color(0.8, 0.62, 0.5), 4)
-	var bar := Rect2(20, 40, w - 40, 9)
+	var big := bool(boss.get("big", false))
+	var bar := Rect2(20, 40, w - 40, 12 if big else 9)
+	if big:
+		_boss_draw.draw_rect(bar.grow(4.0), Color(0.75, 0.55, 0.25, 0.85))
 	_boss_draw.draw_rect(bar.grow(2.0), Color(0.02, 0.02, 0.02, 0.85))
 	_boss_draw.draw_rect(bar, Color(0.18, 0.04, 0.03, 0.9))
 	var col := Color(0.86, 0.16, 0.12) if not raged else Color(1.0, 0.32, 0.12).lerp(Color(0.86, 0.1, 0.08), 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.01))
 	_boss_draw.draw_rect(Rect2(bar.position, Vector2(bar.size.x * hp, bar.size.y)), col)
-	# The half-way mark, where it rages.
-	_boss_draw.draw_rect(Rect2(bar.position.x + bar.size.x * 0.5 - 1, bar.position.y - 2, 2, bar.size.y + 4), Color(1, 1, 1, 0.35))
+	# Where it changes: half way for a Revenant, thirds for a Colossus.
+	for f: float in ([0.333, 0.666] if big else [0.5]):
+		_boss_draw.draw_rect(Rect2(bar.position.x + bar.size.x * f - 1, bar.position.y - 2, 2, bar.size.y + 4), Color(1, 1, 1, 0.35))
 	if raged:
 		_boss_draw.queue_redraw()
 

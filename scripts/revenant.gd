@@ -26,6 +26,13 @@ const VOLLEY_WINDUP := 1.4
 
 var title := ""
 var arena := Vector3.ZERO
+## Tuning a bigger boss can change.
+var damage_taken := DAMAGE_TAKEN
+var leash := LEASH
+var volleys := true
+var regen_rate := REGEN
+var glow_base := 0.9
+var calm_before_regen := 5.0
 var raged := false
 var _volley_t := 6.0
 var _calm := 0.0
@@ -114,22 +121,22 @@ func _physics_process(delta: float) -> void:
 	var home := Vector2(arena.x, arena.z)
 	var storm: bool = game != null and game.zone != null and game.zone.is_outside(arena)
 	# Leashed to its arena (unless the storm has taken it).
-	if not storm and here.distance_to(home) > LEASH:
+	if not storm and here.distance_to(home) > leash:
 		enemy = null
 		loot_target = null
 		roam_point = home
 		alert_timer = 0.0
 	var fighting := enemy != null and is_instance_valid(enemy) and bool(enemy.get("alive"))
 	_calm = 0.0 if fighting else _calm + delta
-	if _calm > 5.0 and hp < 100.0 and not raged:
-		hp = minf(100.0, hp + REGEN * delta)
+	if _calm > calm_before_regen and hp < 100.0 and not raged:
+		hp = minf(100.0, hp + regen_rate * delta)
 	# Lobs its volley where it saw you last, over walls if need be.
-	if fighting and (enemy_visible() or _last_seen_t < 5.0):
+	if volleys and fighting and (enemy_visible() or _last_seen_t < 5.0):
 		_volley_t -= delta
 		if _volley_t <= 0.0:
 			_volley_t = VOLLEY_EVERY * (0.7 if raged else 1.0)
 			_volley((enemy as Node3D).global_position)
-	_glow.light_energy = 0.9 + (0.6 if raged else 0.0) + sin(Time.get_ticks_msec() * 0.004) * 0.2
+	_glow.light_energy = glow_base + (0.5 * glow_base if raged else 0.0) + sin(Time.get_ticks_msec() * 0.004) * 0.2 * glow_base
 
 
 func _pick_roam_point() -> void:
@@ -146,7 +153,7 @@ func take_damage(amount: float, pos: Vector3 = Vector3.ZERO, headshot: bool = fa
 	if puppet:
 		return super.take_damage(amount, pos, headshot, source)
 	# The storm burns it like anyone; bullets and blasts barely scratch it.
-	var scaled := amount * (DAMAGE_TAKEN if source != null else 1.0)
+	var scaled := amount * (damage_taken if source != null else 1.0)
 	var killed := super.take_damage(scaled, pos, headshot, source)
 	if alive and not raged and hp <= 50.0:
 		_rage()

@@ -96,6 +96,18 @@ const SURVEY_RANGE := 300.0
 ## Host: owners blessed by the Ember King (kills pay half again).
 var ember_blessed: Dictionary = {}
 const KNEEL_TIME := 2.0
+## Gifts: powers for the rest of the match, from fallen bosses.
+const GIFTS := {
+	"blink": ["BLINK", "PRESS V: STEP NINE METRES THROUGH THE AIR (5 S TO RECOVER)"],
+	"second": ["SECOND WIND", "THE NEXT BLOW THAT WOULD FELL YOU LEAVES YOU STANDING"],
+	"aegis": ["EMBER AEGIS", "A SHIELD OF 60 THAT REBUILDS WHEN YOU ARE NOT HIT"],
+	"storm": ["STORMWALKER", "THE STORM CANNOT HURT YOU"],
+	"hawk": ["HAWK'S EYE", "EVERY 20 SECONDS, THE SOLDIERS NEAR YOU SHOW ON YOUR MAP"],
+	"blood": ["BLOODTHIRST", "A FIFTH OF THE DAMAGE YOU DEAL HEALS YOU"],
+	"titan": ["TITAN", "+50 MAXIMUM HEALTH"],
+}
+## Host: owner -> gifts already given (so nobody gets the same twice).
+var _gifted: Dictionary = {}
 const BLESSINGS := {
 	"swift": ["SWIFTNESS", "YOU MOVE A LITTLE FASTER"],
 	"steady": ["STEADY AIM", "YOUR GUNS KICK A QUARTER LESS"],
@@ -167,6 +179,7 @@ func reset() -> void:
 	ember_mult = 1
 	ember_blessed.clear()
 	_surveyed.clear()
+	_gifted.clear()
 	for i in idol_used.size():
 		idol_used[i] = false
 		if i < _idol_eyes.size() and is_instance_valid(_idol_eyes[i]):
@@ -1028,9 +1041,9 @@ func on_bot_eliminated(victim: Bot) -> void:
 		if ember_blessed.has(killer_o):
 			n = int(float(n) * 1.5)
 		if victim is Revenant:
-			n += 1200
-			why = "REVENANT FELLED"
-			give_sigil(killer_o, 1, "THE REVENANT'S SIGIL IS YOURS  —  IT OPENS A SEALED VAULT")
+			n += 2500 if victim is Colossus else 1200
+			why = "COLOSSUS FELLED" if victim is Colossus else "REVENANT FELLED"
+			give_sigil(killer_o, 1, "THE %s'S SIGIL IS YOURS  —  IT OPENS A SEALED VAULT" % ("COLOSSUS" if victim is Colossus else "REVENANT"))
 		award(killer_o, n, why)
 		_count_kill(killer_o)
 	if victim.is_human and branded.has(victim.peer_id):
@@ -1039,6 +1052,23 @@ func on_bot_eliminated(victim: Bot) -> void:
 			award(killer_o, BRAND_REWARD / 2, "BRANDED SLAIN")
 	if game.events != null:
 		game.events.on_bot_eliminated(victim)
+	# A fallen boss gives Gifts: a Revenant to whoever felled it, a Colossus
+	# to everyone who stood against it.
+	if victim is Revenant:
+		var takers: Array = []
+		if killer_o >= 0:
+			takers.append(killer_o)
+		if victim is Colossus:
+			if game.player != null and game.player.alive and game.player.global_position.distance_to(victim.global_position) < 90.0 and not takers.has(0):
+				takers.append(0)
+			for id in game.humans:
+				var h = game.humans[id]
+				if h != null and is_instance_valid(h) and (h as Bot).alive and (h as Node3D).global_position.distance_to(victim.global_position) < 90.0 and not takers.has(int(id)):
+					takers.append(int(id))
+		for o2 in takers:
+			give_gift(int(o2))
+			if victim is Colossus and int(o2) == killer_o:
+				give_gift(int(o2))
 	if victim.has_meta("writ_mark"):
 		var o := int(victim.get_meta("writ_mark"))
 		victim.remove_meta("writ_mark")
@@ -1134,6 +1164,18 @@ func _unbrand(o: int, survived: bool) -> void:
 	if survived:
 		award(o, BRAND_REWARD, "SURVIVED BRANDED")
 	_send_event(o, {"ev": "unbranded", "won": survived})
+
+
+## Host: a power for the rest of the match, one they do not have yet.
+func give_gift(o: int) -> void:
+	var have: Array = _gifted.get(o, [])
+	var pool: Array = GIFTS.keys().filter(func(k): return not have.has(k))
+	if pool.is_empty():
+		return
+	var k: String = pool[randi() % pool.size()]
+	have.append(k)
+	_gifted[o] = have
+	_send_event(o, {"ev": "gift", "kind": k})
 
 
 func award(o: int, n: int, why: String) -> void:
@@ -1290,6 +1332,20 @@ func apply_event(e: Dictionary) -> void:
 			hud.set_sigils(my_sigils)
 			if str(e.get("why", "")) != "":
 				hud.show_notice(str(e.get("why", "")), 3.5)
+		"gift":
+			var gk := str(e.get("kind", ""))
+			if GIFTS.has(gk) and game.player != null:
+				game.player.gifts[gk] = true
+				if gk == "aegis":
+					game.player.aegis = game.player.AEGIS_MAX
+				if gk == "titan":
+					game.player.hp = minf(game.player.max_hp(), game.player.hp + 50.0)
+					game.player._emit_health()
+				game.sfx.play_ui("vault_open", -6.0)
+				hud.show_big("GIFT:  %s" % str(GIFTS[gk][0]), Color(1.0, 0.86, 0.45), 3.4)
+				hud.show_notice("%s  —  FOR THE REST OF THE MATCH" % str(GIFTS[gk][1]), 5.0)
+		"boss_fx":
+			Colossus.show_fx(game, e.get("fx", {}))
 		"idol_used":
 			var ii := int(e.get("i", -1))
 			if ii >= 0 and ii < idol_used.size():
