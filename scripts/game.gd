@@ -5831,7 +5831,20 @@ func _run_gpu_bench() -> void:
 		if v.type == "city":
 			spots.append(Vector3(v.center.x, 0, v.center.y))
 			break
+	# The same forest spot every run, so runs compare.
+	seed(4242)
 	spots.append(_random_ground_point(150.0))
+	# GB_OPT="fog:1,lighting:2": settings as if picked in the menu.
+	if OS.get_environment("GB_OPT") != "":
+		for kv in OS.get_environment("GB_OPT").split(","):
+			var pr := kv.split(":")
+			options[pr[0]] = int(pr[1])
+		_apply_options()
+	if OS.get_environment("GB_SHADOWDIST") != "":
+		world.sun.directional_shadow_max_distance = float(OS.get_environment("GB_SHADOWDIST"))
+	if OS.get_environment("GB_TREESHADOW") != "":
+		for n in world.find_children("T_*", "MultiMeshInstance3D", true, false):
+			(n as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if OS.get_environment("GB_TREESHADOW") == "1" else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	for sp: Vector3 in spots:
 		player.global_position = ground_at(Vector3(sp.x, terrain.height_at(sp.x, sp.z) + 2.0, sp.z)) + Vector3.UP * 0.2
 		player.velocity = Vector3.ZERO
@@ -7774,6 +7787,12 @@ func _apply_graphics() -> void:
 		var base: float = mmi.get_meta("vr")
 		if base > 0.0:
 			mmi.visibility_range_end = base * k
+	# Tree shadows are the most expensive thing in a forest (every leaf
+	# card is drawn again into the shadow map): LOW goes without, unless the
+	# shadow option asks for more.
+	var tree_shadows := graphics_quality >= 1 or int(options.get("shadows", 0)) >= 3
+	for n in world.find_children("T_*", "MultiMeshInstance3D", true, false):
+		(n as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if tree_shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	if world.grass != null and DisplayServer.get_name() != "headless":
 		var gr := int(options.get("grass", 0))
 		world.grass.set_radius([0.0, 26.0, 36.0, 46.0][graphics_quality] if gr == 0 else [0.0, 0.0, 22.0, 36.0, 52.0][gr])

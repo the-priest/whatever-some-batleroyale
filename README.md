@@ -253,7 +253,9 @@ The game starts fullscreen; **F11** or **Alt + Enter** switches to a window and 
 
 Settings, then **GRAPHICS**, cycles four presets:
 
-- **LOW / MEDIUM:** fast.
+- **LOW:** the fastest. Trees cast no shadows (they are the most expensive thing to shadow), two
+  shadow cascades, the 3D view rendered at 77% and sharpened back up.
+- **MEDIUM:** fast, with tree shadows, ambient occlusion and bloom.
 - **HIGH:** screen-space indirect light and ambient occlusion, reflections, volumetric fog and eye
   adaptation.
 - **ULTRA:** adds SDFGI global illumination (sunlight bounces into rooms), softer and longer
