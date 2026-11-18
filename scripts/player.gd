@@ -105,6 +105,12 @@ var kick_rot_vel := Vector3.ZERO
 var _cam_roll := 0.0
 var _bolt_sound := false
 var _reload_dur := 1.0
+## Old Gods' blessings held this match: swift, steady, quick, vigour, warding, ember.
+var blessings: Dictionary = {}
+
+
+func max_hp() -> float:
+	return 125.0 if blessings.has("vigour") else 100.0
 var _reload_need := 1
 var _reload_was_empty := false
 var _reload_events: Dictionary = {}
@@ -759,7 +765,7 @@ func _ground(delta: float) -> void:
 	if _sprint_on and (input.y >= -0.3 or crouch or aiming):
 		_sprint_on = false
 	sprinting = _ap("sprint") and input.y < -0.3 and not crouch and not aiming and not healing and _sprint_lock <= 0.0 and is_on_floor() and absf(lean) < 0.2
-	var speed := CROUCH if crouch else (SPRINT if sprinting else WALK)
+	var speed := (CROUCH if crouch else (SPRINT if sprinting else WALK)) * (1.08 if blessings.has("swift") else 1.0)
 	if aiming:
 		speed *= 0.62
 	if reloading:
@@ -1740,7 +1746,7 @@ func start_reload() -> void:
 	reloading = true
 	_reload_was_empty = current_mag() == 0
 	_reload_need = mag_size() - current_mag()
-	_reload_dur = float(d["reload"]) * (1.0 if _reload_was_empty else 0.82)
+	_reload_dur = float(d["reload"]) * (1.0 if _reload_was_empty else 0.82) * (0.75 if blessings.has("quick") else 1.0)
 	if Weapons.cls(id) == "shotgun":
 		_reload_need = mini(_reload_need, current_reserve())
 		_reload_dur = float(d["reload"]) * clampf(float(_reload_need) / float(d["mag"]), 0.35, 1.0)
@@ -1994,7 +2000,7 @@ func cur_scope() -> String:
 
 
 func recoil_mult() -> float:
-	return 0.68 if bool(cur_att().get("comp", false)) else 1.0
+	return (0.68 if bool(cur_att().get("comp", false)) else 1.0) * (0.75 if blessings.has("steady") else 1.0)
 
 
 # -------------------------------------------------------------- consumables --
@@ -2013,7 +2019,7 @@ func use_item(item: String) -> void:
 	if item == "bandage" and hp >= 75.0:
 		notice.emit("BANDAGES ONLY HEAL TO 75")
 		return
-	if item == "med" and hp >= 100.0:
+	if item == "med" and hp >= max_hp():
 		notice.emit("ALREADY AT FULL HEALTH")
 		return
 	if item == "energy" and boost >= 95.0:
@@ -2035,7 +2041,7 @@ func start_heal() -> void:
 		use_item("med")
 	elif hp < 75.0 and bandages > 0:
 		use_item("bandage")
-	elif meds > 0 and hp < 100.0:
+	elif meds > 0 and hp < max_hp():
 		use_item("med")
 	elif energy > 0:
 		use_item("energy")
@@ -2060,7 +2066,7 @@ func _finish_heal() -> void:
 		"med":
 			if meds > 0:
 				meds -= 1
-				hp = minf(100.0, hp + 60.0)
+				hp = minf(max_hp(), hp + 60.0)
 		"energy":
 			if energy > 0:
 				energy -= 1
@@ -2083,11 +2089,11 @@ func _tick_boost(delta: float) -> void:
 	if boost <= 0.0:
 		return
 	boost = maxf(0.0, boost - delta * 2.0)
-	if hp < 100.0:
+	if hp < max_hp():
 		_boost_acc += delta
 		if _boost_acc >= 1.0:
 			_boost_acc -= 1.0
-			hp = minf(100.0, hp + 1.5)
+			hp = minf(max_hp(), hp + 1.5)
 			_emit_health()
 
 
@@ -2104,7 +2110,7 @@ func add_armor(amount: float) -> void:
 
 
 func heal(amount: float) -> void:
-	hp = minf(100.0, hp + amount)
+	hp = minf(max_hp(), hp + amount)
 	_emit_health()
 
 
@@ -2114,7 +2120,7 @@ const ABSORB := [0.0, 0.30, 0.40, 0.55]
 func take_damage(amount: float, from_pos: Vector3 = Vector3.ZERO, headshot: bool = false, source: Node = null) -> bool:
 	if not alive or spawn_protect > 0.0:
 		return false
-	var dmg := amount
+	var dmg := amount * (0.88 if blessings.has("warding") and source != null else 1.0)
 	if source != null:
 		# The storm ignores armour; bullets and blasts do not.
 		if headshot and helmet_level > 0:
@@ -2482,6 +2488,7 @@ func apply_net_inventory(d: Dictionary) -> void:
 
 
 func reset_for_match() -> void:
+	blessings.clear()
 	_throw_t = -1.0
 	_mantle = []
 	alive = true

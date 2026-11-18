@@ -47,7 +47,7 @@ build.
 
 ---
 
-## Phase 1: Writs, Embers and Wayshrines (the core loop)
+## Phase 1: Writs, Embers and Wayshrines (the core loop) — DONE
 
 **Writ Boards** stand in every town square and at the big landmarks: a timber frame with parchment
 notices and a lantern. Walk up and press F to see the board's writs (one to three). Take one. You
@@ -109,7 +109,7 @@ from it.
 
 ---
 
-## Phase 2: Revenants and Vaults (souls-like danger)
+## Phase 2: Revenants and Vaults (souls-like danger) — DONE
 
 **Revenants** are named elite enemies, 3 to 5 per match. Each one guards a vault at a landmark
 (Stormkeep, Old Henge, Sunspire, Dragon's Rest, Crystal Hollows and the others).
@@ -138,7 +138,7 @@ from it.
 
 ---
 
-## Phase 3: Death that matters
+## Phase 3: Death that matters — Kindling and Cinders DONE (downed/revive still to do)
 
 **Cinders.** When you die, your unspent Embers drop as a glowing Cinder. If you come back through
 Kindling or a squad revive, you can recover it. Anyone else who reaches it first takes half.
@@ -157,7 +157,7 @@ your kills pay more.
 
 ---
 
-## Phase 4: More to explore and find
+## Phase 4: More to explore and find — Shrines of the Old Gods DONE
 
 - **Codex pages:** 40 pieces of lore across the island, in ruins, on a skeleton's hand, under a
   jetty, at the top of the giant tree. Collected pages persist and read in a Codex screen on the
@@ -180,7 +180,7 @@ your kills pay more.
 
 ---
 
-## Phase 5: Living island events
+## Phase 5: Living island events — Reliquary, Fog Bank, The Hunt and Blood Moon DONE
 
 These are announced with a horn and a banner, and appear on the map.
 

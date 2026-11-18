@@ -10,6 +10,8 @@ var game: Node = null
 var ground_y := 0.0
 var landed := false
 var crate: MeshInstance3D
+## A Reliquary (the island event): gold, and richer inside.
+var golden := false
 var chute: MeshInstance3D
 var smoke: GPUParticles3D
 var beacon: MeshInstance3D
@@ -31,6 +33,14 @@ func _ready() -> void:
 	m.albedo_color = Color(0.18, 0.30, 0.52)
 	m.roughness = 0.55
 	m.metallic = 0.3
+	if golden:
+		# A Reliquary: gold, and it glows a little.
+		m.albedo_color = Color(0.9, 0.68, 0.22)
+		m.metallic = 0.85
+		m.roughness = 0.3
+		m.emission_enabled = true
+		m.emission = Color(1.0, 0.7, 0.25)
+		m.emission_energy_multiplier = 0.35
 	crate.material_override = m
 	crate.position.y = 0.6
 	add_child(crate)

@@ -37,7 +37,10 @@ const WARES := [
 	["raven", "RAVEN'S EYE  ·  SEE EVERY SOLDIER WITHIN 250 M", 450],
 	["vest3", "WARDEN'S PLATE  ·  LEVEL 3 VEST", 1100],
 	["kindling", "KINDLING  ·  RISE AGAIN HERE WHEN YOU FALL", 1500],
+	["sigil", "SIGIL  ·  OPENS ONE SEALED VAULT", 900],
 ]
+const VAULT_EMBERS := 600
+const VAULT_GUNS := ["sniper", "axmc", "lmg", "m24", "dmr"]
 ## Kindling stops working once the circle is this small: the fires go out.
 const KINDLING_MIN_RADIUS := 160.0
 const RISE_DELAY := 4.5
@@ -74,6 +77,30 @@ var _flicker := 0.0
 var shrines: Array = []
 ## The shrine whose wares are open on screen, or -1.
 var shop := -1
+## [{door, yaw, inside, name, door_w, door_h}] from the villages, and which are open.
+var vaults: Array = []
+var vault_open: Array[bool] = []
+var _doors: Array[Node3D] = []
+## Host: owner -> Sigils held. And this machine's own count.
+var sigils: Dictionary = {}
+var my_sigils := 0
+## Blood Moon doubles what kills pay.
+var ember_mult := 1
+## Shrines of the Old Gods: [{pos, yaw, god, kind, eyes, eye_basis}] and which are spent.
+var idols: Array = []
+var idol_used: Array[bool] = []
+var _idol_eyes: Array[Node3D] = []
+## Host: owners blessed by the Ember King (kills pay half again).
+var ember_blessed: Dictionary = {}
+const KNEEL_TIME := 2.0
+const BLESSINGS := {
+	"swift": ["SWIFTNESS", "YOU MOVE A LITTLE FASTER"],
+	"steady": ["STEADY AIM", "YOUR GUNS KICK A QUARTER LESS"],
+	"quick": ["NIMBLE HANDS", "YOU RELOAD A QUARTER FASTER"],
+	"vigour": ["VIGOUR", "+25 MAXIMUM HEALTH"],
+	"warding": ["WARDING", "BULLETS AND BLASTS HURT YOU LESS"],
+	"ember": ["EMBER-TOUCHED", "YOUR KILLS PAY HALF AGAIN IN EMBERS"],
+}
 ## Kindling carried (one at most). Solo games only.
 var kindling := 0
 ## Embers left where you fell: {pos, amount}, or {} for none.
@@ -102,6 +129,17 @@ func setup(p_game: Node) -> void:
 	for w in shrines:
 		sm.append(Vector2(w.pos.x, w.pos.z))
 	game.hud.shrine_marks = sm
+	idols = game.world.villages.old_gods
+	idol_used.resize(idols.size())
+	idol_used.fill(false)
+	for idol in idols:
+		_idol_eyes.append(_make_eyes(idol))
+	vaults = game.world.villages.vaults
+	vault_open.resize(vaults.size())
+	vault_open.fill(false)
+	for v in vaults:
+		_doors.append(_make_door(v))
+	_vault_marks()
 
 
 func reset() -> void:
@@ -121,6 +159,24 @@ func reset() -> void:
 	_kill_times.clear()
 	branded.clear()
 	my_brand = 0.0
+	sigils.clear()
+	my_sigils = 0
+	ember_mult = 1
+	ember_blessed.clear()
+	for i in idol_used.size():
+		idol_used[i] = false
+		if i < _idol_eyes.size() and is_instance_valid(_idol_eyes[i]):
+			_idol_eyes[i].visible = true
+	if game != null and game.hud != null:
+		game.hud.set_blessings([])
+	for i in vault_open.size():
+		if vault_open[i]:
+			vault_open[i] = false
+			if i < _doors.size() and is_instance_valid(_doors[i]):
+				_doors[i].position.y = 0.0
+				_doors[i].visible = true
+				(_doors[i].get_meta("shape") as CollisionShape3D).disabled = false
+	_vault_marks()
 	if game != null and game.hud != null:
 		game.hud.set_writ({})
 		game.hud.set_embers(0, 0, "")
@@ -155,9 +211,17 @@ func prompt(p: Vector3) -> String:
 		return "[%s]  TAKE THE %s  —  %s   (+%d EMBERS)" % [key, TITLE[kind], BLURB[kind], REWARD[kind]]
 	var act := _act_here(p)
 	if act != "":
+		if act == "kneel":
+			var idol: Dictionary = idols[idol_near(p)]
+			return "HOLD [%s]  KNEEL BEFORE %s   (%s)" % [key, str(idol.god), str(BLESSINGS[str(idol.kind)][0])]
 		return "HOLD [%s]  %s" % [key, "DIG UP THE RELIC" if act == "dig" else "LIGHT THE BEACON"]
 	if shrine_near(p) >= 0:
 		return "[%s]  WAYSHRINE  —  SPEND YOUR EMBERS   (◆ %d)" % [key, my_embers]
+	var vi := vault_near(p)
+	if vi >= 0:
+		if my_sigils > 0:
+			return "[%s]  OPEN THE VAULT  —  USE A SIGIL   (%d HELD)" % [key, my_sigils]
+		return "SEALED VAULT  —  A SIGIL OPENS IT. REVENANTS CARRY THEM; WAYSHRINES SELL THEM"
 	return ""
 
 
@@ -168,6 +232,16 @@ func interact(p: Vector3) -> bool:
 		var si := shrine_near(p)
 		if si >= 0:
 			open_shop(si)
+			return true
+		var vi := vault_near(p)
+		if vi >= 0:
+			if my_sigils <= 0:
+				game.hud.show_notice("YOU HAVE NO SIGIL  —  FELL A REVENANT, OR BUY ONE AT A WAYSHRINE", 2.6)
+				game.sfx.play_ui("empty_click", -6.0)
+			elif game.net_is_client():
+				game.net.send_vault_open(vi)
+			else:
+				open_vault(0, vi)
 			return true
 		return false
 	if not view.is_empty() or board_cool[bi] > 0.0:
@@ -181,6 +255,8 @@ func interact(p: Vector3) -> bool:
 
 ## The dig or light action available where you stand, or "".
 func _act_here(p: Vector3) -> String:
+	if idol_near(p) >= 0:
+		return "kneel"
 	if view.is_empty() or not view.has("act"):
 		return ""
 	var ap: Vector3 = view["act_pos"]
@@ -204,9 +280,9 @@ func _process(delta: float) -> void:
 	var pl: Player = game.player
 	var act := _act_here(pl.global_position) if pl.alive and pl.mode == Player.Mode.GROUND else ""
 	if act != "" and Input.is_action_pressed("interact") and not game.input_locked:
-		var need := DIG_TIME if act == "dig" else LIGHT_TIME
+		var need := DIG_TIME if act == "dig" else (KNEEL_TIME if act == "kneel" else LIGHT_TIME)
 		_hold += delta
-		game.hud.set_progress("DIGGING ..." if act == "dig" else "LIGHTING THE BEACON ...", clampf(_hold / need, 0.0, 1.0))
+		game.hud.set_progress({"dig": "DIGGING ...", "kneel": "KNEELING ..."}.get(act, "LIGHTING THE BEACON ..."), clampf(_hold / need, 0.0, 1.0))
 		if _hold >= need and not _hold_sent:
 			_hold_sent = true
 			game.hud.set_progress("", 0.0)
@@ -333,6 +409,8 @@ func buy_on(o: int, si: int, n: int) -> void:
 		"kindling":
 			kindling = 1
 			game.hud.set_kindling(true)
+		"sigil":
+			give_sigil(o, 1, "")
 		"raven":
 			var pts: Array = []
 			for b in game.bots:
@@ -463,6 +541,165 @@ func _check_cinder() -> void:
 		purse[0] = int(purse.get(0, 0)) + amount
 		_embers_here(int(purse[0]), amount, "RECOVERED")
 		game.hud.show_big("EMBERS RECOVERED", Color(1.0, 0.72, 0.36), 2.2)
+
+
+# ---------------------------------------------------------- the old gods --
+
+func idol_near(p: Vector3) -> int:
+	for i in idols.size():
+		if idol_used[i]:
+			continue
+		var ip: Vector3 = idols[i].pos
+		if Vector2(p.x - ip.x, p.z - ip.z).length() < 2.2 and absf(p.y - ip.y) < 2.0:
+			return i
+	return -1
+
+
+## The idol's eyes: two embers in the stone that go out once it has blessed
+## someone. Built on every machine.
+func _make_eyes(idol: Dictionary) -> Node3D:
+	var root := Node3D.new()
+	game.world.add_child(root)
+	root.global_transform = Transform3D(idol.eye_basis, idol.eyes)
+	var em := _mat(Color(0.55, 1.0, 0.75), 5.0)
+	em.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	for sx: float in [-0.11, 0.11]:
+		_box(root, Vector3(0.09, 0.04, 0.03), Vector3(sx, 0, 0), em)
+	MeshMerge.merge(root, [])
+	var l := OmniLight3D.new()
+	l.light_color = Color(0.55, 1.0, 0.75)
+	l.light_energy = 0.8
+	l.omni_range = 4.0
+	l.position = Vector3(0, 0, 0.4)
+	l.distance_fade_enabled = true
+	l.distance_fade_begin = 80.0
+	l.distance_fade_length = 30.0
+	root.add_child(l)
+	return root
+
+
+## Host: owner `o` knelt long enough at an idol.
+func _kneel(o: int) -> void:
+	var at := _owner_pos(o)
+	if at == Vector3.INF or not _owner_alive(o):
+		return
+	var ii := idol_near(at + Vector3.UP * 0.0)
+	if ii < 0:
+		return
+	idol_used[ii] = true
+	var kind := str(idols[ii].kind)
+	if kind == "ember":
+		ember_blessed[o] = true
+	if game.net_on():
+		for pid in game.net.roster:
+			if int(pid) != 1:
+				game.net.send_writ_event(int(pid), {"ev": "idol_used", "i": ii})
+	apply_event({"ev": "idol_used", "i": ii})
+	_send_event(o, {"ev": "blessing", "kind": kind, "god": str(idols[ii].god)})
+
+
+# --------------------------------------------------------------- vaults --
+
+func vault_near(p: Vector3) -> int:
+	for i in vaults.size():
+		if vault_open[i]:
+			continue
+		var v: Dictionary = vaults[i]
+		var front: Vector3 = v.door + Basis(Vector3.UP, float(v.yaw)) * Vector3(0, 0, 1.0)
+		if Vector2(p.x - front.x, p.z - front.z).length() < 1.9 and absf(p.y - front.y) < 2.2:
+			return i
+	return -1
+
+
+## An iron door with a gold sigil set in it, in the doorway; it sinks into
+## the floor when opened. Built on every machine (the island is the same).
+func _make_door(v: Dictionary) -> Node3D:
+	var root := StaticBody3D.new()
+	game.world.add_child(root)
+	var holder := Node3D.new()
+	game.world.add_child(holder)
+	holder.global_transform = Transform3D(Basis(Vector3.UP, float(v.yaw)), v.door)
+	root.reparent(holder, false)
+	var dw := float(v.door_w)
+	var dh := float(v.door_h)
+	var iron := _mat(Color(0.13, 0.12, 0.12), 0.0, 0.45)
+	iron.metallic = 0.7
+	var gold := _mat(Color(0.95, 0.7, 0.25), 2.2, 0.3)
+	gold.metallic = 0.8
+	_box(root, Vector3(dw, dh, 0.16), Vector3(0, dh * 0.5, 0), iron)
+	for k in 4:
+		_box(root, Vector3(dw + 0.04, 0.07, 0.2), Vector3(0, 0.3 + float(k) * (dh - 0.6) / 3.0, 0), iron)
+	_box(root, Vector3(0.36, 0.36, 0.05), Vector3(0, dh * 0.58, 0.1), gold, Vector3(0, 0, PI * 0.25))
+	_box(root, Vector3(0.14, 0.14, 0.06), Vector3(0, dh * 0.58, 0.12), _mat(Color(0.08, 0.06, 0.05)), Vector3(0, 0, PI * 0.25))
+	MeshMerge.merge(root, [])
+	var cs := CollisionShape3D.new()
+	var sh := BoxShape3D.new()
+	sh.size = Vector3(dw, dh, 0.3)
+	cs.shape = sh
+	cs.position = Vector3(0, dh * 0.5, 0)
+	root.add_child(cs)
+	root.set_meta("shape", cs)
+	holder.set_meta("shape", cs)
+	holder.set_meta("door", root)
+	return holder
+
+
+func give_sigil(o: int, n: int, why: String) -> void:
+	sigils[o] = int(sigils.get(o, 0)) + n
+	_send_event(o, {"ev": "sigil", "n": int(sigils[o]), "why": why})
+
+
+## Host: owner `o` breaks the seal on vault `vi`.
+func open_vault(o: int, vi: int) -> void:
+	if vi < 0 or vi >= vaults.size() or vault_open[vi] or int(sigils.get(o, 0)) <= 0 or not _owner_alive(o):
+		return
+	var v: Dictionary = vaults[vi]
+	var at := _owner_pos(o)
+	var front: Vector3 = v.door + Basis(Vector3.UP, float(v.yaw)) * Vector3(0, 0, 1.0)
+	if at == Vector3.INF or Vector2(at.x - front.x, at.z - front.z).length() > 3.5:
+		return
+	sigils[o] = int(sigils[o]) - 1
+	_send_event(o, {"ev": "sigil", "n": int(sigils[o]), "why": ""})
+	if game.net_on():
+		game.net.send_vault_open(vi)
+	apply_vault_open(vi)
+	# The hoard, laid out on the coffers and the floor.
+	var b := Basis(Vector3.UP, float(v.yaw))
+	var inside: Vector3 = v.inside
+	var gun: String = VAULT_GUNS[randi() % VAULT_GUNS.size()]
+	var items: Array = [["weapon", gun, Vector3(0, 0.75, -2.0)], ["ammo", Weapons.caliber(gun), Vector3(0.5, 0.05, -1.2)],
+		["ammo", Weapons.caliber(gun), Vector3(-0.5, 0.05, -1.2)], ["armor", "3", Vector3(-1.5, 0.75, -0.2)],
+		["helmet", "3", Vector3(1.5, 0.75, -0.2)], ["scope", "8x", Vector3(0.0, 0.05, 0.2)], ["med", "", Vector3(-0.6, 0.05, 0.8)],
+		["med", "", Vector3(0.6, 0.05, 0.8)], ["grenade", "", Vector3(0.0, 0.05, 1.2)]]
+	for it: Array in items:
+		var p: Vector3 = inside + b * (it[2] as Vector3) + Vector3.UP * 0.1
+		game._spawn_loot(it[0], it[1], game.ground_at(p + Vector3.UP * 0.4) + Vector3.UP * 0.08)
+	award(o, VAULT_EMBERS, "VAULT OPENED")
+
+
+## Everyone: the vault's door grinds down into the floor.
+func apply_vault_open(vi: int) -> void:
+	if vi < 0 or vi >= vaults.size() or vault_open[vi]:
+		return
+	vault_open[vi] = true
+	_vault_marks()
+	var door := _doors[vi]
+	(door.get_meta("shape") as CollisionShape3D).disabled = true
+	var root := door.get_meta("door") as Node3D
+	var tw := root.create_tween()
+	tw.tween_property(root, "position:y", -float(vaults[vi].door_h) - 0.1, 2.4).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_callback(func(): door.visible = false)
+	game.sfx.play_at("vault_open", door.global_position + Vector3.UP * 1.2, 4.0)
+	if game.player != null and game.player.global_position.distance_to(door.global_position) < 60.0:
+		game.hud.show_big("THE VAULT OPENS", Color(1.0, 0.82, 0.38), 2.4)
+
+
+func _vault_marks() -> void:
+	var vm: Array = []
+	for i in vaults.size():
+		vm.append([Vector2(vaults[i].door.x, vaults[i].door.z), vault_open[i] if i < vault_open.size() else false])
+	if game != null and game.hud != null:
+		game.hud.vault_marks = vm
 
 
 # ------------------------------------------------------------------ host --
@@ -675,6 +912,9 @@ func _call_soldiers(site: Vector3, n: int) -> void:
 
 ## A player finished holding F at the dig spot or the beacon.
 func act_on(o: int, act: String) -> void:
+	if act == "kneel":
+		_kneel(o)
+		return
 	if not active.has(o):
 		return
 	var w: Dictionary = active[o]
@@ -725,9 +965,13 @@ func on_bot_eliminated(victim: Bot) -> void:
 		if src is Node3D and (src as Node3D).global_position.distance_to(victim.global_position) > 150.0:
 			n += LONG_SHOT_EMBERS
 			why = "LONG SHOT" if why == "KILL" else why + " · LONG SHOT"
+		n *= ember_mult
+		if ember_blessed.has(killer_o):
+			n = int(float(n) * 1.5)
 		if victim is Revenant:
 			n += 1200
 			why = "REVENANT FELLED"
+			give_sigil(killer_o, 1, "THE REVENANT'S SIGIL IS YOURS  —  IT OPENS A SEALED VAULT")
 		award(killer_o, n, why)
 		_count_kill(killer_o)
 	if victim.is_human and branded.has(victim.peer_id):
@@ -971,6 +1215,31 @@ func apply_event(e: Dictionary) -> void:
 			hud.killfeed("%s %s BRANDED  —  HUNT THEM FOR EMBERS" % [str(e.get("who", "")), "IS"], HUD.DANGER)
 		"reveal_brand":
 			hud.reveal(e.get("pts", []), 6.0)
+		"sigil":
+			my_sigils = int(e.get("n", 0))
+			hud.set_sigils(my_sigils)
+			if str(e.get("why", "")) != "":
+				hud.show_notice(str(e.get("why", "")), 3.5)
+		"idol_used":
+			var ii := int(e.get("i", -1))
+			if ii >= 0 and ii < idol_used.size():
+				idol_used[ii] = true
+				if ii < _idol_eyes.size() and is_instance_valid(_idol_eyes[ii]):
+					_idol_eyes[ii].visible = false
+		"blessing":
+			var bk := str(e.get("kind", ""))
+			if BLESSINGS.has(bk) and game.player != null:
+				game.player.blessings[bk] = true
+				if bk == "vigour":
+					game.player.hp = minf(game.player.max_hp(), game.player.hp + 25.0)
+					game.player._emit_health()
+				game.sfx.play_ui("writ_done", -6.0)
+				hud.show_big("BLESSED: %s" % str(BLESSINGS[bk][0]), Color(0.6, 1.0, 0.78), 3.0)
+				hud.show_notice("%s  —  %s, FOR THE REST OF THE MATCH" % [str(e.get("god", "")), str(BLESSINGS[bk][1])], 4.0)
+				var names: Array = []
+				for k in game.player.blessings:
+					names.append(str(BLESSINGS.get(k, [k])[0]))
+				hud.set_blessings(names)
 		"bought":
 			game.sfx.play_ui("shrine_buy", -4.0)
 			hud.show_notice("%s  —  LAID ON THE OFFERING STONE" % str(e.get("what", "")), 2.4)

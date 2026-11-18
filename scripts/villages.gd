@@ -108,6 +108,8 @@ func build(p_terrain: Terrain, p_seed: int) -> void:
 	_washing_lines()
 	_writ_boards()
 	_wayshrines()
+	_vaults()
+	_old_gods()
 	_commit_batches()
 	_commit_colliders()
 	print("[villages] %d villages, %d houses, %d towers, %d ruins, %d pieces, %d loot points, %d colliders" % [
@@ -1994,6 +1996,236 @@ func _wayshrine(at: Vector2, yaw: float) -> Vector3:
 	for sx: float in [-1.0, 1.0]:
 		_add_box_collider(base + b * Vector3(sx * 0.95, 1.6, -0.95), Vector3(0.55, 2.4, 0.4), yaw)
 	return front
+
+
+## Vaults: sealed stone crypts near the great landmarks and old ruins. A
+## Sigil opens one. Read by Writs: [{door (centre of the doorway at the
+## threshold), yaw (the door faces +Z of this), inside (floor centre), name}].
+## The door itself is built by Writs (it moves), the rest is batched here.
+var vaults: Array = []
+const VAULT_COUNT := 5
+const VAULT_W := 5.0
+const VAULT_D := 6.0
+const VAULT_H := 3.3
+
+
+func _vaults() -> void:
+	vaults.clear()
+	var cands: Array = []
+	if landmarks != null:
+		for l in landmarks.labels:
+			cands.append([l[1], str(l[0])])
+	for p in poi_pads:
+		if str(p.type) == "ruin":
+			cands.append([p.center, "THE OLD RUINS"])
+	# Shuffled with the island's own rng: every machine in a LAN game must
+	# build the same vaults.
+	for i in range(cands.size() - 1, 0, -1):
+		var j := rng.randi_range(0, i)
+		var tmp = cands[i]
+		cands[i] = cands[j]
+		cands[j] = tmp
+	for cnd in cands:
+		if vaults.size() >= VAULT_COUNT:
+			break
+		var c: Vector2 = cnd[0]
+		var far := true
+		for v in vaults:
+			if Vector2(v.door.x, v.door.z).distance_to(c) < 350.0:
+				far = false
+		for w in wayshrines:
+			if Vector2(w.pos.x, w.pos.z).distance_to(c) < 40.0:
+				far = false
+		if not far:
+			continue
+		var spot := Vector2.INF
+		for ring: float in [18.0, 24.0, 30.0, 38.0, 46.0]:
+			for k in 16:
+				var a := TAU * float(k) / 16.0 + float(vaults.size()) * 1.3
+				var q := c + Vector2(cos(a), sin(a)) * ring
+				if terrain.height_at(q.x, q.y) < terrain.water_surface_at(q.x, q.y) + 1.0:
+					continue
+				if terrain.roughness(q.x, q.y, 5.0) > 1.4 or not _free_spot(q, 4.6) or blocks_house(q, 4.0):
+					continue
+				spot = q
+				break
+			if spot != Vector2.INF:
+				break
+		if spot == Vector2.INF:
+			continue
+		var to_c := c - spot
+		var yaw := atan2(to_c.x, to_c.y)
+		vaults.append(_vault(spot, yaw, str(cnd[1])))
+		_occupy(spot, 4.6)
+	print("[villages] %d vaults" % vaults.size())
+
+
+## A stone crypt: plinth, thick walls with buttresses, a pitched stone roof,
+## an arched doorway (the iron door is added by Writs), three stone coffers
+## inside and two braziers either side of the steps.
+func _vault(at: Vector2, yaw: float, near: String) -> Dictionary:
+	var b := Basis(Vector3.UP, yaw)
+	var w := VAULT_W
+	var d := VAULT_D
+	var h := VAULT_H
+	var t := 0.5
+	var fy := 0.35
+	# The floor rests on the highest ground under the crypt (so no slope
+	# pokes up through it); the plinth reaches down to the lowest.
+	var lo := INF
+	var hi := -INF
+	for ix in 5:
+		for iz in 6:
+			var lp := Vector3((float(ix) / 4.0 - 0.5) * (w + 1.0), 0, (float(iz) / 5.0 - 0.5) * (d + 3.0))
+			var q3 := b * lp
+			var gh := terrain.height_at(at.x + q3.x, at.y + q3.z)
+			lo = minf(lo, gh)
+			hi = maxf(hi, gh)
+	var base := Vector3(at.x, hi + 0.02 - fy, at.y)
+	var drop := (base.y + fy) - (lo - 0.6)
+	var box := func(size: Vector3, local: Vector3, mat: String, collide := true) -> void:
+		_proc_box(Transform3D(b.scaled_local(size), base + b * local), mat)
+		if collide:
+			_add_box_collider(base + b * local, size, yaw)
+	# Plinth (sunk into the slope) and floor.
+	box.call(Vector3(w + 1.0, drop, d + 1.0), Vector3(0, fy - drop * 0.5, 0), "stone")
+	# Back and side walls.
+	box.call(Vector3(w, h, t), Vector3(0, fy + h * 0.5, -d * 0.5 + t * 0.5), "stone")
+	for sx: float in [-1.0, 1.0]:
+		box.call(Vector3(t, h, d), Vector3(sx * (w * 0.5 - t * 0.5), fy + h * 0.5, 0), "stone")
+		# Buttresses.
+		box.call(Vector3(0.5, h * 0.75, 0.7), Vector3(sx * (w * 0.5 + 0.2), fy + h * 0.375, -d * 0.25), "stone")
+		box.call(Vector3(0.5, h * 0.75, 0.7), Vector3(sx * (w * 0.5 + 0.2), fy + h * 0.375, d * 0.25), "stone")
+	# Front wall either side of the doorway, and the lintel over it.
+	var door_w := 1.7
+	var door_h := 2.5
+	var side_w := (w - door_w) * 0.5
+	for sx: float in [-1.0, 1.0]:
+		box.call(Vector3(side_w, h, t), Vector3(sx * (door_w * 0.5 + side_w * 0.5), fy + h * 0.5, d * 0.5 - t * 0.5), "stone")
+	box.call(Vector3(door_w, h - door_h, t), Vector3(0, fy + door_h + (h - door_h) * 0.5, d * 0.5 - t * 0.5), "stone")
+	box.call(Vector3(door_w + 0.5, 0.3, t + 0.2), Vector3(0, fy + door_h + 0.15, d * 0.5 - t * 0.5), "stone", false)
+	# Pitched roof: two slabs and a ridge.
+	var pitch := 0.42
+	var half := w * 0.5 + 0.35
+	var slab := half / cos(pitch)
+	for sx: float in [-1.0, 1.0]:
+		var rb := b * Basis(Vector3.BACK, -sx * pitch)
+		var rc := Vector3(sx * half * 0.5, fy + h + sin(pitch) * half * 0.5 + 0.12, 0)
+		_proc_box(Transform3D(rb.scaled_local(Vector3(slab, 0.28, d + 0.7)), base + b * rc), "stone")
+		_add_box_collider(base + b * (rc + Vector3(0, -0.2, 0)), Vector3(half, 0.6, d + 0.7), yaw)
+	box.call(Vector3(0.4, 0.3, d + 0.8), Vector3(0, fy + h + sin(pitch) * half + 0.15, 0), "stone", false)
+	# Gable fill above the front and back walls.
+	for sz: float in [-1.0, 1.0]:
+		for i in 3:
+			var gw := w * (1.0 - float(i) / 3.0)
+			box.call(Vector3(gw, sin(pitch) * half / 3.0, t), Vector3(0, fy + h + sin(pitch) * half * (float(i) + 0.5) / 3.0, sz * (d * 0.5 - t * 0.5)), "stone", false)
+	# Steps up to the door.
+	# Steps down from the door, each a block reaching into the ground.
+	for k in 3:
+		var top := fy - 0.2 * float(k + 1) + 0.2
+		var sh := top - (lo - 0.6 - base.y)
+		box.call(Vector3(door_w + 0.8 + 0.3 * float(k), sh, 0.5), Vector3(0, top - sh * 0.5, d * 0.5 + 0.75 + 0.5 * float(k)), "stone")
+	# Stone coffers inside, against the back and side walls.
+	for cp: Vector3 in [Vector3(0, 0, -d * 0.5 + 1.0), Vector3(-w * 0.5 + 1.0, 0, -0.6), Vector3(w * 0.5 - 1.0, 0, -0.6)]:
+		box.call(Vector3(1.1, 0.6, 0.7), cp + Vector3(0, fy + 0.3, 0), "stone")
+		box.call(Vector3(1.2, 0.1, 0.8), cp + Vector3(0, fy + 0.65, 0), "iron", false)
+	# Braziers by the steps.
+	for sx: float in [-1.0, 1.0]:
+		var bp := Vector3(sx * (door_w * 0.5 + 0.9), fy - 0.2, d * 0.5 + 1.0)
+		box.call(Vector3(0.35, 1.0, 0.35), bp + Vector3(0, 0.5, 0), "stone")
+		box.call(Vector3(0.5, 0.12, 0.5), bp + Vector3(0, 1.06, 0), "iron", false)
+		box.call(Vector3(0.3, 0.08, 0.3), bp + Vector3(0, 1.15, 0), "lamp", false)
+	return {"door": base + b * Vector3(0, fy, d * 0.5 - t * 0.5), "yaw": yaw, "inside": base + b * Vector3(0, fy, -0.4),
+		"name": near, "door_w": door_w, "door_h": door_h}
+
+
+## Shrines of the Old Gods: weathered stone idols out in the wilds, away
+## from towns and roads. Kneel at one for its god's blessing (once a match).
+## Read by Writs: [{pos (in front of the idol), yaw, god, kind, eyes}].
+var old_gods: Array = []
+const GODS := [
+	["VARRA OF THE SWIFT WIND", "swift"], ["OSK THE UNSHAKEN", "steady"], ["MIRREN OF THE NIMBLE HANDS", "quick"],
+	["THE GREEN MOTHER", "vigour"], ["HALDOR THE SHIELD", "warding"], ["THE EMBER KING", "ember"],
+]
+
+
+func _old_gods() -> void:
+	old_gods.clear()
+	var keep_off: Array = []
+	for v in village_pads:
+		keep_off.append([v.center, float(v.radius) + 90.0])
+	for p in poi_pads:
+		keep_off.append([p.center, 60.0])
+	if landmarks != null:
+		for l in landmarks.labels:
+			keep_off.append([l[1], 110.0])
+	for w in wayshrines:
+		keep_off.append([Vector2(w.pos.x, w.pos.z), 120.0])
+	for v in vaults:
+		keep_off.append([Vector2(v.door.x, v.door.z), 120.0])
+	var tries := 0
+	# Strict at first (far from everything and each other), then less so.
+	var relax := 1.0
+	while old_gods.size() < GODS.size() and tries < 9000:
+		tries += 1
+		if tries % 1500 == 0:
+			relax *= 0.75
+		var q := Vector2(rng.randf_range(-Terrain.HALF + 120.0, Terrain.HALF - 120.0), rng.randf_range(-Terrain.HALF + 120.0, Terrain.HALF - 120.0))
+		var h := terrain.height_at(q.x, q.y)
+		if h < terrain.water_surface_at(q.x, q.y) + 2.0 or terrain.slope_at(q.x, q.y) > 0.3 or terrain.roughness(q.x, q.y, 4.0) > 1.0:
+			continue
+		var ok := true
+		for k in keep_off:
+			if q.distance_to(k[0]) < float(k[1]) * relax:
+				ok = false
+				break
+		for g in old_gods:
+			if q.distance_to(Vector2(g.pos.x, g.pos.z)) < 380.0 * relax:
+				ok = false
+				break
+		if not ok or _on_road(q, 6.0) or not _free_spot(q, 3.0):
+			continue
+		var god: Array = GODS[old_gods.size()]
+		var yaw := rng.randf() * TAU
+		old_gods.append(_idol(q, yaw, str(god[0]), str(god[1])))
+		_occupy(q, 3.0)
+	print("[villages] %d shrines of the old gods" % old_gods.size())
+
+
+## A moss-grown stone figure on a cracked slab, hands folded, its eyes once
+## lit; a ring of small standing stones round it.
+func _idol(at: Vector2, yaw: float, god: String, kind: String) -> Dictionary:
+	var b := Basis(Vector3.UP, yaw)
+	var lo := terrain.height_at(at.x, at.y)
+	for k in 6:
+		var q := at + Vector2(cos(TAU * k / 6.0), sin(TAU * k / 6.0)) * 2.0
+		lo = minf(lo, terrain.height_at(q.x, q.y))
+	var base := Vector3(at.x, lo, at.y)
+	var tilt := Basis(Vector3.BACK, rng.randf_range(-0.05, 0.05)) * Basis(Vector3.RIGHT, rng.randf_range(-0.04, 0.04))
+	var fb := b * tilt
+	_proc_box(Transform3D(b.scaled_local(Vector3(2.6, 0.5, 2.6)), base + Vector3(0, 0.05, 0)), "stone")
+	_proc_box(Transform3D(fb.scaled_local(Vector3(0.9, 0.5, 0.7)), base + Vector3(0, 0.55, 0)), "stone")
+	_proc_box(Transform3D(fb.scaled_local(Vector3(0.75, 1.5, 0.55)), base + fb * Vector3(0, 1.55, 0)), "stone")
+	# Shoulders, folded arms, head with a heavy brow.
+	_proc_box(Transform3D(fb.scaled_local(Vector3(1.05, 0.32, 0.6)), base + fb * Vector3(0, 2.25, 0)), "stone")
+	_proc_box(Transform3D(fb.scaled_local(Vector3(0.82, 0.22, 0.25)), base + fb * Vector3(0, 1.75, 0.32)), "stone")
+	_proc_box(Transform3D(fb.scaled_local(Vector3(0.52, 0.6, 0.5)), base + fb * Vector3(0, 2.72, 0.02)), "stone")
+	_proc_box(Transform3D(fb.scaled_local(Vector3(0.6, 0.1, 0.18)), base + fb * Vector3(0, 2.86, 0.2)), "stone")
+	# Moss on the shoulders and the slab.
+	_proc_box(Transform3D(fb.scaled_local(Vector3(0.9, 0.06, 0.5)), base + fb * Vector3(-0.08, 2.43, -0.02)), "leaf")
+	_proc_box(Transform3D(b.scaled_local(Vector3(1.2, 0.04, 0.9)), base + b * Vector3(0.5, 0.31, -0.6)), "leaf")
+	# Ring of small stones.
+	for k in 7:
+		var a := TAU * float(k) / 7.0 + 0.3
+		var sp := base + Vector3(cos(a) * 3.0, 0, sin(a) * 3.0)
+		sp.y = terrain.height_at(sp.x, sp.z)
+		var sb := Basis(Vector3.UP, a) * Basis(Vector3.RIGHT, rng.randf_range(-0.12, 0.12))
+		var sh := rng.randf_range(0.6, 1.1)
+		_proc_box(Transform3D(sb.scaled_local(Vector3(0.35, sh, 0.28)), sp + Vector3(0, sh * 0.4, 0)), "stone")
+	_add_box_collider(base + Vector3(0, 0.05, 0), Vector3(2.6, 0.5, 2.6), yaw)
+	_add_box_collider(base + fb * Vector3(0, 1.7, 0), Vector3(1.0, 2.6, 0.7), yaw)
+	return {"pos": base + b * Vector3(0, 0.3, 1.25), "yaw": yaw, "god": god, "kind": kind,
+		"eyes": base + fb * Vector3(0, 2.76, 0.27), "eye_basis": fb}
 
 
 ## Washing hung out behind about one house in four: two posts, a line, and

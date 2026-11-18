@@ -1800,7 +1800,7 @@ func _writ_act(act: String) -> void:
 	var sender := multiplayer.get_remote_sender_id()
 	if not hosting or not _gate(sender, "writ") or game == null or game.writs == null:
 		return
-	if act == "dig" or act == "light":
+	if act == "dig" or act == "light" or act == "kneel":
 		game.writs.act_on(sender, act)
 
 
@@ -1857,6 +1857,31 @@ func _shrine_buy(si: int, n: int) -> void:
 	game.writs.buy_on(sender, si, n)
 
 
+## Client asks to open vault `vi`; host tells everyone it is open.
+func send_vault_open(vi: int) -> void:
+	if not active:
+		return
+	if hosting:
+		_vault_open.rpc(vi)
+	else:
+		_vault_ask.rpc_id(1, vi)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _vault_ask(vi: int) -> void:
+	var sender := multiplayer.get_remote_sender_id()
+	if not hosting or not _gate(sender, "writ") or game == null or game.writs == null:
+		return
+	game.writs.open_vault(sender, vi)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _vault_open(vi: int) -> void:
+	if multiplayer.get_remote_sender_id() != 1 or game == null or game.writs == null:
+		return
+	game.writs.apply_vault_open(vi)
+
+
 func send_embers(pid: int, total: int, gain: int, why: String) -> void:
 	if active and hosting and roster.has(pid):
 		_embers.rpc_id(pid, total, gain, why)
@@ -1867,6 +1892,21 @@ func _embers(total: int, gain: int, why: String) -> void:
 	if multiplayer.get_remote_sender_id() != 1 or game == null or game.writs == null:
 		return
 	game.writs._embers_here(total, gain, why)
+
+
+## Host: an island event begins (reliquary, fog, hunt, blood).
+func send_island_event(kind: String, data: Dictionary) -> void:
+	if active and hosting:
+		_island_event.rpc(kind, data)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _island_event(kind: String, data: Dictionary) -> void:
+	if multiplayer.get_remote_sender_id() != 1 or game == null or game.events == null:
+		return
+	if kind == "reliquary":
+		game.reliquary_next = true
+	game.events.apply(kind, data)
 
 
 func send_airdrop(p: Vector2, ground: float) -> void:

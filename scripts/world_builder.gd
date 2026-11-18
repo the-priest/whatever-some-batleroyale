@@ -633,6 +633,8 @@ func _wet_buildings(k: float) -> void:
 
 func set_weather(kind: String) -> void:
 	weather = kind
+	if villages != null and villages.landmarks != null:
+		villages.landmarks.set_beam_strength(0.035 if kind in ["clear", "golden"] else 0.11)
 	if sun == null or environment == null or sky_material == null:
 		return
 	var env := environment
@@ -652,6 +654,11 @@ func set_weather(kind: String) -> void:
 			Color(0.42, 0.45, 0.48), Color(0.26, 0.28, 0.31), Color(0.44, 0.47, 0.52), 0.0019, 1.02, 1.12],
 	}
 	var p: Array = presets.get(kind, presets["clear"])
+	_wx = p
+	_wx_cloud = {"clear": Color(1, 1, 1), "golden": Color(1.0, 0.8, 0.64), "misty": Color(0.92, 0.93, 0.95),
+		"overcast": Color(0.82, 0.85, 0.88), "rain": Color(0.5, 0.53, 0.57)}.get(kind, Color(1, 1, 1))
+	_blood = 0.0
+	_fog_extra = 0.0
 	sun.rotation_degrees = Vector3(float(p[0]), float(p[1]), 0.0)
 	sun.light_color = p[2]
 	sun.light_energy = float(p[3])
@@ -689,6 +696,45 @@ func set_weather(kind: String) -> void:
 		var g = get_parent()
 		r.quality = int(g.get("graphics_quality")) if g != null and g.get("graphics_quality") != null else 2
 		add_child(r)
+
+
+var _wx: Array = []
+var _wx_cloud := Color(1, 1, 1)
+var _blood := 0.0
+var _fog_extra := 0.0
+
+
+## Blood Moon: 0 = the weather as it is, 1 = a red sky, a red sun and
+## crimson haze over everything.
+func set_blood_moon(k: float) -> void:
+	_blood = clampf(k, 0.0, 1.0)
+	_apply_tint()
+
+
+## A fog bank rolling over the island: extra fog density on top of the weather.
+func set_fog_bank(k: float) -> void:
+	_fog_extra = clampf(k, 0.0, 1.0)
+	_apply_tint()
+
+
+func _apply_tint() -> void:
+	if _wx.is_empty() or sun == null or environment == null or sky_material == null:
+		return
+	var p := _wx
+	var k := _blood
+	var sm := sky_material
+	sun.light_color = (p[2] as Color).lerp(Color(1.0, 0.38, 0.26), k)
+	sun.light_energy = lerpf(float(p[3]), 0.85, k)
+	sm.set_shader_parameter("sky_top_color", (p[4] as Color).lerp(Color(0.22, 0.04, 0.05), k))
+	sm.set_shader_parameter("sky_horizon_color", (p[5] as Color).lerp(Color(0.72, 0.2, 0.13), k))
+	sm.set_shader_parameter("ground_horizon_color", (p[6] as Color).lerp(Color(0.5, 0.16, 0.12), k))
+	sm.set_shader_parameter("ground_bottom_color", (p[7] as Color).lerp(Color(0.2, 0.06, 0.06), k))
+	sm.set_shader_parameter("cloud_tint", _wx_cloud.lerp(Color(0.85, 0.42, 0.36), k))
+	var fog_c := (p[8] as Color).lerp(Color(0.58, 0.18, 0.13), k)
+	fog_c = fog_c.lerp(Color(0.8, 0.82, 0.84).lerp(fog_c, k), _fog_extra * 0.7)
+	environment.fog_light_color = fog_c
+	environment.fog_density = lerpf(float(p[9]), maxf(float(p[9]), 0.0012), k) + _fog_extra * 0.012
+	environment.volumetric_fog_albedo = fog_c.lightened(0.25)
 
 
 ## The falls roar from far off; the river babbles along its banks.

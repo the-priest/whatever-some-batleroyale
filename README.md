@@ -83,8 +83,45 @@ show at the top of the screen.
   scope and a grenade, and pays its killer 1,200 Embers on top of the kill.
 - Revenants are not players: they do not count toward who is left alive.
 
-The plan for what comes next (vaults and sigils, living-island events, Oaths and Renown) is in
-[docs/PLAN.md](docs/PLAN.md).
+## Vaults and Sigils
+
+Five sealed **vaults** stand near the landmarks and old ruins: stone crypts with an iron door and a
+gold sigil set in it (a padlock on the full map). A **Sigil** opens one: every Revenant carries one,
+and Wayshrines sell them for 900 Embers. Press **F** at the door with a Sigil and it grinds down into
+the floor. Inside: a top-tier rifle with ammo, level 3 armour and helmet, an 8x scope, medkits and a
+grenade, and 600 Embers to whoever opened it. Anyone can walk in once it is open, so be quick.
+
+## Shrines of the Old Gods
+
+Six weathered stone idols stand alone out in the wilds, far from towns and roads, their eyes still
+glowing green. Hold **F** to kneel before one and its god blesses you for the rest of the match
+(shown top left). Each idol blesses only once, then its eyes go dark, so whoever gets there first
+takes it.
+
+| God | Blessing |
+| --- | --- |
+| Varra of the Swift Wind | Swiftness: you move 8% faster |
+| Osk the Unshaken | Steady Aim: a quarter less recoil |
+| Mirren of the Nimble Hands | Nimble Hands: reloads a quarter faster |
+| The Green Mother | Vigour: 125 maximum health |
+| Haldor the Shield | Warding: bullets and blasts hurt you 12% less |
+| The Ember King | Ember-Touched: kills pay half again in Embers |
+
+Blessings are lost if you fall (even if Kindling brings you back).
+
+## The living island
+
+Every match, the island throws things at you. A horn sounds and a banner names it.
+
+- **A Reliquary falls** (mid-match): a golden supply crate lands in the next circle with two guns
+  and twice the kit of a normal drop. The soldiers nearby head straight for it.
+- **A fog bank rolls in**: thick fog for two minutes. Nobody sees far, you included.
+- **The Hunt**: a Revenant leaves its ground and stalks the nearest player for two minutes, then
+  goes home.
+- **Blood Moon** (late game): the sky turns red and stays red. Soldiers hunt the nearest player in
+  packs, and every kill pays double Embers.
+
+The plan for what comes next (Oaths, Renown and co-op revives) is in [docs/PLAN.md](docs/PLAN.md).
 
 ## Gunplay
 

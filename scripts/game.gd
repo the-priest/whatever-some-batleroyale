@@ -86,6 +86,10 @@ var bots: Array = []
 var airdrops: Array = []
 ## Writ boards, writs and Embers (see writs.gd).
 var writs: Writs = null
+## Reliquary, fog bank, the Hunt, Blood Moon (see island_events.gd).
+var events: IslandEvents = null
+## The next supply drop spawned is a Reliquary.
+var reliquary_next := false
 var alive := 1
 var total_players := 1
 var player_kills := 0
@@ -324,6 +328,12 @@ func _ready() -> void:
 		_run_window_test()
 	elif OS.get_cmdline_user_args().has("--gpubench"):
 		_run_gpu_bench()
+	elif OS.get_cmdline_user_args().has("--gods"):
+		_run_gods_test()
+	elif OS.get_cmdline_user_args().has("--events"):
+		_run_events_test()
+	elif OS.get_cmdline_user_args().has("--vault"):
+		_run_vault_test()
 	elif OS.get_cmdline_user_args().has("--revenant"):
 		_run_revenant_test()
 	elif OS.get_cmdline_user_args().has("--writs"):
@@ -375,6 +385,11 @@ func _build_world() -> void:
 	writs.name = "Writs"
 	world.add_child(writs)
 	writs.setup(self)
+	if events == null:
+		events = IslandEvents.new()
+		events.name = "IslandEvents"
+		add_child(events)
+		events.setup(self)
 	if wildlife == null:
 		wildlife = Wildlife.new()
 		wildlife.name = "Wildlife"
@@ -745,6 +760,9 @@ func _start_match() -> void:
 
 
 func _after_match_setup() -> void:
+	if events != null:
+		events.reset()
+	reliquary_next = false
 	last_hud_alive = -1
 	end_cam_target = null
 	hud.set_gameplay_visible(true)
@@ -1477,6 +1495,8 @@ func _on_zone_phase(p: int, warning: bool) -> void:
 		hud.show_notice("NEXT SAFE ZONE MARKED  —  PRESS %s FOR THE MAP" % Keybinds.key("map"), 3.0)
 		if p in [1, 2, 4, 5] and not net_is_client():
 			_spawn_airdrop()
+		if events != null:
+			events.on_phase(p)
 
 
 func _storm_color() -> Color:
@@ -2204,6 +2224,8 @@ func spawn_airdrop_at(p: Vector2, announce := true) -> void:
 	var drop := Airdrop.new()
 	var gy := ground_at(Vector3(p.x, h + 20.0, p.y)).y
 	drop.setup(self, p, gy)
+	drop.golden = reliquary_next
+	reliquary_next = false
 	add_child(drop)
 	airdrops.append(drop)
 	if net_on():
@@ -2220,6 +2242,10 @@ func on_airdrop_landed(drop: Airdrop) -> void:
 	var base := drop.global_position
 	var gun: String = AIRDROP_WEAPONS[randi() % AIRDROP_WEAPONS.size()]
 	var items: Array = [["weapon", gun], ["armor", "3"], ["helmet", "3"], ["med", ""], ["scope", "8x" if Weapons.cls(gun) in ["sniper", "dmr"] else "4x"], ["ammo", Weapons.caliber(gun)], ["ammo", Weapons.caliber(gun)]]
+	if drop.golden:
+		# A Reliquary: a second gun, more of everything.
+		var gun2: String = HI_WEAPONS[randi() % HI_WEAPONS.size()]
+		items.append_array([["weapon", gun2], ["ammo", Weapons.caliber(gun2)], ["med", ""], ["med", ""], ["grenade", ""], ["grenade", ""], ["energy", ""]])
 	for i in items.size():
 		var a := TAU * float(i) / float(items.size())
 		var p := ground_at(base + Vector3(cos(a), 0.0, sin(a)) * 1.9) + Vector3(0, 0.08, 0)
@@ -3434,6 +3460,13 @@ func _run_shot() -> void:
 				ang = atan2(3.2, 2.0)
 				(rv[ri] as Bot).set_physics_process(false)
 				(rv[ri] as Node3D).rotation.y = ang + PI
+		if a.begins_with("--crypt=") and writs != null and int(a.substr(8)) < writs.vaults.size():
+			var cv: Dictionary = writs.vaults[int(a.substr(8))]
+			var cb := Basis(Vector3.UP, float(cv.yaw))
+			var cat: Vector3 = cv.door + cb * Vector3(3.5, 0, 8.5)
+			spot = Vector3(cat.x, 0.0, cat.z)
+			var clk: Vector3 = cv.door - cat
+			ang = atan2(-clk.x, -clk.z)
 		for key in ["--board=", "--shrine="]:
 			if not a.begins_with(key) or writs == null:
 				continue
@@ -3461,6 +3494,15 @@ func _run_shot() -> void:
 	elif OS.get_cmdline_user_args().has("--water"):
 		h = maxf(h, Terrain.WATER_LEVEL)
 	p.global_position = Vector3(spot.x, h + 2.4, spot.z)
+	# --blood / --fogbank: the island events' skies.
+	if OS.get_cmdline_user_args().has("--blood"):
+		events.blood = true
+		events._blood_k = 1.0
+		world.set_blood_moon(1.0)
+	if OS.get_cmdline_user_args().has("--fogbank"):
+		events._fog_t = 999.0
+		events._fog_k = 1.0
+		world.set_fog_bank(1.0)
 	p.velocity = Vector3.ZERO
 	p.yaw = ang
 	p.pitch = -0.16
@@ -5100,6 +5142,8 @@ func net_loot_taken(id: int) -> void:
 func net_airdrop(p: Vector2, ground: float) -> void:
 	var drop := Airdrop.new()
 	drop.setup(self, p, ground)
+	drop.golden = reliquary_next
+	reliquary_next = false
 	add_child(drop)
 	airdrops.append(drop)
 	hud.show_big("SUPPLY DROP INCOMING", Color(1.0, 0.45, 0.3), 2.6)
@@ -5704,6 +5748,151 @@ func _draw_audit() -> void:
 		print("[audit] %-40s nodes=%d surfaces=%d shadow=%d" % [k, groups[k][0], groups[k][1], groups[k][2]])
 
 
+## Kneels at every Old God's idol and checks each blessing.
+func _run_gods_test() -> void:
+	_start_match()
+	for i in 30:
+		await get_tree().physics_frame
+	_land_player_now()
+	player.spawn_protect = 99999.0
+	player.give_weapon("rifle")
+	print("[gods] %d idols: %s" % [writs.idols.size(), str(writs.idols.map(func(g): return "%s %s" % [g.kind, str(Vector3(g.pos).round())]))])
+	_check("shrines of the old gods out in the wilds", writs.idols.size() >= 5)
+	var rt0 := 0.0
+	for gi in writs.idols.size():
+		var g: Dictionary = writs.idols[gi]
+		player.global_position = (g.pos as Vector3) + Vector3.UP * 0.4
+		player.velocity = Vector3.ZERO
+		for i in 15:
+			await get_tree().physics_frame
+		if gi == 0:
+			print("[gods] at an idol: %s" % writs.prompt(player.global_position))
+		writs.act_on(0, "kneel")
+		await get_tree().physics_frame
+		_check("blessed: %s" % str(g.kind), player.blessings.has(str(g.kind)) and writs.idol_used[gi])
+	_check("vigour raises your health", player.max_hp() > 100.0 or not player.blessings.has("vigour"))
+	_check("steady aim lowers recoil", player.recoil_mult() < 1.0 or not player.blessings.has("steady"))
+	# A spent idol blesses nobody else.
+	var g0: Dictionary = writs.idols[0]
+	player.global_position = (g0.pos as Vector3) + Vector3.UP * 0.4
+	await get_tree().physics_frame
+	_check("a spent idol is silent", writs.prompt(player.global_position) == "")
+	print("[gods] done: %s" % str(player.blessings.keys()))
+	get_tree().quit()
+
+
+## Each island event in turn, and what it does.
+func _run_events_test() -> void:
+	_start_match()
+	for i in 30:
+		await get_tree().physics_frame
+	_land_player_now()
+	player.spawn_protect = 99999.0
+	for i in 60 * 40:
+		await get_tree().physics_frame
+	var fog0: float = world.environment.fog_density
+	events._start("fog")
+	for i in 60 * 14:
+		await get_tree().physics_frame
+	print("[events] fog density %.5f -> %.5f" % [fog0, world.environment.fog_density])
+	_check("a fog bank thickens the air", world.environment.fog_density > fog0 + 0.008)
+	for i in 60 * (IslandEvents.FOG_TIME + 14.0):
+		await get_tree().physics_frame
+	_check("and lifts again", absf(world.environment.fog_density - fog0) < 0.0005)
+	var drops0 := airdrops.size()
+	events._start("reliquary")
+	await get_tree().physics_frame
+	var rel: Airdrop = airdrops[airdrops.size() - 1] if airdrops.size() > drops0 else null
+	_check("a reliquary falls, golden", rel != null and rel.golden)
+	var l0 := loot_pool.size()
+	if rel != null:
+		for i in 60 * 40:
+			if rel.landed:
+				break
+			await get_tree().physics_frame
+		await get_tree().physics_frame
+	print("[events] reliquary landed=%s, %d items" % [str(rel.landed if rel != null else false), loot_pool.size() - l0])
+	_check("the reliquary holds more than a supply drop", loot_pool.size() >= l0 + 12)
+	var revs: Array = bots.filter(func(b): return is_instance_valid(b) and b is Revenant and (b as Bot).alive)
+	if not revs.is_empty():
+		events._start("hunt")
+		var hunter: Revenant = events._hunter
+		var home: Vector3 = hunter.arena
+		for i in 60 * 8:
+			await get_tree().physics_frame
+		print("[events] %s hunts: arena moved %d m toward you" % [hunter.bot_name, int(home.distance_to(hunter.arena))])
+		_check("the hunt: a revenant's ground follows you", hunter.arena.distance_to(player.global_position) < 30.0)
+		for i in 60 * (IslandEvents.HUNT_TIME + 8.0):
+			await get_tree().physics_frame
+		_check("and it goes home after", hunter.arena.distance_to(home) < 1.0)
+	events._start("blood")
+	for i in 60 * 27:
+		await get_tree().physics_frame
+	print("[events] blood moon sun %s fog %s" % [str(world.sun.light_color), str(world.environment.fog_light_color)])
+	_check("blood moon reddens the sky", world.sun.light_color.r > world.sun.light_color.g * 2.0)
+	_check("blood moon: kills pay double", writs.ember_mult == 2)
+	var e0 := writs.my_embers
+	for b in bots:
+		if is_instance_valid(b) and b.alive and not b.is_human and not (b is Revenant):
+			b.take_damage(999.0, b.global_position, false, player)
+			break
+	await get_tree().physics_frame
+	_check("a kill under the blood moon pays double", writs.my_embers - e0 >= Writs.KILL_EMBERS * 2)
+	print("[events] done")
+	get_tree().quit()
+
+
+## Opens a vault with a Sigil and walks in.
+func _run_vault_test() -> void:
+	_start_match()
+	for i in 30:
+		await get_tree().physics_frame
+	_land_player_now()
+	player.spawn_protect = 99999.0
+	print("[vault] %d vaults: %s" % [writs.vaults.size(), str(writs.vaults.map(func(v): return "%s %s" % [v.name, str(Vector3(v.door).round())]))])
+	_check("vaults by the landmarks", writs.vaults.size() >= 4)
+	if writs.vaults.is_empty():
+		get_tree().quit()
+		return
+	var v: Dictionary = writs.vaults[0]
+	var b := Basis(Vector3.UP, float(v.yaw))
+	var front: Vector3 = v.door + b * Vector3(0, 0, 1.3)
+	player.global_position = ground_at(front + Vector3.UP * 2.0) + Vector3.UP * 0.1
+	player.velocity = Vector3.ZERO
+	for i in 20:
+		await get_tree().physics_frame
+	print("[vault] at the door (%.2f above the door sill): %s" % [player.global_position.y - (v.door as Vector3).y, writs.prompt(player.global_position)])
+	# The door blocks the way in while sealed.
+	var space := get_world_3d().direct_space_state
+	var eye: Vector3 = (v.door as Vector3) + b * Vector3(0, 1.2, 1.2)
+	var q := PhysicsRayQueryParameters3D.create(eye, (v.inside as Vector3) + Vector3.UP * 1.2, 1)
+	_check("a sealed door blocks the way", not space.intersect_ray(q).is_empty())
+	writs.interact(player.global_position)
+	_check("no sigil: still sealed", not writs.vault_open[0])
+	writs.give_sigil(0, 1, "")
+	var l0 := loot_pool.size()
+	var e0 := writs.my_embers
+	writs.interact(player.global_position)
+	for i in 60 * 3:
+		await get_tree().physics_frame
+	_check("the sigil opens it", writs.vault_open[0] and writs.my_sigils == 0)
+	_check("the hoard inside", loot_pool.size() >= l0 + 9)
+	_check("opening it pays", writs.my_embers >= e0 + Writs.VAULT_EMBERS)
+	_check("the doorway is clear", space.intersect_ray(q).is_empty())
+	# Walk in.
+	var inside: Vector3 = v.inside
+	var g := ground_at(inside + Vector3.UP * 1.5)
+	print("[vault] floor inside at %.2f (door sill %.2f)" % [g.y, (v.door as Vector3).y])
+	_check("you can stand inside", absf(g.y - (v.door as Vector3).y) < 0.3)
+	var found := 0
+	for l in loot_pool:
+		if is_instance_valid(l) and l.global_position.distance_to(inside) < 3.5:
+			found += 1
+	_check("loot lies inside the vault", found >= 7)
+	print("[vault] done, %d items inside" % found)
+	get_tree().quit()
+
+
 ## Finds a Revenant, fights it through its rage and leash, and kills it.
 func _run_revenant_test() -> void:
 	_start_match()
@@ -5918,7 +6107,11 @@ func _run_writ_test() -> void:
 		writs.purse[0] = 1800
 		writs._embers_here(1800, 0, "")
 		writs.interact(player.global_position)
-		writs._buy(Writs.WARES.size() - 1)
+		var kin := 0
+		for wi in Writs.WARES.size():
+			if Writs.WARES[wi][0] == "kindling":
+				kin = wi
+		writs._buy(kin)
 		writs.close_shop()
 		_check("kindling bought", writs.kindling == 1)
 		player.spawn_protect = 0.0
@@ -6426,6 +6619,20 @@ func _run_net_test(as_host: bool) -> void:
 				player.global_position = ground_at(Vector3(cc.x, 400.0, cc.y)) + Vector3.UP * 0.3
 				player.velocity = Vector3.ZERO
 			print("[net] client writ: %s  embers %d" % [str(writs.view.get("line", "none")), writs.my_embers])
+		# A vault opened by the joined player with a Sigil the host gave them.
+		if as_host and i == 49 and writs != null:
+			for pid in net.roster:
+				if int(pid) != 1:
+					writs.give_sigil(int(pid), 1, "")
+		if not as_host and i == 51 and writs != null and not writs.vaults.is_empty():
+			var vv: Dictionary = writs.vaults[0]
+			player.global_position = ground_at((vv.door as Vector3) + Basis(Vector3.UP, float(vv.yaw)) * Vector3(0, 2.0, 1.3)) + Vector3.UP * 0.1
+			player.velocity = Vector3.ZERO
+			await get_tree().create_timer(0.8).timeout
+			print("[net] client at a vault with %d sigil(s): %s" % [writs.my_sigils, writs.prompt(player.global_position)])
+			writs.interact(player.global_position)
+		if ((i == 54 and not as_host) or (i == 66 and as_host)) and writs != null and not writs.vaults.is_empty():
+			print("[net] %s %s sees vault 0 open" % ["PASS" if writs.vault_open[0] else "FAIL", "host" if as_host else "client"])
 		if i == 48 and not as_host and writs != null:
 			print("[net] %s client relic writ over LAN, embers %d" % ["PASS" if writs.my_embers >= Writs.REWARD["relic"] and writs.view.is_empty() else "FAIL", writs.my_embers])
 		if i == 50 and not as_host and near != null:

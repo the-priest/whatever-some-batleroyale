@@ -116,6 +116,29 @@ def shrine_buy(rng):
     return dsp.fade(space(rng, out, 0.9, 0.3), 0.001, 0.3)
 
 
+def vault_open(rng):
+    """A stone slab grinding down into its slot, an iron clank, a low chime."""
+    n = dsp.secs(3.4)
+    t = dsp.tvec(n)
+    grind = dsp.lp(dsp.brown(n, rng), 260.0, 2) * (0.6 + 0.4 * np.abs(np.sin(2 * np.pi * 7.0 * t)))
+    grind += dsp.bp(dsp.white(n, rng), 900.0, 1.2) * 0.12 * (0.5 + 0.5 * np.sin(2 * np.pi * 11.0 * t))
+    env = np.minimum(1.0, t / 0.25) * np.clip((2.6 - t) / 0.5, 0.0, 1.0)
+    out = grind * env * 0.9
+    clank = dsp.strike(rng, dsp.secs(0.9), 180.0, dsp.PLATE, 0.25, hard=1.0, bright=4000.0, body=0.8, body_f=120.0)
+    dsp.place(out, clank * 0.8, 2.55)
+    dsp.place(out, bell(rng, 523.0, 1.6, 0.5) * 0.35, 2.7)
+    return dsp.fade(space(rng, out, 1.3, 0.4), 0.002, 0.3)
+
+
+def event_horn(rng):
+    """A war horn over the island: a long low call with a rising second note."""
+    out = np.zeros(dsp.secs(4.2))
+    dsp.place(out, horn(rng, 73.4, 1.6) * 0.9, 0.0)
+    dsp.place(out, horn(rng, 110.0, 1.9, bend=0.02) * 0.8, 1.35)
+    dsp.place(out, horn(rng, 146.8, 1.9, bend=0.02) * 0.35, 1.4)
+    return dsp.fade(space(rng, out, 2.0, 0.5), 0.002, 0.6)
+
+
 def main():
     rng = np.random.default_rng(7171)
     dsp.write("writ_take", writ_take(rng), peak=0.8)
@@ -125,6 +148,8 @@ def main():
     dsp.write("ember", ember(rng), peak=0.6)
     dsp.write("beacon_light", beacon_light(rng), peak=0.8)
     dsp.write("shrine_buy", shrine_buy(rng), peak=0.75)
+    dsp.write("vault_open", vault_open(rng), peak=0.85)
+    dsp.write("event_horn", event_horn(rng), peak=0.85)
 
 
 if __name__ == "__main__":

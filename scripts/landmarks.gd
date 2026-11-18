@@ -993,6 +993,16 @@ func _build_henge() -> void:
 
 ## The lamp's two beams sweeping slowly round over the sea: long soft cones
 ## of light, faint in sunshine, plain to see in mist and rain.
+## The lighthouse beam's material: the weather sets how strong it shows
+## (a whisper on a clear day, plain to see in mist and rain).
+var beam_mat: StandardMaterial3D = null
+
+
+func set_beam_strength(a: float) -> void:
+	if beam_mat != null:
+		beam_mat.albedo_color.a = a
+
+
 func _lighthouse_beam(at: Vector3) -> void:
 	if DisplayServer.get_name() == "headless":
 		return
@@ -1019,6 +1029,7 @@ func _lighthouse_beam(at: Vector3) -> void:
 	m.albedo_texture = gt
 	m.albedo_color = Color(1.0, 0.92, 0.7, 0.11)
 	m.disable_receive_shadows = true
+	beam_mat = m
 	var cone := CylinderMesh.new()
 	cone.top_radius = 0.35
 	cone.bottom_radius = 5.5
@@ -1031,6 +1042,9 @@ func _lighthouse_beam(at: Vector3) -> void:
 		mi.mesh = cone
 		mi.material_override = m
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mi.visibility_range_end = 520.0
+		mi.visibility_range_end_margin = 80.0
+		mi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 		# Lying on its side, the narrow end at the lamp, tipped down a touch.
 		mi.transform = Transform3D(Basis(Vector3.UP, k) * Basis(Vector3.RIGHT, PI * 0.5 - 0.06), Basis(Vector3.UP, k) * Vector3(0, -2.7, -45.0))
 		spin.add_child(mi)

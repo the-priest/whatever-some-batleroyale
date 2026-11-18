@@ -2970,6 +2970,21 @@ func set_writ(v: Dictionary) -> void:
 
 
 var kindling := false
+var sigils := 0
+var _blessings: Array = []
+
+
+func set_blessings(names: Array) -> void:
+	_blessings = names
+	if writ_draw != null:
+		writ_draw.queue_redraw()
+## Vaults on the map: [Vector2, opened].
+var vault_marks: Array = []
+
+
+func set_sigils(n: int) -> void:
+	sigils = n
+	set_embers(embers, 0, "")
 ## Seconds of Branded left (0 = not branded).
 var branded_t := 0.0
 ## Your dropped Embers: {pos, amount} or {}.
@@ -2983,7 +2998,7 @@ func set_kindling(v: bool) -> void:
 
 func set_embers(total: int, gain: int, why: String) -> void:
 	embers = total
-	lbl_embers.text = "◆ %s" % _thousands(total) + ("     + KINDLING" if kindling else "")
+	lbl_embers.text = "◆ %s" % _thousands(total) + ("     %d SIGIL%s" % [sigils, "" if sigils == 1 else "S"] if sigils > 0 else "") + ("     + KINDLING" if kindling else "")
 	if gain != 0:
 		_ember_pop = ("+%d" % gain if gain > 0 else "%d" % gain) + ("   " + why if why != "" else "")
 		_ember_pop_t = 2.4
@@ -3008,6 +3023,10 @@ func _writ_tint() -> Color:
 
 
 func _draw_writ() -> void:
+	if not _blessings.is_empty():
+		var bt := "BLESSED  ·  " + "  ·  ".join(PackedStringArray(_blessings))
+		writ_draw.draw_string(font_bold, Vector2(1, -2), bt, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0, 0, 0, 0.6))
+		writ_draw.draw_string(font_bold, Vector2(0, -3), bt, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.6, 1.0, 0.78))
 	if _ember_pop_t > 0.0:
 		_ember_pop_t = maxf(0.0, _ember_pop_t - get_process_delta_time())
 		var a := clampf(_ember_pop_t / 0.6, 0.0, 1.0)
@@ -3065,6 +3084,16 @@ func _draw_writ_map(ctrl: Control, view: MapView, big: bool, to_map: Callable, i
 			ctrl.draw_circle(cmp, 6.0, Color(0.02, 0.02, 0.03, 0.85))
 			ctrl.draw_circle(cmp, 4.5, Color(1.0, 0.62, 0.3))
 	if big:
+		for vm in vault_marks:
+			var vp: Vector2 = to_map.call(vm[0])
+			if not inner.has_point(vp):
+				continue
+			var opened: bool = vm[1]
+			ctrl.draw_rect(Rect2(vp - Vector2(7, 7), Vector2(14, 14)), Color(0.02, 0.02, 0.03, 0.9))
+			ctrl.draw_rect(Rect2(vp - Vector2(5.5, 5.5), Vector2(11, 11)), Color(0.32, 0.3, 0.3) if opened else Color(0.16, 0.14, 0.13))
+			var kc := Color(0.55, 0.55, 0.55) if opened else Color(1.0, 0.75, 0.3)
+			ctrl.draw_circle(vp + Vector2(0, -1.5), 2.0, kc)
+			ctrl.draw_rect(Rect2(vp + Vector2(-1, -0.5), Vector2(2, 4)), kc)
 		for sp in shrine_marks:
 			var smp: Vector2 = to_map.call(sp)
 			if not inner.has_point(smp):
@@ -3120,8 +3149,8 @@ func show_shop(wares: Array, purse: int) -> void:
 		_shop.set_anchors_preset(Control.PRESET_CENTER)
 		_shop.offset_left = -290
 		_shop.offset_right = 290
-		_shop.offset_top = -190
-		_shop.offset_bottom = 190
+		_shop.offset_top = -230
+		_shop.offset_bottom = 230
 		_shop.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_shop.draw.connect(_draw_shop)
 		root.add_child(_shop)
