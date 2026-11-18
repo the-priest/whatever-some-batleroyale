@@ -1350,6 +1350,9 @@ func apply_event(e: Dictionary) -> void:
 		"mimic":
 			if game.chests != null:
 				game.chests.tell_mimic()
+		"hollow":
+			if game.hollow != null:
+				game.hollow.apply_state(e)
 		"boss_fx":
 			Colossus.show_fx(game, e.get("fx", {}))
 		"idol_used":

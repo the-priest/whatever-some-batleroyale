@@ -18,6 +18,8 @@ varying float canopy;
 // Rain: 0 dry .. 1 soaked. Soil darkens, stone and roads go glossy, and
 // water pools in the flat ruts and hollows.
 uniform float wetness = 0.0;
+// The Ashen Hollow: centre x, z, radius, and how much it stands (0..1).
+uniform vec4 ash = vec4(0.0);
 // Tree cover baked from the trees actually planted (world_builder minimap).
 uniform sampler2D canopy_map : filter_linear_mipmap, repeat_disable;
 uniform bool has_canopy_map = false;
@@ -106,6 +108,15 @@ void fragment() {
 		col = mix(col, col * 0.45 + vec3(0.015, 0.02, 0.025), pool);
 		rough = mix(rough, 0.04, pool);
 		spec = mix(spec, 0.6, pool);
+	}
+	if (ash.w > 0.0) {
+		float ad = distance(wpos.xz, ash.xy);
+		float edge = ash.z + (macro - 0.5) * 12.0;
+		float ak = (1.0 - smoothstep(edge - 9.0, edge, ad)) * ash.w;
+		float lum = dot(col, vec3(0.3, 0.59, 0.11));
+		vec3 ashc = vec3(lum * 0.72 + 0.03) * vec3(1.0, 0.97, 0.94);
+		col = mix(col, ashc, ak);
+		rough = mix(rough, 0.98, ak);
 	}
 	ALBEDO = col;
 	ROUGHNESS = rough;

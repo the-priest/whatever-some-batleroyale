@@ -678,6 +678,8 @@ func set_weather(kind: String) -> void:
 	env.volumetric_fog_albedo = (p[8] as Color).lightened(0.25)
 	env.ambient_light_energy = float(p[10])
 	env.tonemap_exposure = float(p[11])
+	if _hollow_k > 0.0:
+		_apply_tint()
 	# Wet ground and buildings in the rain.
 	var wet := 1.0 if kind == "rain" else (0.25 if kind == "misty" else 0.0)
 	if _terrain_material != null:
@@ -702,6 +704,7 @@ var _wx: Array = []
 var _wx_cloud := Color(1, 1, 1)
 var _blood := 0.0
 var _fog_extra := 0.0
+var _hollow_k := 0.0
 
 
 ## Blood Moon: 0 = the weather as it is, 1 = a red sky, a red sun and
@@ -714,6 +717,26 @@ func set_blood_moon(k: float) -> void:
 ## A fog bank rolling over the island: extra fog density on top of the weather.
 func set_fog_bank(k: float) -> void:
 	_fog_extra = clampf(k, 0.0, 1.0)
+	_apply_tint()
+
+
+## The Ashen Hollow's grey ground (and grass): centre x, z, radius, amount.
+func set_ash(v: Vector4) -> void:
+	if _terrain_material != null:
+		_terrain_material.set_shader_parameter("ash", v)
+	if grass != null and grass._mat != null:
+		grass._mat.set_shader_parameter("ash", v)
+
+
+## Inside the Ashen Hollow: 0 = outside, 1 = deep in the ash (dark, grey,
+## close fog, the sun a dim disc).
+func set_hollow(k: float) -> void:
+	k = clampf(k, 0.0, 1.0)
+	if k == _hollow_k or (absf(k - _hollow_k) < 0.02 and k > 0.0 and k < 1.0):
+		return
+	_hollow_k = k
+	if _wx.is_empty():
+		set_weather(weather if weather != "" else "clear")
 	_apply_tint()
 
 
@@ -739,6 +762,15 @@ func _apply_tint() -> void:
 	fog_c = fog_c.lerp(Color(0.8, 0.82, 0.84).lerp(fog_c, k), _fog_extra * 0.7)
 	environment.fog_light_color = fog_c
 	environment.fog_density = lerpf(float(p[9]), maxf(float(p[9]), 0.0012), k) + _fog_extra * 0.012
+	var hk := _hollow_k
+	if hk > 0.0:
+		fog_c = fog_c.lerp(Color(0.3, 0.28, 0.26), hk * 0.92)
+		environment.fog_light_color = fog_c
+		environment.fog_density += hk * 0.022
+		sun.light_energy *= 1.0 - hk * 0.65
+		environment.ambient_light_energy *= 1.0 - hk * 0.45
+	environment.fog_aerial_perspective = 0.3 * (1.0 - hk)
+	environment.fog_sky_affect = 0.15 + hk * 0.5
 	environment.volumetric_fog_albedo = fog_c.lightened(0.25)
 
 
@@ -1138,6 +1170,24 @@ func _tree_spot(placed: Dictionary, p: Vector2, foot: float) -> Vector2:
 var tree_records: Array = []
 
 
+## 0: not in the Ashen Hollow; 1: inside it; -1: on its braziers' or
+## Heart's ground (no tree).
+func _hollow_tree(x: float, z: float) -> int:
+	var hw: Dictionary = villages.hollow
+	if hw.is_empty():
+		return 0
+	var c: Vector3 = hw.c
+	var q := Vector2(x, z)
+	if q.distance_to(Vector2(c.x, c.z)) > float(hw.r):
+		return 0
+	if q.distance_to(Vector2(c.x, c.z)) < 12.0:
+		return -1
+	for b: Vector3 in hw.braziers:
+		if q.distance_to(Vector2(b.x, b.z)) < 6.0:
+			return -1
+	return 1
+
+
 func _scatter_trees() -> void:
 	var species := [
 		# Old growth: 18-32 m broadleaves, 20-35 m pines with trunks you can
@@ -1171,6 +1221,12 @@ func _scatter_trees() -> void:
 		# Real woods where the forest map is high, open meadows elsewhere.
 		var chance := smoothstep(0.40, 0.70, forest) * 0.95 + 0.025
 		chance = clampf(chance, 0.0, 0.92)
+		# The Ashen Hollow: a dead wood, kept off its braziers and Heart.
+		var hollowed := _hollow_tree(x, z)
+		if hollowed < 0:
+			continue
+		if hollowed > 0:
+			chance = maxf(chance, 0.32)
 		if rng.randf() > chance:
 			continue
 		var spacing := 7.6 if forest > 0.62 else 10.0
@@ -1186,6 +1242,8 @@ func _scatter_trees() -> void:
 			if r <= acc:
 				chosen = s.name
 				break
+		if hollowed > 0:
+			chosen = "DeadTree_5"
 		# Mostly mature trees, some young ones, the odd giant.
 		var sr: Vector2 = picks[chosen].scale
 		var k := pow(rng.randf(), 0.8)
@@ -1322,6 +1380,9 @@ func _scatter_ground_cover() -> void:
 		if terrain.slope_at(x, z) > 0.5:
 			continue
 		if _near_village(x, z, 14.0) or _road_distance(x, z) < 1.0:
+			continue
+		# Nothing green grows in the Ashen Hollow.
+		if _hollow_tree(x, z) != 0:
 			continue
 		var forest := terrain.forest_density(x, z)
 		var r := rng.randf()
@@ -1895,6 +1956,8 @@ func _fill_gaps() -> void:
 				if h < Terrain.WATER_LEVEL + 0.4:
 					continue
 				if terrain.slope_at(x, z) > 0.55:
+					continue
+				if _hollow_tree(x, z) != 0:
 					continue
 				if _near_village(x, z, 16.0):
 					continue

@@ -131,6 +131,19 @@ apart: it holds a hoard (a top-tier rifle, level 3 armour and helmet, medkits), 
 Bosses you have come upon are marked on your map with a skull (crossed out once they fall), and when
 a Colossus is on you the music turns to GRAVEBLADE and comes up in the mix.
 
+## The Ashen Hollow
+
+Somewhere on every island stands a wall of ash a hundred metres across: the **Ashen Hollow**. Inside,
+the trees are dead, the ground is grey, ash falls without end and the light goes brown and dim. The
+ash drains the life out of anyone in it (up to 3 health a second), except in the warmth of a lit
+brazier. Four cold braziers stand round its edge; press **F** at one to light it (150 Embers, and it
+stays lit for everyone). Light all four and the ward on the **Heart of the Hollow**, a beating
+crimson crystal chained over a stone dais at the middle, falls, and the Hollow's sentinels (armed,
+armoured soldiers) rise round the Heart and come for whoever lit the last flame. Take the Heart
+(**F**) for 1,500 Embers, a Sigil and a **Gift**; the Hollow is cleansed for everyone and the ash
+stops. The map shows the Hollow, its braziers (lit or cold) and the Heart. Over LAN the host settles
+every brazier and the Heart; everyone sees the same flames.
+
 ## Vaults and Sigils
 
 Five sealed **vaults** stand near the landmarks and old ruins: stone crypts with an iron door and a
@@ -401,6 +414,10 @@ door and up every stair, `--stairs` climbs every house and tower, `--botstairs` 
 to loot every upper floor and back out, `--camp` checks bots holding windows, `--shootthru`
 fires rays through every window and door opening on the map, `--fantasy` climbs the spire and
 the mushroom caps, and `--drive` tests the jeep.
+
+Souls-like systems: `--writs`, `--revenant`, `--colossus`, `--vault`, `--gods`, `--events`,
+`--renown`, `--codex`, `--chests` and `--hollow` (walks into the Ashen Hollow, lights its braziers,
+wakes its sentinels and takes the Heart).
 
 ## Anti-cheat
 

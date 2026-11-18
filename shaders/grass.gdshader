@@ -7,6 +7,9 @@ render_mode cull_disabled, diffuse_lambert, specular_disabled;
 uniform sampler2D tex_grass : source_color, filter_linear_mipmap, repeat_enable;
 uniform float fade_end = 40.0;
 uniform float wind = 0.09;
+// The Ashen Hollow (see terrain.gdshader): dead, grey grass inside it.
+uniform vec4 ash = vec4(0.0);
+varying float ashk;
 
 varying vec3 root_col;
 varying float hfrac;
@@ -24,6 +27,12 @@ void vertex() {
 	NORMAL = vec3(0.0, 1.0, 0.0);
 	vec3 g = textureLod(tex_grass, root.xz * 0.135, 5.0).rgb;
 	root_col = g * COLOR.rgb;
+	ashk = 0.0;
+	if (ash.w > 0.0) {
+		ashk = (1.0 - smoothstep(ash.z - 9.0, ash.z, distance(root.xz, ash.xy))) * ash.w;
+		float lum = dot(root_col, vec3(0.3, 0.59, 0.11));
+		root_col = mix(root_col, vec3(lum * 0.72 + 0.03) * vec3(1.0, 0.97, 0.94), ashk);
+	}
 }
 
 void fragment() {
@@ -31,5 +40,5 @@ void fragment() {
 	vec3 tip = root_col * 1.3 + vec3(0.035, 0.045, 0.0);
 	ALBEDO = mix(base, tip, hfrac);
 	ROUGHNESS = 0.94;
-	BACKLIGHT = vec3(0.22, 0.32, 0.08) * hfrac;
+	BACKLIGHT = vec3(0.22, 0.32, 0.08) * hfrac * (1.0 - ashk);
 }

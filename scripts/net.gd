@@ -1935,6 +1935,23 @@ func _chest(i: int, op: String, dmg: float) -> void:
 		game.chests.hit_on(i, dmg, game.humans.get(sender))
 
 
+## Client: light Ashen Hollow brazier `i`, or (-1) take its Heart.
+func send_hollow(i: int) -> void:
+	if active and not hosting:
+		_hollow.rpc_id(1, i)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _hollow(i: int) -> void:
+	var sender := multiplayer.get_remote_sender_id()
+	if not hosting or not _gate(sender, "writ") or game == null or game.hollow == null:
+		return
+	if i < 0:
+		game.hollow.claim_on(sender)
+	else:
+		game.hollow.light_on(sender, i)
+
+
 func send_embers(pid: int, total: int, gain: int, why: String) -> void:
 	if active and hosting and roster.has(pid):
 		_embers.rpc_id(pid, total, gain, why)

@@ -2932,6 +2932,9 @@ func _draw_big_map() -> void:
 		ky += 34.0
 		var key := [["you", "YOU"], ["mate", "SQUAD MATE"], ["mark", "YOUR MARK"], ["safe", "NEXT SAFE ZONE"], ["storm", "THE STORM"], ["drop", "SUPPLY DROP"], ["shot", "GUNFIRE"], ["tower", "LOOKOUT TOWER"], ["ruin", "RUINS"], ["landmark", "LANDMARK"],
 			["board", "WRIT BOARD"], ["shrine", "WAYSHRINE"], ["vault", "SEALED VAULT"], ["boss", "BOSS YOU HAVE MET"]]
+		if not hollow_mark.is_empty():
+			key.append(["brazier", "HOLLOW BRAZIER"])
+			key.append(["heart", "HEART OF THE HOLLOW"])
 		if not writ.is_empty():
 			key.append(["writ", "YOUR WRIT"])
 		if plane_path.size() == 2:
@@ -2946,6 +2949,10 @@ func _draw_big_map() -> void:
 				_icon_shrine(d, ic)
 			elif e[0] == "vault":
 				_icon_vault(d, ic, false)
+			elif e[0] == "brazier":
+				_icon_brazier(d, ic, true)
+			elif e[0] == "heart":
+				_icon_heart(d, ic)
 			elif e[0] == "writ":
 				var wc := _writ_tint()
 				d.draw_circle(ic, 7.0, Color(wc.r, wc.g, wc.b, 0.2))
@@ -3231,6 +3238,8 @@ func set_blessings(names: Array) -> void:
 		writ_draw.queue_redraw()
 ## Vaults on the map: [Vector2, opened].
 var vault_marks: Array = []
+## The Ashen Hollow on the map: {c, r, braz: [[Vector2, lit]], cl}.
+var hollow_mark: Dictionary = {}
 
 
 func set_sigils(n: int) -> void:
@@ -3351,6 +3360,46 @@ func _icon_vault(ctrl: Control, vp: Vector2, opened: bool) -> void:
 	ctrl.draw_rect(Rect2(vp + Vector2(-1, -0.5), Vector2(2, 4)), kc)
 
 
+func _draw_hollow(ctrl: Control, view: MapView, big: bool, to_map: Callable, inner: Rect2) -> void:
+	var cp: Vector2 = to_map.call(hollow_mark.c)
+	var rr := float(hollow_mark.r) * view.scale_px()
+	if not inner.grow(rr).has_point(cp):
+		return
+	var cl := bool(hollow_mark.get("cl", false))
+	if cl:
+		ctrl.draw_arc(cp, rr, 0, TAU, 48, Color(0.75, 0.72, 0.66, 0.35), 1.2, true)
+	else:
+		ctrl.draw_circle(cp, rr, Color(0.06, 0.055, 0.055, 0.42))
+		# A ragged edge of ash: dashes round the rim.
+		var n := 36
+		for k in n:
+			if k % 2 == 1:
+				continue
+			var a0 := TAU * float(k) / float(n)
+			ctrl.draw_arc(cp, rr, a0, a0 + TAU / float(n), 4, Color(0.62, 0.58, 0.54, 0.85), 1.6, true)
+	if not big:
+		return
+	for b in hollow_mark.braz:
+		var bp: Vector2 = to_map.call(b[0])
+		if inner.has_point(bp):
+			_icon_brazier(ctrl, bp, bool(b[1]))
+	if not cl and inner.has_point(cp):
+		_icon_heart(ctrl, cp)
+
+
+func _icon_brazier(ctrl: Control, p: Vector2, on: bool) -> void:
+	ctrl.draw_circle(p, 5.5, Color(0.02, 0.02, 0.03, 0.9))
+	ctrl.draw_circle(p, 4.0, Color(1.0, 0.6, 0.22) if on else Color(0.38, 0.34, 0.32))
+	if on:
+		ctrl.draw_circle(p, 1.8, Color(1.0, 0.9, 0.6))
+
+
+func _icon_heart(ctrl: Control, p: Vector2) -> void:
+	var k := 7.0
+	ctrl.draw_colored_polygon(PackedVector2Array([p + Vector2(0, -k - 2), p + Vector2(k * 0.7 + 2, 0), p + Vector2(0, k + 2), p + Vector2(-k * 0.7 - 2, 0)]), Color(0.02, 0.02, 0.03, 0.9))
+	ctrl.draw_colored_polygon(PackedVector2Array([p + Vector2(0, -k), p + Vector2(k * 0.7, 0), p + Vector2(0, k), p + Vector2(-k * 0.7, 0)]), Color(0.85, 0.12, 0.1))
+
+
 ## The writ's circle and spot on a map; the boards on the full map.
 func _draw_writ_map(ctrl: Control, view: MapView, big: bool, to_map: Callable, inner: Rect2) -> void:
 	if _reveal_t > 0.0:
@@ -3365,6 +3414,8 @@ func _draw_writ_map(ctrl: Control, view: MapView, big: bool, to_map: Callable, i
 		if inner.has_point(cmp):
 			ctrl.draw_circle(cmp, 6.0, Color(0.02, 0.02, 0.03, 0.85))
 			ctrl.draw_circle(cmp, 4.5, Color(1.0, 0.62, 0.3))
+	if not hollow_mark.is_empty():
+		_draw_hollow(ctrl, view, big, to_map, inner)
 	for bm in boss_marks:
 		var bmp: Vector2 = to_map.call(bm[0])
 		if inner.has_point(bmp):

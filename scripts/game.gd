@@ -90,6 +90,8 @@ var writs: Writs = null
 var codex: Codex = null
 ## Treasure chests, and the Mimics among them (see chests.gd).
 var chests: Chests = null
+## The Ashen Hollow (see hollow.gd).
+var hollow: Hollow = null
 ## Reliquary, fog bank, the Hunt, Blood Moon (see island_events.gd).
 var events: IslandEvents = null
 ## The next supply drop spawned is a Reliquary.
@@ -369,6 +371,8 @@ func _ready() -> void:
 		_run_vault_test()
 	elif OS.get_cmdline_user_args().has("--chests"):
 		_run_chests_test()
+	elif OS.get_cmdline_user_args().has("--hollow"):
+		_run_hollow_test()
 	elif OS.get_cmdline_user_args().has("--colossus"):
 		_run_colossus_test()
 	elif OS.get_cmdline_user_args().has("--revenant"):
@@ -430,6 +434,10 @@ func _build_world() -> void:
 	chests.name = "Chests"
 	world.add_child(chests)
 	chests.setup(self)
+	hollow = Hollow.new()
+	hollow.name = "Hollow"
+	world.add_child(hollow)
+	hollow.setup(self)
 	if events == null:
 		events = IslandEvents.new()
 		events.name = "IslandEvents"
@@ -809,6 +817,8 @@ func _after_match_setup() -> void:
 		events.reset()
 	if chests != null:
 		chests.reset()
+	if hollow != null:
+		hollow.reset()
 	match_tally = {"writs": 0, "revenants": 0, "vaults": 0, "blessings": 0}
 	_tip_t = 3.0
 	_tip_i = randi() % PLANE_TIPS.size()
@@ -1647,6 +1657,8 @@ func _update_prompt() -> void:
 		wp = codex.prompt(player.global_position)
 	if wp == "" and chests != null:
 		wp = chests.prompt(player.global_position)
+	if wp == "" and hollow != null:
+		wp = hollow.prompt(player.global_position)
 	var mate := _downed_mate_near()
 	if mate != null:
 		hud.set_prompt("HOLD [%s]  REVIVE %s" % [Keybinds.key("interact"), mate.bot_name])
@@ -2464,6 +2476,8 @@ func try_pickup(p: Player) -> void:
 	if p == player and codex != null and car == null and (best == null or best.global_position.distance_to(p.global_position) > 1.2) and codex.interact(p.global_position):
 		return
 	if p == player and chests != null and car == null and (best == null or best.global_position.distance_to(p.global_position) > 1.2) and chests.interact(p.global_position):
+		return
+	if p == player and hollow != null and car == null and (best == null or best.global_position.distance_to(p.global_position) > 1.2) and hollow.interact(p.global_position):
 		return
 	if best == null:
 		return
@@ -3534,6 +3548,14 @@ func _run_shot() -> void:
 				spot = Vector3(float(parts[0]), 0.0, float(parts[1]))
 		elif a.begins_with("--yaw="):
 			ang = float(a.substr(6))
+		elif a.begins_with("--hollowk=") and hollow != null:
+			hollow.force_k = float(a.substr(10))
+			hollow._k = hollow.force_k
+			world.set_hollow(hollow.force_k)
+		elif a.begins_with("--hollowlit=") and hollow != null and hollow.active():
+			for i in mini(int(a.substr(12)), hollow.lit.size()):
+				hollow.lit[i] = true
+			hollow._show()
 	# Free camera: --lm=<landmark> or --cam=x,y,z --look=x,y,z.
 	var cam_pos := Vector3.INF
 	var cam_look := Vector3.ZERO
@@ -6455,6 +6477,108 @@ func _run_chests_test() -> void:
 	get_tree().quit()
 
 
+## Walks into the Ashen Hollow, feels the ash, lights its braziers, wakes
+## its sentinels and takes the Heart.
+func _run_hollow_test() -> void:
+	_start_match()
+	for i in 30:
+		await get_tree().physics_frame
+	_land_player_now()
+	_check("an ashen hollow on the island", hollow != null and hollow.active())
+	if hollow == null or not hollow.active():
+		get_tree().quit()
+		return
+	var hc: Vector3 = hollow.data.c
+	print("[hollow] at %s, r %.0f, braziers %s" % [str(hc.round()), float(hollow.data.r), str((hollow.data.braziers as Array).map(func(b): return str(Vector3(b).round())))])
+	_check("four braziers", hollow.lit.size() == 4)
+	# Into the ash, away from every brazier.
+	var deep := hc
+	var off := Vector3(8.0, 0, 8.0)
+	for k in 8:
+		var a := TAU * float(k) / 8.0
+		var q := hc + Vector3(cos(a), 0, sin(a)) * 22.0
+		var ok := true
+		for b: Vector3 in hollow.data.braziers:
+			if Vector2(q.x - b.x, q.z - b.z).length() < 16.0:
+				ok = false
+		if ok and terrain.height_at(q.x, q.z) > terrain.water_surface_at(q.x, q.z) + 0.5:
+			off = q - hc
+			break
+	deep = ground_at(hc + off + Vector3(0, 30, 0)) + Vector3.UP * 0.2
+	player.global_position = deep
+	player.velocity = Vector3.ZERO
+	var h0 := player.hp
+	for i in 60 * 4:
+		await get_tree().physics_frame
+	print("[hollow] 4 s in the ash: hp %.0f -> %.0f, fog k %.2f" % [h0, player.hp, hollow._k])
+	_check("the ash drains you", player.hp < h0 - 6.0 and player.hp > h0 - 20.0)
+	_check("the hollow darkens the world", hollow._k > 0.5 and world._hollow_k > 0.5)
+	_check("the heart is warded", hollow.prompt(ground_at(hollow.data.heart + Vector3(2.5, 10, 0))).begins_with("THE HEART IS WARDED"))
+	player.hp = 100.0
+	# Wait for soldiers on the ground (the sentinels are drawn from them).
+	player.spawn_protect = 99999.0
+	for i in 60 * 60:
+		await get_tree().physics_frame
+		if i % 60 == 0 and bots.filter(func(b): return is_instance_valid(b) and b.alive and b.state == Bot.State.GROUND and not (b is Revenant)).size() >= 10:
+			break
+	player.spawn_protect = 0.0
+	player.hp = 100.0
+	var e0 := writs.my_embers
+	# Light them, one by one.
+	for i in 4:
+		var b: Vector3 = hollow.data.braziers[i]
+		player.global_position = _dry_spot_near(b, 1.9)
+		player.velocity = Vector3.ZERO
+		for f in 6:
+			await get_tree().physics_frame
+		if i == 0:
+			print("[hollow] at a brazier: %s" % hollow.prompt(player.global_position))
+			_check("a brazier can be lit", hollow.prompt(player.global_position).contains("LIGHT THE BRAZIER"))
+		hollow.interact(player.global_position)
+		if i == 0:
+			var h1 := player.hp
+			for f in 60 * 3:
+				await get_tree().physics_frame
+			_check("no drain by a lit brazier", player.hp >= h1 - 0.5)
+	print("[hollow] lit %d, embers %d -> %d" % [hollow.lit_count(), e0, writs.my_embers])
+	_check("all four braziers lit", hollow.lit_count() == 4)
+	_check("lighting pays", writs.my_embers >= e0 + 600)
+	var near := 0
+	for b in bots:
+		if is_instance_valid(b) and b.alive and not (b is Revenant) and b.global_position.distance_to(hollow.data.heart) < 20.0:
+			near += 1
+	print("[hollow] sentinels at the heart: %d" % near)
+	_check("the sentinels wake", near >= 2)
+	for b in bots:
+		if is_instance_valid(b) and b.global_position.distance_to(hollow.data.heart) < 30.0:
+			b.alert_timer = 0.0
+	player.spawn_protect = 99999.0
+	var hp: Vector3 = hollow.data.heart
+	player.global_position = ground_at(hp + Vector3(2.8, 0.0, 0.0) + Vector3(0, 20, 0)) + Vector3.UP * 0.3
+	player.velocity = Vector3.ZERO
+	for f in 20:
+		await get_tree().physics_frame
+	print("[hollow] at the heart: %s (y %.1f vs %.1f)" % [hollow.prompt(player.global_position), player.global_position.y, hp.y])
+	var g0: int = player.gifts.size()
+	var e1 := writs.my_embers
+	_check("the heart can be taken", hollow.interact(player.global_position))
+	await get_tree().physics_frame
+	_check("the hollow is cleansed", hollow.cleansed)
+	_check("the heart gives a gift, embers and a sigil", player.gifts.size() > g0 and writs.my_embers >= e1 + 1500)
+	player.spawn_protect = 0.0
+	player.hp = 100.0
+	player.global_position = deep
+	for i in 60 * 3:
+		await get_tree().physics_frame
+	_check("no drain once cleansed", player.hp >= 99.5)
+	_check("the fog lifts", hollow._k < 0.1)
+	_check("the map shows it cleansed", bool(hud.hollow_mark.get("cl", false)))
+	hollow.reset()
+	_check("a new match: the ash stands again", not hollow.cleansed and hollow.lit_count() == 0)
+	print("[hollow] done")
+	get_tree().quit()
+
+
 ## Dry ground about `d` metres from `from` (tries round the compass).
 func _dry_spot_near(from: Vector3, d: float) -> Vector3:
 	for k in 16:
@@ -7380,6 +7504,15 @@ func _run_net_test(as_host: bool) -> void:
 			writs.interact(player.global_position)
 		if ((i == 54 and not as_host) or (i == 66 and as_host)) and writs != null and not writs.vaults.is_empty():
 			print("[net] %s %s sees vault 0 open" % ["PASS" if writs.vault_open[0] else "FAIL", "host" if as_host else "client"])
+		# A brazier of the Ashen Hollow lit by the joined player.
+		if i == 56 and not as_host and hollow != null and hollow.active():
+			player.global_position = _dry_spot_near(hollow.data.braziers[0], 1.9)
+			player.velocity = Vector3.ZERO
+			await get_tree().create_timer(0.6).timeout
+			print("[net] client at a brazier: ", hollow.prompt(player.global_position))
+			hollow.interact(player.global_position)
+		if ((i == 59 and not as_host) or (i == 66 and as_host)) and hollow != null and hollow.active():
+			print("[net] %s %s sees the brazier lit" % ["PASS" if hollow.lit[0] else "FAIL", "host" if as_host else "client"])
 		if i == 48 and not as_host and writs != null:
 			print("[net] %s client relic writ over LAN, embers %d" % ["PASS" if writs.my_embers >= Writs.REWARD["relic"] and writs.view.is_empty() else "FAIL", writs.my_embers])
 		if i == 50 and not as_host and near != null:
