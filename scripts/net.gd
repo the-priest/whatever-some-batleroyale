@@ -287,6 +287,11 @@ func start_discovery() -> void:
 	_found.clear()
 
 
+## Games heard on the LAN right now.
+func last_found() -> Array:
+	return _found.values()
+
+
 func stop_discovery() -> void:
 	if _listener != null:
 		_listener.close()

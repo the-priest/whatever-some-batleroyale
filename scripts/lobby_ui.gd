@@ -591,6 +591,29 @@ func refresh_map() -> void:
 		_map_caption.text = "HIGHFALLS ARCHIPELAGO   ·   #%d" % int(game.seed_value)
 
 
+## Quick LAN: join the first open game found on the network; host one if
+## none answers within a few seconds.
+func quick_lan() -> void:
+	show_join()
+	_browser_status.text = "LOOKING FOR A GAME ON YOUR NETWORK  ..."
+	var t0 := Time.get_ticks_msec()
+	var target := ""
+	while Time.get_ticks_msec() - t0 < 3000 and target == "" and _view == "join":
+		await get_tree().create_timer(0.25).timeout
+		for g in net.last_found():
+			if str(g.get("v", "")) == str(Net.VERSION) and not bool(g.get("running", false)) and not bool(g.get("locked", false)) and int(g.get("players", 1)) < int(g.get("max", Net.MAX_PLAYERS)):
+				target = str(g.get("ip", ""))
+				break
+	if _view != "join":
+		return
+	if target != "":
+		_do_join(target)
+	else:
+		_browser_status.text = "NO GAME FOUND  —  HOSTING ONE FOR YOUR FRIENDS"
+		net.stop_discovery()
+		host_pressed.emit(net.my_name)
+
+
 func _do_join(address: String) -> void:
 	var a := address.strip_edges()
 	if a == "" or a.ends_with("."):

@@ -128,6 +128,18 @@ pays a quarter more Renown; they hold until you break them.
 | Oath of Ash | No Kindling |
 | Oath of Glass | You have 75 health |
 
+## Lookout towers
+
+Climb to the upper floor of any watchtower or bell tower and press **F** to survey the land: every
+soldier within 300 m shows on your map for a few seconds. Each tower once a match.
+
+## The Codex
+
+Twenty-four torn pages of the island's story lie where it happened: in the ruins, by the
+landmarks, at the Old Gods' idols, beside the Wayshrines, even inside a sealed vault. They glow
+faintly gold. Press **F** to read one. A page you have read is yours for good (and pays 30
+Renown); read them again from the main menu under **CODEX**.
+
 ## The living island
 
 Every match, the island throws things at you. A horn sounds and a banner names it.
@@ -168,7 +180,8 @@ internet. Everyone needs the same version (another build is refused with a messa
 
 1. One player presses **HOST GAME** in the main menu. The lobby shows their address, with a
    button to copy it.
-2. The others press **JOIN GAME**. Games on the same network appear in the server list; click
+2. The others press **JOIN GAME**. (Or everyone presses **QUICK LAN**: it joins the first open game
+   on your network, and hosts one if there is none yet.) Games on the same network appear in the server list; click
    one. For a game over the internet, type the host's address under Direct Connect (`address` or
    `address:port`), and the password if the host set one.
 3. In the lobby:

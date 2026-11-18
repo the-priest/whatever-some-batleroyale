@@ -86,6 +86,8 @@ var bots: Array = []
 var airdrops: Array = []
 ## Writ boards, writs and Embers (see writs.gd).
 var writs: Writs = null
+## The torn pages of the island's story (see codex.gd).
+var codex: Codex = null
 ## Reliquary, fog bank, the Hunt, Blood Moon (see island_events.gd).
 var events: IslandEvents = null
 ## The next supply drop spawned is a Reliquary.
@@ -264,6 +266,7 @@ func _ready() -> void:
 	hud.map_clicked.connect(_on_map_clicked)
 	hud.host_lan_pressed.connect(_net_host)
 	hud.join_lan_pressed.connect(func(): lobby.show_join())
+	hud.quick_lan_pressed.connect(func(): lobby.quick_lan())
 	net.multiplayer.connected_to_server.connect(func(): lobby.show_lobby())
 	net.left_session.connect(_on_left_session)
 	net.reconnect_state.connect(_on_reconnect_state)
@@ -352,6 +355,8 @@ func _ready() -> void:
 		_run_window_test()
 	elif OS.get_cmdline_user_args().has("--gpubench"):
 		_run_gpu_bench()
+	elif OS.get_cmdline_user_args().has("--codex"):
+		_run_codex_test()
 	elif OS.get_cmdline_user_args().has("--renown"):
 		_run_renown_test()
 	elif OS.get_cmdline_user_args().has("--gods"):
@@ -411,6 +416,10 @@ func _build_world() -> void:
 	writs.name = "Writs"
 	world.add_child(writs)
 	writs.setup(self)
+	codex = Codex.new()
+	codex.name = "Codex"
+	world.add_child(codex)
+	codex.setup(self)
 	if events == null:
 		events = IslandEvents.new()
 		events.name = "IslandEvents"
@@ -931,6 +940,9 @@ func _cleanup_match() -> void:
 	_net_setup_ok = false
 	if writs != null and is_instance_valid(writs):
 		writs.reset()
+	if codex != null and is_instance_valid(codex):
+		codex.close_page()
+		codex.refresh()
 	_clear_wardens()
 	if player != null and player.mode == Player.Mode.VEHICLE:
 		player.vehicle = null
@@ -1612,6 +1624,8 @@ func _update_prompt() -> void:
 	var best := _nearest_loot(player.global_position, 3.0)
 	var car := _nearest_vehicle(player.global_position, 1.7)
 	var wp := writs.prompt(player.global_position) if writs != null else ""
+	if wp == "" and codex != null:
+		wp = codex.prompt(player.global_position)
 	var mate := _downed_mate_near()
 	if mate != null:
 		hud.set_prompt("HOLD [%s]  REVIVE %s" % [Keybinds.key("interact"), mate.bot_name])
@@ -2261,6 +2275,8 @@ func try_pickup(p: Player) -> void:
 	if p == player and _downed_mate_near() != null:
 		return
 	if p == player and writs != null and car == null and (best == null or best.global_position.distance_to(p.global_position) > 1.4) and writs.interact(p.global_position):
+		return
+	if p == player and codex != null and car == null and (best == null or best.global_position.distance_to(p.global_position) > 1.2) and codex.interact(p.global_position):
 		return
 	if best == null:
 		return
@@ -4546,6 +4562,11 @@ func _run_perf() -> void:
 func _shot_state(st: String) -> void:
 	var p := player
 	match st:
+		"page":
+			hud.root.visible = true
+			hud.show_codex_page(23, str(Codex.PAGES[23][0]), str(Codex.PAGES[23][1]), 7, Codex.PAGES.size(), Codex.RENOWN_PER_PAGE)
+			for i in 10:
+				await get_tree().process_frame
 		"menu", "oaths":
 			hud.root.visible = true
 			hud.show_menu("SEED %d" % seed_value)
@@ -5898,6 +5919,46 @@ func _draw_audit() -> void:
 		print("[audit] %-40s nodes=%d surfaces=%d shadow=%d" % [k, groups[k][0], groups[k][1], groups[k][2]])
 
 
+## Finds and reads a torn page, and checks it is kept.
+func _run_codex_test() -> void:
+	Codex.load_found()
+	Renown.load_profile()
+	var keep: Dictionary = Codex.found.duplicate()
+	var r0 := Renown.total
+	Codex.found.clear()
+	_start_match()
+	for i in 30:
+		await get_tree().physics_frame
+	_land_player_now()
+	player.spawn_protect = 99999.0
+	print("[codex] %d pages placed: %s" % [codex.spots.size(), str(codex.spots.map(func(sp): return "%d@%s" % [sp.page, str(Vector3(sp.pos).round())]).slice(0, 8))])
+	_check("the codex pages lie on the island", codex.spots.size() >= 20)
+	var pages := {}
+	for sp in codex.spots:
+		pages[int(sp.page)] = true
+	_check("every page is a different one", pages.size() == codex.spots.size())
+	var sp0: Dictionary = codex.spots[0]
+	player.global_position = (sp0.pos as Vector3) + Vector3(0.9, 0.4, 0.0)
+	player.velocity = Vector3.ZERO
+	for i in 10:
+		await get_tree().physics_frame
+	print("[codex] at a page (%.2f m off the ground): %s" % [(sp0.pos as Vector3).y - terrain.height_at(sp0.pos.x, sp0.pos.z), codex.prompt(player.global_position)])
+	_check("a page can be read", codex.prompt(player.global_position).contains("READ"))
+	try_pickup(player)
+	_check("reading it opens the page", codex.reading == int(sp0.page) and input_locked and hud._page.visible)
+	_check("and keeps it", Codex.found.has(int(sp0.page)))
+	_check("a new page pays renown", Renown.total == r0 + Codex.RENOWN_PER_PAGE)
+	codex.close_page()
+	_check("closing it frees you", not input_locked and not hud._page.visible)
+	_check("a read page is gone from the world", codex.prompt(player.global_position) == "")
+	Codex.found = keep
+	Codex.save_found()
+	Renown.total = r0
+	Renown.save_profile()
+	print("[codex] done")
+	get_tree().quit()
+
+
 ## Swears every Oath, checks each one bites, then dies and is paid Renown.
 func _run_renown_test() -> void:
 	Renown.load_profile()
@@ -5972,8 +6033,9 @@ func _run_gods_test() -> void:
 	_check("a spent idol is silent", writs.prompt(player.global_position) == "")
 	# A lookout tower: survey the land from the top.
 	if not world.villages.towers.is_empty():
-		var tc: Vector2 = world.villages.towers[0].center
-		var top := ground_at(Vector3(tc.x, terrain.height_at(tc.x, tc.y) + 80.0, tc.y))
+		var tw: Dictionary = world.villages.towers[0]
+		var tc: Vector2 = tw.center
+		var top := Vector3(tc.x + 1.0, float(tw.pad) + Villages.WALL_HEIGHT + 0.1, tc.y + 1.0)
 		player.global_position = top + Vector3.UP * 0.2
 		await get_tree().physics_frame
 		print("[gods] tower top %.1f m up: %s" % [top.y - terrain.height_at(tc.x, tc.y), writs.prompt(player.global_position)])

@@ -223,7 +223,7 @@ func prompt(p: Vector3) -> String:
 		return "[%s]  WAYSHRINE  —  SPEND YOUR EMBERS   (◆ %d)" % [key, my_embers]
 	var ti := tower_top(p)
 	if ti >= 0 and not _surveyed.has(ti):
-		return "[%s]  SURVEY THE LAND FROM UP HERE" % key
+		return "[%s]  SURVEY THE LAND FROM THE TOWER" % key
 	var vi := vault_near(p)
 	if vi >= 0:
 		if my_sigils > 0:
@@ -626,13 +626,12 @@ func _kneel(o: int) -> void:
 
 # --------------------------------------------------------- lookout towers --
 
-## A lookout tower whose top you are standing on (high above the ground by
-## it), or -1.
+## A lookout tower whose upper floor you are standing on, or -1.
 func tower_top(p: Vector3) -> int:
 	var towers: Array = game.world.villages.towers
 	for i in towers.size():
 		var c: Vector2 = towers[i].center
-		if Vector2(p.x, p.z).distance_to(c) < 6.0 and p.y - game.terrain.height_at(c.x, c.y) > 8.0:
+		if Vector2(p.x, p.z).distance_to(c) < 4.3 and p.y - float(towers[i].pad) > 2.6:
 			return i
 	return -1
 

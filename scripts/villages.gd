@@ -110,6 +110,7 @@ func build(p_terrain: Terrain, p_seed: int) -> void:
 	_wayshrines()
 	_vaults()
 	_old_gods()
+	_codex_spots()
 	_commit_batches()
 	_commit_colliders()
 	print("[villages] %d villages, %d houses, %d towers, %d ruins, %d pieces, %d loot points, %d colliders" % [
@@ -2226,6 +2227,78 @@ func _idol(at: Vector2, yaw: float, god: String, kind: String) -> Dictionary:
 	_add_box_collider(base + fb * Vector3(0, 1.7, 0), Vector3(1.0, 2.6, 0.7), yaw)
 	return {"pos": base + b * Vector3(0, 0.3, 1.25), "yaw": yaw, "god": god, "kind": kind,
 		"eyes": base + fb * Vector3(0, 2.76, 0.27), "eye_basis": fb}
+
+
+## Where the Codex's torn pages lie: [{pos, yaw, page}]. Some pages sit
+## where their story is (a god's page at its idol, the sigil page inside a
+## vault); the rest are scattered through the ruins and by the landmarks.
+var codex_spots: Array = []
+
+
+func _codex_spots() -> void:
+	codex_spots.clear()
+	var page_count := 24
+	var used := {}
+	var put := func(pg: int, at: Vector3, yaw: float) -> void:
+		codex_spots.append({"pos": at, "yaw": yaw, "page": pg})
+		used[pg] = true
+	# A spot of open ground near `c`, or INF.
+	var ground_near := func(c: Vector2, r0: float, r1: float) -> Vector3:
+		for k in 30:
+			var a := rng.randf() * TAU
+			var q := c + Vector2(cos(a), sin(a)) * rng.randf_range(r0, r1)
+			if terrain.height_at(q.x, q.y) < terrain.water_surface_at(q.x, q.y) + 0.4 or terrain.slope_at(q.x, q.y) > 0.5:
+				continue
+			if not _free_spot(q, 0.5) or blocks_house(q, 0.6):
+				continue
+			return Vector3(q.x, terrain.height_at(q.x, q.y) + 0.02, q.y)
+		return Vector3.INF
+	var god_page := {"swift": 14, "steady": 15, "vigour": 16, "ember": 17}
+	for g in old_gods:
+		if god_page.has(g.kind):
+			var gb := Basis(Vector3.UP, float(g.yaw))
+			put.call(int(god_page[g.kind]), (g.pos as Vector3) + gb * Vector3(0.75, 0.0, -0.35), float(g.yaw) + 0.4)
+	if wayshrines.size() >= 2:
+		for k in 2:
+			var w: Dictionary = wayshrines[k]
+			var at: Vector3 = ground_near.call(Vector2(w.pos.x, w.pos.z), 2.4, 5.0)
+			if at != Vector3.INF:
+				put.call(2 + k, at, rng.randf() * TAU)
+	if not writ_boards.is_empty():
+		var wb: Dictionary = writ_boards[0]
+		var at2: Vector3 = ground_near.call(Vector2(wb.pos.x, wb.pos.z), 1.8, 4.0)
+		if at2 != Vector3.INF:
+			put.call(4, at2, rng.randf() * TAU)
+	if not vaults.is_empty():
+		var v: Dictionary = vaults[0]
+		put.call(13, (v.inside as Vector3) + Basis(Vector3.UP, float(v.yaw)) * Vector3(0.0, 0.0, 0.9), float(v.yaw))
+	if landmarks != null:
+		for l in landmarks.labels:
+			var pg := 20 if str(l[0]) == "GULL POINT" else (21 if str(l[0]) == "TREETOP TOWN" else -1)
+			if pg >= 0 and not used.has(pg):
+				var at3: Vector3 = ground_near.call(l[1], 6.0, 30.0)
+				if at3 != Vector3.INF:
+					put.call(pg, at3, rng.randf() * TAU)
+	# The rest: in the ruins first, then by the landmarks.
+	var anchors: Array = []
+	for p in poi_pads:
+		if str(p.type) == "ruin":
+			anchors.append([p.center, 3.0, 9.0])
+	if landmarks != null:
+		for l in landmarks.labels:
+			anchors.append([l[1], 8.0, 30.0])
+	var ai := 0
+	for pg in page_count:
+		if used.has(pg):
+			continue
+		while ai < anchors.size():
+			var an: Array = anchors[ai]
+			ai += 1
+			var at4: Vector3 = ground_near.call(an[0], float(an[1]), float(an[2]))
+			if at4 != Vector3.INF:
+				put.call(pg, at4, rng.randf() * TAU)
+				break
+	print("[villages] %d codex pages lie on the island" % codex_spots.size())
 
 
 ## Washing hung out behind about one house in four: two posts, a line, and

@@ -157,7 +157,7 @@ your kills pay more.
 
 ---
 
-## Phase 4: More to explore and find — Shrines of the Old Gods DONE
+## Phase 4: More to explore and find — Shrines of the Old Gods, lookout towers and the Codex DONE
 
 - **Codex pages:** 40 pieces of lore across the island, in ruins, on a skeleton's hand, under a
   jetty, at the top of the giant tree. Collected pages persist and read in a Codex screen on the

@@ -13,6 +13,7 @@ signal chat_closed
 signal map_clicked(world: Vector2, button: int)
 signal host_lan_pressed
 signal join_lan_pressed
+signal quick_lan_pressed
 signal resume_pressed
 signal quit_pressed
 signal settings_changed(sensitivity: float, volume: float, fov: float, players: int)
@@ -786,7 +787,11 @@ func _build_menu() -> void:
 	jb.pressed.connect(func(): sfx_click(); join_lan_pressed.emit())
 	lan.add_child(jb)
 	col.add_child(lan)
-	for item in [["LOADOUT", "_open_loadout"], ["OATHS", "_open_oaths"], ["SETTINGS", "_open_settings"], ["QUIT", "_quit"]]:
+	var qb := _button("QUICK LAN  ·  JOIN OR HOST WITH FRIENDS", false)
+	qb.custom_minimum_size = Vector2(340, 44)
+	qb.pressed.connect(func(): sfx_click(); quick_lan_pressed.emit())
+	col.add_child(qb)
+	for item in [["LOADOUT", "_open_loadout"], ["OATHS", "_open_oaths"], ["CODEX", "_open_codex"], ["SETTINGS", "_open_settings"], ["QUIT", "_quit"]]:
 		var b := _button(item[0], false)
 		b.custom_minimum_size = Vector2(340, 48)
 		b.pressed.connect(Callable(self, item[1]))
@@ -923,6 +928,124 @@ func _sync_oaths() -> void:
 		b.set_pressed_no_signal(on)
 		b.text = "  %s   %s  —  %s" % ["■" if on else "□", str(o[1]), str(o[2]).to_upper()]
 	_oath_mult.text = "RENOWN  ×%.2f   ·   SOLO MATCHES ONLY" % Renown.oath_mult()
+
+
+# ------------------------------------------------------------------ codex --
+var _page: Control = null
+var _page_title: Label
+var _page_text: Label
+var _page_foot: Label
+var _codex: Control = null
+var _codex_list: VBoxContainer
+
+
+## A torn page, read where it was found (or from the Codex).
+func show_codex_page(pg: int, title: String, text: String, have: int, total: int, renown: int) -> void:
+	if _page == null:
+		_page = ColorRect.new()
+		(_page as ColorRect).color = Color(0.01, 0.01, 0.012, 0.7)
+		_page.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_page.mouse_filter = Control.MOUSE_FILTER_STOP
+		_page.z_index = 30
+		root.add_child(_page)
+		var paper := PanelContainer.new()
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(0.86, 0.79, 0.62)
+		sb.border_color = Color(0.45, 0.33, 0.2)
+		sb.set_border_width_all(3)
+		sb.set_content_margin_all(34)
+		paper.add_theme_stylebox_override("panel", sb)
+		paper.set_anchors_preset(Control.PRESET_CENTER)
+		paper.offset_left = -330
+		paper.offset_right = 330
+		paper.offset_top = -122
+		paper.offset_bottom = 122
+		paper.grow_vertical = Control.GROW_DIRECTION_BOTH
+		_page.add_child(paper)
+		var vb := VBoxContainer.new()
+		vb.add_theme_constant_override("separation", 14)
+		paper.add_child(vb)
+		_page_title = _lv("", 24, Color(0.22, 0.12, 0.06))
+		vb.add_child(_page_title)
+		_page_text = _lv("", 17, Color(0.18, 0.12, 0.07), false)
+		# Ink on paper: no drop shadows.
+		for l: Label in [_page_title, _page_text]:
+			l.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0))
+		_page_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_page_text.custom_minimum_size = Vector2(590, 0)
+		vb.add_child(_page_text)
+		_page_foot = _lv("", 12, Color(0.4, 0.28, 0.16))
+		_page_foot.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0))
+		vb.add_child(_page_foot)
+	_page_title.text = "%d.  %s" % [pg + 1, title]
+	_page_text.text = text
+	var foot := "PAGE %d OF %d FOUND" % [have, total]
+	if renown > 0:
+		foot += "   ·   +%d RENOWN" % renown
+	_page_foot.text = foot + "   ·   ANY KEY TO CLOSE"
+	_page.visible = true
+
+
+func hide_codex_page() -> void:
+	if _page != null:
+		_page.visible = false
+
+
+func _open_codex() -> void:
+	sfx_click()
+	Codex.load_found()
+	if _codex == null:
+		_codex = ColorRect.new()
+		(_codex as ColorRect).color = Color(0.01, 0.012, 0.016, 0.88)
+		_codex.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_codex.mouse_filter = Control.MOUSE_FILTER_STOP
+		_codex.z_index = 25
+		root.add_child(_codex)
+		var box := _panel(0.96)
+		box.set_anchors_preset(Control.PRESET_CENTER)
+		box.offset_left = -380
+		box.offset_right = 380
+		box.offset_top = -320
+		box.offset_bottom = 320
+		_codex.add_child(box)
+		var vb := VBoxContainer.new()
+		vb.add_theme_constant_override("separation", 8)
+		box.add_child(vb)
+		vb.add_child(_lv("CODEX", 26, WHITE))
+		var sc := ScrollContainer.new()
+		sc.custom_minimum_size = Vector2(700, 470)
+		sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		vb.add_child(sc)
+		_codex_list = VBoxContainer.new()
+		_codex_list.add_theme_constant_override("separation", 4)
+		_codex_list.custom_minimum_size = Vector2(680, 0)
+		sc.add_child(_codex_list)
+		var done := _button("CLOSE", true)
+		done.custom_minimum_size = Vector2(700, 50)
+		done.pressed.connect(func(): sfx_click(); _codex.visible = false)
+		vb.add_child(done)
+	for c in _codex_list.get_children():
+		c.queue_free()
+	var have := Codex.found.size()
+	_codex_list.add_child(_lv("%d OF %d TORN PAGES FOUND  —  THEY LIE IN THE RUINS, BY THE LANDMARKS, AT THE IDOLS, EVEN IN A VAULT" % [have, Codex.PAGES.size()], 12, MUTED))
+	for i in Codex.PAGES.size():
+		var pg: Array = Codex.PAGES[i]
+		var b := _button("", false)
+		b.custom_minimum_size = Vector2(680, 40)
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		if Codex.found.has(i):
+			b.text = "  %2d.  %s" % [i + 1, str(pg[0])]
+			var idx := i
+			b.pressed.connect(func():
+				sfx_click()
+				show_codex_page(idx, str(Codex.PAGES[idx][0]), str(Codex.PAGES[idx][1]), Codex.found.size(), Codex.PAGES.size(), 0)
+				_page_foot.text = "PAGE %d OF %d FOUND   ·   CLICK TO CLOSE" % [Codex.found.size(), Codex.PAGES.size()]
+				_page.gui_input.connect(func(ev): if ev is InputEventMouseButton and ev.pressed: _page.visible = false, CONNECT_ONE_SHOT))
+		else:
+			b.text = "  %2d.  ? ? ?" % (i + 1)
+			b.disabled = true
+		_codex_list.add_child(b)
+	_codex.visible = true
 
 
 ## End of the match: what it paid in Renown, and where that leaves you.
