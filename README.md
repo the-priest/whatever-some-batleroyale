@@ -149,6 +149,9 @@ Every match, the island throws things at you. A horn sounds and a banner names i
 - **A fog bank rolls in**: thick fog for two minutes. Nobody sees far, you included.
 - **The Hunt**: a Revenant leaves its ground and stalks the nearest player for two minutes, then
   goes home.
+- **A writ on your head** (twice a match): a soldier takes a bounty on you. Armoured and well armed,
+  they learn where you are every few seconds and come for you; you are warned when they are within
+  90 m. Kill them first for 500 Embers. In a LAN game every player gets their own hunter.
 - **The storm surges** (some matches): halfway through a hold, the storm stops waiting and closes
   in seconds.
 - **Blood Moon** (late game): the sky turns red and stays red. Soldiers hunt the nearest player in

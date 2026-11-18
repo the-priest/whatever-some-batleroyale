@@ -157,7 +157,7 @@ your kills pay more.
 
 ---
 
-## Phase 4: More to explore and find — Shrines of the Old Gods, lookout towers and the Codex DONE
+## Phase 4: More to explore and find — Shrines of the Old Gods, lookout towers and the Codex DONE (caves, shipwreck, treasure maps, secret rooms still to do)
 
 - **Codex pages:** 40 pieces of lore across the island, in ruins, on a skeleton's hand, under a
   jetty, at the top of the giant tree. Collected pages persist and read in a Codex screen on the
@@ -180,7 +180,7 @@ your kills pay more.
 
 ---
 
-## Phase 5: Living island events — Reliquary, Fog Bank, The Hunt and Blood Moon DONE
+## Phase 5: Living island events — Reliquary, Fog Bank, The Hunt, Storm Surge, Bounty Hunters and Blood Moon DONE (Caravan still to do)
 
 These are announced with a horn and a banner, and appear on the map.
 
@@ -195,7 +195,7 @@ These are announced with a horn and a banner, and appear on the map.
 
 ---
 
-## Phase 6: Oaths, Renown and the long game — Oaths and Renown ranks DONE
+## Phase 6: Oaths, Renown and the long game — Oaths and Renown ranks DONE (daily trials, cosmetics still to do)
 
 **Oaths** are picked in the lobby before the drop (the host picks them in LAN). Each adds Renown
 on a win or a top-10 finish.
@@ -227,7 +227,7 @@ so on.
 
 ---
 
-## Phase 7: Co-op and LAN polish
+## Phase 7: Co-op and LAN polish — downed/revive and Quick LAN DONE (ping wheel, squad Embers still to do)
 
 - **Ping wheel:** enemy here, loot here, going here, need help. It works with the existing markers.
 - **Squad Embers:** hold E at a Wayshrine to buy for a team mate.

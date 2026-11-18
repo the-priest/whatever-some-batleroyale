@@ -6145,6 +6145,19 @@ func _run_events_test() -> void:
 		for i in 60 * (IslandEvents.HUNT_TIME + 8.0):
 			await get_tree().physics_frame
 		_check("and it goes home after", hunter.arena.distance_to(home) < 1.0)
+	# A bounty hunter comes for you; kill them first.
+	events._send_hunters()
+	_check("a bounty hunter takes the writ on you", not events.hunters.is_empty())
+	if not events.hunters.is_empty():
+		var hb: Bot = events.hunters.keys()[0]
+		print("[events] hunter %s at %d m, gun %s, armour %d" % [hb.bot_name, int(hb.global_position.distance_to(player.global_position)), hb.weapon_id, hb.vest_level])
+		for i in 60 * 10:
+			await get_tree().physics_frame
+		_check("the hunter heads for you", hb.roam_point.distance_to(Vector2(player.global_position.x, player.global_position.z)) < 20.0)
+		var eh := writs.my_embers
+		hb.take_damage(999.0, hb.global_position + Vector3.UP * 1.6, true, player)
+		await get_tree().physics_frame
+		_check("killing the hunter pays", writs.my_embers >= eh + IslandEvents.HUNTER_EMBERS)
 	# Storm surge: the hold is cut short.
 	var hold0: float = zone.timer
 	if zone.state == "hold":

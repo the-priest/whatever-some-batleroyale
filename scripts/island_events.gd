@@ -21,7 +21,10 @@ const TITLES := {
 	"hunt": ["%s HUNTS", "A REVENANT HAS LEFT ITS GROUND. IT IS COMING FOR THE NEAREST OF YOU"],
 	"blood": ["BLOOD MOON", "THE SKY TURNS RED  —  THEY HUNT IN PACKS. EVERY KILL PAYS DOUBLE"],
 	"surge": ["THE STORM SURGES", "IT WILL NOT WAIT  —  THE CIRCLE CLOSES IN SECONDS. RUN"],
+	"hunter": ["A WRIT ON YOUR HEAD", "A BOUNTY HUNTER HAS TAKEN IT  —  KILL THEM FIRST FOR %d EMBERS"],
 }
+const HUNTER_EMBERS := 500
+const HUNTER_TRACK := 8.0
 const SURGE_LEFT := 15.0
 
 var game: Node
@@ -36,6 +39,9 @@ var _hunter: Revenant = null
 var _hunt_t := 0.0
 var _hunt_tick := 0.0
 var _blood_tick := 0.0
+## Bounty hunters: hunter bot -> the owner (0 or a peer id) they hunt.
+var hunters: Dictionary = {}
+var _hunter_tick := 0.0
 ## Storm Surge: when the zone's hold timer falls to this, the surge comes.
 var _surge_at := -1.0
 
@@ -48,6 +54,9 @@ func setup(p_game: Node) -> void:
 func reset() -> void:
 	_done.clear()
 	_plan = {"fog": [1, 3][randi() % 2], "reliquary": 2, "hunt": [3, 4][randi() % 2], "blood": 5}
+	# Bounty hunters come for each player, twice a match.
+	_plan["hunter"] = 1
+	_plan["hunter2"] = 3
 	# Now and then the storm will not wait.
 	if randf() < 0.6:
 		_plan["surge"] = [2, 3, 4][randi() % 3]
@@ -58,6 +67,7 @@ func reset() -> void:
 	_hunter = null
 	_hunt_t = 0.0
 	_surge_at = -1.0
+	hunters.clear()
 	if game != null and game.world != null:
 		game.world.set_blood_moon(0.0)
 		game.world.set_fog_bank(0.0)
@@ -95,6 +105,9 @@ func _start(kind: String) -> void:
 					break
 			if not data.has("at"):
 				return
+		"hunter", "hunter2":
+			_send_hunters()
+			return
 		"surge":
 			# Mid-way through this phase's hold, cut it short.
 			_surge_at = game.zone.timer * randf_range(0.35, 0.6)
@@ -112,6 +125,60 @@ func _start(kind: String) -> void:
 	apply(kind, data)
 
 
+## Host: one bounty hunter for each living player.
+func _send_hunters() -> void:
+	var owners: Array = []
+	if game.player != null and game.player.alive and game.player.mode == Player.Mode.GROUND:
+		owners.append(0)
+	for id in game.humans:
+		var h = game.humans[id]
+		if h != null and is_instance_valid(h) and (h as Bot).alive and (h as Bot).state == Bot.State.GROUND:
+			owners.append(int(id))
+	for o in owners:
+		var at: Vector3 = game.writs._owner_pos(o)
+		if at == Vector3.INF:
+			continue
+		var best: Bot = null
+		var best_s := INF
+		for b in game.bots:
+			if not is_instance_valid(b) or not b.alive or b.is_human or b.puppet or b.state != Bot.State.GROUND or b is Revenant or b.has_meta("writ_mark") or hunters.has(b):
+				continue
+			var d: float = b.global_position.distance_to(at)
+			if d < 180.0 or d > 600.0:
+				continue
+			var sc := absf(d - 320.0) + randf() * 80.0
+			if sc < best_s:
+				best_s = sc
+				best = b
+		if best == null:
+			continue
+		game.writs._crown(best, -1)
+		best.remove_meta("writ_mark")
+		best.set_meta("hunter", o)
+		hunters[best] = o
+		var data := {"t": HUNTER_EMBERS}
+		if o == 0:
+			apply("hunter", data)
+		elif game.net_on():
+			game.net.send_writ_event(o, {"ev": "island", "kind": "hunter", "data": data})
+
+
+## Host: a bounty hunter died. Whoever they hunted is paid if it was them.
+func on_bot_eliminated(victim: Bot) -> void:
+	if not hunters.has(victim):
+		return
+	var o := int(hunters[victim])
+	hunters.erase(victim)
+	var src = victim.last_killer_node
+	var killer_o := -1
+	if src == game.player:
+		killer_o = 0
+	elif src is Bot and is_instance_valid(src) and (src as Bot).is_human:
+		killer_o = (src as Bot).peer_id
+	if killer_o == o:
+		game.writs.award(o, HUNTER_EMBERS, "BOUNTY HUNTER SLAIN")
+
+
 ## Host: the storm stops holding and closes within seconds.
 func surge_now() -> void:
 	if game.zone == null or game.zone.state != "hold":
@@ -124,10 +191,17 @@ func surge_now() -> void:
 
 ## Everyone: show it, and change the sky.
 func apply(kind: String, data: Dictionary) -> void:
+	if kind == "hunter_close":
+		game.sfx.play_ui("writ_ping", -2.0)
+		game.hud.show_big("THE HUNTER IS CLOSE", HUD.DANGER, 2.2)
+		game.hud.show_notice("WITHIN 90 M OF YOU  —  KILL THEM FOR %d EMBERS" % HUNTER_EMBERS, 3.0)
+		return
 	var t: Array = TITLES.get(kind, ["", ""])
 	var title := str(t[0])
 	if kind == "hunt":
 		title = title % str(data.get("name", "A REVENANT"))
+	if kind == "hunter":
+		t = [t[0], str(t[1]) % HUNTER_EMBERS]
 	var col := Color(1.0, 0.82, 0.38)
 	match kind:
 		"fog":
@@ -136,7 +210,7 @@ func apply(kind: String, data: Dictionary) -> void:
 		"blood":
 			blood = true
 			col = HUD.DANGER
-		"hunt", "surge":
+		"hunt", "surge", "hunter":
 			col = HUD.DANGER
 	game.sfx.play_ui("event_horn", -2.0)
 	game.hud.show_big(title, col, 3.6)
@@ -164,6 +238,29 @@ func _process(delta: float) -> void:
 	if _surge_at > 0.0 and game.zone != null and game.zone.state == "hold" and game.zone.timer <= _surge_at:
 		_surge_at = -1.0
 		surge_now()
+	# Bounty hunters keep coming: every few seconds they learn where you are.
+	_hunter_tick -= delta
+	if _hunter_tick <= 0.0 and not hunters.is_empty():
+		_hunter_tick = HUNTER_TRACK
+		for b in hunters.keys():
+			if not is_instance_valid(b) or not (b as Bot).alive:
+				hunters.erase(b)
+				continue
+			var prey: Vector3 = game.writs._owner_pos(int(hunters[b]))
+			if prey == Vector3.INF or not game.writs._owner_alive(int(hunters[b])):
+				hunters.erase(b)
+				continue
+			(b as Bot).roam_point = Vector2(prey.x, prey.z) + Vector2(randf_range(-10, 10), randf_range(-10, 10))
+			(b as Bot).heard_pos = prey
+			(b as Bot).alert_timer = HUNTER_TRACK + 2.0
+			(b as Bot).calm_t = 0.0
+			if (b as Bot).global_position.distance_to(prey) < 90.0 and not (b as Bot).has_meta("hunter_close"):
+				(b as Bot).set_meta("hunter_close", true)
+				var o := int(hunters[b])
+				if o == 0:
+					apply("hunter_close", {})
+				elif game.net_on():
+					game.net.send_writ_event(o, {"ev": "island", "kind": "hunter_close", "data": {}})
 	# The Hunt: the Revenant's ground moves with its prey.
 	if _hunter != null:
 		if not is_instance_valid(_hunter) or not _hunter.alive:

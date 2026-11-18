@@ -1037,6 +1037,8 @@ func on_bot_eliminated(victim: Bot) -> void:
 		_unbrand(victim.peer_id, false)
 		if killer_o >= 0:
 			award(killer_o, BRAND_REWARD / 2, "BRANDED SLAIN")
+	if game.events != null:
+		game.events.on_bot_eliminated(victim)
 	if victim.has_meta("writ_mark"):
 		var o := int(victim.get_meta("writ_mark"))
 		victim.remove_meta("writ_mark")
@@ -1309,6 +1311,9 @@ func apply_event(e: Dictionary) -> void:
 				for k in game.player.blessings:
 					names.append(str(BLESSINGS.get(k, [k])[0]))
 				hud.set_blessings(names)
+		"island":
+			if game.events != null:
+				game.events.apply(str(e.get("kind", "")), e.get("data", {}))
 		"bought":
 			game.sfx.play_ui("shrine_buy", -4.0)
 			hud.show_notice("%s  —  LAID ON THE OFFERING STONE" % str(e.get("what", "")), 2.4)
