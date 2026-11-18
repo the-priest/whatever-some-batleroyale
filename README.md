@@ -149,6 +149,8 @@ Every match, the island throws things at you. A horn sounds and a banner names i
 - **A fog bank rolls in**: thick fog for two minutes. Nobody sees far, you included.
 - **The Hunt**: a Revenant leaves its ground and stalks the nearest player for two minutes, then
   goes home.
+- **The storm surges** (some matches): halfway through a hold, the storm stops waiting and closes
+  in seconds.
 - **Blood Moon** (late game): the sky turns red and stays red. Soldiers hunt the nearest player in
   packs, and every kill pays double Embers.
 

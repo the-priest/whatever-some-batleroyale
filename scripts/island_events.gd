@@ -20,7 +20,9 @@ const TITLES := {
 	"fog": ["A FOG BANK ROLLS IN", "YOU WILL NOT SEE THEM COMING  —  NOR THEY YOU"],
 	"hunt": ["%s HUNTS", "A REVENANT HAS LEFT ITS GROUND. IT IS COMING FOR THE NEAREST OF YOU"],
 	"blood": ["BLOOD MOON", "THE SKY TURNS RED  —  THEY HUNT IN PACKS. EVERY KILL PAYS DOUBLE"],
+	"surge": ["THE STORM SURGES", "IT WILL NOT WAIT  —  THE CIRCLE CLOSES IN SECONDS. RUN"],
 }
+const SURGE_LEFT := 15.0
 
 var game: Node
 ## Host: which storm phase each event comes at this match.
@@ -34,6 +36,8 @@ var _hunter: Revenant = null
 var _hunt_t := 0.0
 var _hunt_tick := 0.0
 var _blood_tick := 0.0
+## Storm Surge: when the zone's hold timer falls to this, the surge comes.
+var _surge_at := -1.0
 
 
 func setup(p_game: Node) -> void:
@@ -44,12 +48,16 @@ func setup(p_game: Node) -> void:
 func reset() -> void:
 	_done.clear()
 	_plan = {"fog": [1, 3][randi() % 2], "reliquary": 2, "hunt": [3, 4][randi() % 2], "blood": 5}
+	# Now and then the storm will not wait.
+	if randf() < 0.6:
+		_plan["surge"] = [2, 3, 4][randi() % 3]
 	blood = false
 	_blood_k = 0.0
 	_fog_t = 0.0
 	_fog_k = 0.0
 	_hunter = null
 	_hunt_t = 0.0
+	_surge_at = -1.0
 	if game != null and game.world != null:
 		game.world.set_blood_moon(0.0)
 		game.world.set_fog_bank(0.0)
@@ -87,6 +95,10 @@ func _start(kind: String) -> void:
 					break
 			if not data.has("at"):
 				return
+		"surge":
+			# Mid-way through this phase's hold, cut it short.
+			_surge_at = game.zone.timer * randf_range(0.35, 0.6)
+			return
 		"hunt":
 			var alive_revs: Array = game.bots.filter(func(b): return is_instance_valid(b) and b is Revenant and (b as Bot).alive)
 			if alive_revs.is_empty():
@@ -98,6 +110,16 @@ func _start(kind: String) -> void:
 	if game.net_on():
 		game.net.send_island_event(kind, data)
 	apply(kind, data)
+
+
+## Host: the storm stops holding and closes within seconds.
+func surge_now() -> void:
+	if game.zone == null or game.zone.state != "hold":
+		return
+	game.zone.timer = minf(game.zone.timer, SURGE_LEFT)
+	if game.net_on():
+		game.net.send_island_event("surge", {})
+	apply("surge", {})
 
 
 ## Everyone: show it, and change the sky.
@@ -114,7 +136,7 @@ func apply(kind: String, data: Dictionary) -> void:
 		"blood":
 			blood = true
 			col = HUD.DANGER
-		"hunt":
+		"hunt", "surge":
 			col = HUD.DANGER
 	game.sfx.play_ui("event_horn", -2.0)
 	game.hud.show_big(title, col, 3.6)
@@ -139,6 +161,9 @@ func _process(delta: float) -> void:
 		game.world.set_fog_bank(_fog_k)
 	if game.net_is_client() or game.phase != "playing":
 		return
+	if _surge_at > 0.0 and game.zone != null and game.zone.state == "hold" and game.zone.timer <= _surge_at:
+		_surge_at = -1.0
+		surge_now()
 	# The Hunt: the Revenant's ground moves with its prey.
 	if _hunter != null:
 		if not is_instance_valid(_hunter) or not _hunter.alive:

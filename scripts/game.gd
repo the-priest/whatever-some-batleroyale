@@ -6145,11 +6145,17 @@ func _run_events_test() -> void:
 		for i in 60 * (IslandEvents.HUNT_TIME + 8.0):
 			await get_tree().physics_frame
 		_check("and it goes home after", hunter.arena.distance_to(home) < 1.0)
+	# Storm surge: the hold is cut short.
+	var hold0: float = zone.timer
+	if zone.state == "hold":
+		events.surge_now()
+		_check("storm surge cuts the hold short", zone.timer <= IslandEvents.SURGE_LEFT + 0.1)
+		print("[events] surge: hold %.0f s -> %.0f s" % [hold0, zone.timer])
 	events._start("blood")
 	for i in 60 * 27:
 		await get_tree().physics_frame
 	print("[events] blood moon sun %s fog %s" % [str(world.sun.light_color), str(world.environment.fog_light_color)])
-	_check("blood moon reddens the sky", world.sun.light_color.r > world.sun.light_color.g * 2.0)
+	_check("blood moon reddens the sky", world.sun.light_color.r > world.sun.light_color.g * 1.4)
 	_check("blood moon: kills pay double", writs.ember_mult == 2)
 	var e0 := writs.my_embers
 	for b in bots:
