@@ -723,14 +723,19 @@ func _apply_tint() -> void:
 	var p := _wx
 	var k := _blood
 	var sm := sky_material
-	sun.light_color = (p[2] as Color).lerp(Color(1.0, 0.38, 0.26), k)
-	sun.light_energy = lerpf(float(p[3]), 0.85, k)
-	sm.set_shader_parameter("sky_top_color", (p[4] as Color).lerp(Color(0.22, 0.04, 0.05), k))
-	sm.set_shader_parameter("sky_horizon_color", (p[5] as Color).lerp(Color(0.72, 0.2, 0.13), k))
-	sm.set_shader_parameter("ground_horizon_color", (p[6] as Color).lerp(Color(0.5, 0.16, 0.12), k))
-	sm.set_shader_parameter("ground_bottom_color", (p[7] as Color).lerp(Color(0.2, 0.06, 0.06), k))
-	sm.set_shader_parameter("cloud_tint", _wx_cloud.lerp(Color(0.85, 0.42, 0.36), k))
-	var fog_c := (p[8] as Color).lerp(Color(0.58, 0.18, 0.13), k)
+	# A dusky crimson, not a red filter: the sun low and coppery, the sky
+	# darkening to wine overhead, colours still readable.
+	sun.light_color = (p[2] as Color).lerp(Color(1.0, 0.6, 0.48), k)
+	sun.light_energy = lerpf(float(p[3]), 0.9, k)
+	sm.set_shader_parameter("sky_top_color", (p[4] as Color).lerp(Color(0.16, 0.07, 0.09), k))
+	sm.set_shader_parameter("sky_horizon_color", (p[5] as Color).lerp(Color(0.6, 0.3, 0.25), k))
+	sm.set_shader_parameter("ground_horizon_color", (p[6] as Color).lerp(Color(0.42, 0.25, 0.22), k))
+	sm.set_shader_parameter("ground_bottom_color", (p[7] as Color).lerp(Color(0.18, 0.1, 0.1), k))
+	sm.set_shader_parameter("cloud_tint", _wx_cloud.lerp(Color(0.78, 0.5, 0.46), k))
+	if _cloud_mat != null:
+		_cloud_mat.albedo_color = Color(1, 1, 1).lerp(Color(0.85, 0.55, 0.5), k)
+	environment.ambient_light_energy = lerpf(float(p[10]), float(p[10]) * 0.7, k)
+	var fog_c := (p[8] as Color).lerp(Color(0.5, 0.26, 0.22), k)
 	fog_c = fog_c.lerp(Color(0.8, 0.82, 0.84).lerp(fog_c, k), _fog_extra * 0.7)
 	environment.fog_light_color = fog_c
 	environment.fog_density = lerpf(float(p[9]), maxf(float(p[9]), 0.0012), k) + _fog_extra * 0.012
@@ -1712,9 +1717,13 @@ func _cloud_texture() -> Texture2D:
 	return ImageTexture.create_from_image(img)
 
 
+var _cloud_mat: StandardMaterial3D = null
+
+
 func _build_clouds() -> void:
 	var tex := _cloud_texture()
 	var mat := StandardMaterial3D.new()
+	_cloud_mat = mat
 	mat.albedo_texture = tex
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
