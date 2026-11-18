@@ -111,6 +111,8 @@ func build(p_terrain: Terrain, p_seed: int) -> void:
 	_vaults()
 	_old_gods()
 	_codex_spots()
+	_chest_spots()
+	_ashen_hollow()
 	_commit_batches()
 	_commit_colliders()
 	print("[villages] %d villages, %d houses, %d towers, %d ruins, %d pieces, %d loot points, %d colliders" % [
@@ -2299,6 +2301,125 @@ func _codex_spots() -> void:
 				put.call(pg, at4, rng.randf() * TAU)
 				break
 	print("[villages] %d codex pages lie on the island" % codex_spots.size())
+
+
+## Treasure chests in the ruins and by the landmarks (some of them are
+## not chests at all). Read by Chests: [{pos, yaw}].
+var chest_spots: Array = []
+const CHEST_COUNT := 14
+
+
+func _chest_spots() -> void:
+	chest_spots.clear()
+	var anchors: Array = []
+	for p in poi_pads:
+		if str(p.type) == "ruin":
+			anchors.append([p.center, 2.0, 8.0])
+	if landmarks != null:
+		for l in landmarks.labels:
+			anchors.append([l[1], 6.0, 26.0])
+	# Mixed with the island's own rng so every machine agrees.
+	for i in range(anchors.size() - 1, 0, -1):
+		var j := rng.randi_range(0, i)
+		var tmp = anchors[i]
+		anchors[i] = anchors[j]
+		anchors[j] = tmp
+	for an in anchors:
+		if chest_spots.size() >= CHEST_COUNT:
+			break
+		var c: Vector2 = an[0]
+		for k in 24:
+			var a := rng.randf() * TAU
+			var q := c + Vector2(cos(a), sin(a)) * rng.randf_range(float(an[1]), float(an[2]))
+			if terrain.height_at(q.x, q.y) < terrain.water_surface_at(q.x, q.y) + 0.5 or terrain.slope_at(q.x, q.y) > 0.35:
+				continue
+			if not _free_spot(q, 0.9) or blocks_house(q, 1.0):
+				continue
+			var near := false
+			for cs in codex_spots:
+				if Vector2(cs.pos.x, cs.pos.z).distance_to(q) < 4.0:
+					near = true
+			if near:
+				continue
+			chest_spots.append({"pos": Vector3(q.x, terrain.height_at(q.x, q.y), q.y), "yaw": rng.randf() * TAU})
+			_occupy(q, 0.9)
+			break
+	print("[villages] %d chests" % chest_spots.size())
+
+
+## The Ashen Hollow: one cursed stretch of the island under a standing wall
+## of ash. Four braziers round it, a Heart at its middle. Read by Hollow:
+## {c: Vector3, r: float, braziers: [Vector3], heart: Vector3} (empty if no
+## ground was fit for it).
+var hollow: Dictionary = {}
+const HOLLOW_R := 62.0
+
+
+func _ashen_hollow() -> void:
+	hollow = {}
+	var keep_off: Array = []
+	for v in village_pads:
+		keep_off.append([v.center, float(v.radius) + HOLLOW_R + 30.0])
+	for p in poi_pads:
+		keep_off.append([p.center, HOLLOW_R + 10.0])
+	if landmarks != null:
+		for l in landmarks.labels:
+			keep_off.append([l[1], HOLLOW_R + 50.0])
+	for w in wayshrines:
+		keep_off.append([Vector2(w.pos.x, w.pos.z), HOLLOW_R + 30.0])
+	for v in vaults:
+		keep_off.append([Vector2(v.door.x, v.door.z), HOLLOW_R + 20.0])
+	for g in old_gods:
+		keep_off.append([Vector2(g.pos.x, g.pos.z), HOLLOW_R + 20.0])
+	var relax := 1.0
+	for tries in 6000:
+		if tries > 0 and tries % 1500 == 0:
+			relax *= 0.75
+		var q := Vector2(rng.randf_range(-Terrain.HALF * 0.7, Terrain.HALF * 0.7), rng.randf_range(-Terrain.HALF * 0.7, Terrain.HALF * 0.7))
+		var h := terrain.height_at(q.x, q.y)
+		if h < terrain.water_surface_at(q.x, q.y) + 3.0 or terrain.slope_at(q.x, q.y) > 0.25:
+			continue
+		var ok := true
+		for k in keep_off:
+			if q.distance_to(k[0]) < float(k[1]) * relax:
+				ok = false
+				break
+		if not ok or _on_road(q, 8.0) or not _free_spot(q, 4.0):
+			continue
+		# Mostly dry land inside, and a dry, open spot for every brazier.
+		var wet := 0
+		for k in 16:
+			var a := TAU * float(k) / 16.0
+			var e := q + Vector2(cos(a), sin(a)) * HOLLOW_R * 0.8
+			if terrain.height_at(e.x, e.y) < terrain.water_surface_at(e.x, e.y) + 0.5:
+				wet += 1
+		if wet > 3:
+			continue
+		var braziers: Array = []
+		var a0 := rng.randf() * TAU
+		for k in 4:
+			var placed := false
+			for t in 10:
+				var a := a0 + TAU * float(k) / 4.0 + rng.randf_range(-0.3, 0.3)
+				var e := q + Vector2(cos(a), sin(a)) * rng.randf_range(HOLLOW_R * 0.5, HOLLOW_R * 0.75)
+				if terrain.height_at(e.x, e.y) < terrain.water_surface_at(e.x, e.y) + 0.8 or terrain.slope_at(e.x, e.y) > 0.4:
+					continue
+				if not _free_spot(e, 1.5) or blocks_house(e, 1.5):
+					continue
+				braziers.append(Vector3(e.x, terrain.height_at(e.x, e.y), e.y))
+				placed = true
+				break
+			if not placed:
+				break
+		if braziers.size() < 4:
+			continue
+		for b: Vector3 in braziers:
+			_occupy(Vector2(b.x, b.z), 1.5)
+		_occupy(q, 4.0)
+		hollow = {"c": Vector3(q.x, h, q.y), "r": HOLLOW_R, "braziers": braziers, "heart": Vector3(q.x, h, q.y), "yaw": rng.randf() * TAU}
+		print("[villages] the Ashen Hollow lies at %s" % str(Vector3(q.x, h, q.y).round()))
+		return
+	print("[villages] no ground for the Ashen Hollow")
 
 
 ## Washing hung out behind about one house in four: two posts, a line, and

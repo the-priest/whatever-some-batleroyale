@@ -48,8 +48,47 @@ func _ready() -> void:
 	_apply_volume()
 
 
+var boss := false
+
+
 func _level() -> float:
-	return match_volume if in_match else menu_volume
+	var lvl := match_volume if in_match else menu_volume
+	# A boss fight: louder, but never out of silence.
+	return minf(1.0, lvl * 1.7) if boss and lvl > 0.001 else lvl
+
+
+## A Colossus is on you: the heaviest track, up in the mix, until it is over.
+func set_boss(v: bool) -> void:
+	if v == boss:
+		return
+	boss = v
+	_apply_volume()
+	if v and _level() > 0.001:
+		var cur: AudioStream = _players[_active].stream
+		if cur == null or not cur.resource_path.ends_with("graveblade.ogg"):
+			_play_track(4)
+
+
+func _play_track(ti: int) -> void:
+	var t: Array = TRACKS[ti]
+	var path: String = DIR + t[0] + ".ogg"
+	if not ResourceLoader.exists(path):
+		return
+	var stream: AudioStream = load(path)
+	if stream is AudioStreamOggVorbis:
+		(stream as AudioStreamOggVorbis).loop = false
+	var old := _players[_active]
+	_active = 1 - _active
+	var p := _players[_active]
+	p.stream = stream
+	p.volume_db = -30.0
+	p.play()
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(p, "volume_db", 0.0, 1.2)
+	if old.playing:
+		tw.tween_property(old, "volume_db", -60.0, 1.2)
+		tw.chain().tween_callback(old.stop)
+	track_started.emit(str(t[1]))
 
 
 func set_volumes(menu_v: float, match_v: float) -> void:

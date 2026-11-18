@@ -1918,6 +1918,23 @@ func _revive_do() -> void:
 	game.player.revive()
 
 
+## Client: open chest `i`, or a shot into an awake Mimic.
+func send_chest(i: int, op: String, dmg: float) -> void:
+	if active and not hosting:
+		_chest.rpc_id(1, i, op, dmg)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _chest(i: int, op: String, dmg: float) -> void:
+	var sender := multiplayer.get_remote_sender_id()
+	if not hosting or not _gate(sender, "hit" if op == "hit" else "writ") or game == null or game.chests == null:
+		return
+	if op == "open":
+		game.chests.open_on(sender, i)
+	elif op == "hit" and dmg > 0.0 and dmg < 400.0:
+		game.chests.hit_on(i, dmg, game.humans.get(sender))
+
+
 func send_embers(pid: int, total: int, gain: int, why: String) -> void:
 	if active and hosting and roster.has(pid):
 		_embers.rpc_id(pid, total, gain, why)

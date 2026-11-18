@@ -2931,14 +2931,16 @@ func _draw_big_map() -> void:
 		d.draw_string(font_bold, Vector2(kx, ky + 11.0), "MAP KEY", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, MUTED)
 		ky += 34.0
 		var key := [["you", "YOU"], ["mate", "SQUAD MATE"], ["mark", "YOUR MARK"], ["safe", "NEXT SAFE ZONE"], ["storm", "THE STORM"], ["drop", "SUPPLY DROP"], ["shot", "GUNFIRE"], ["tower", "LOOKOUT TOWER"], ["ruin", "RUINS"], ["landmark", "LANDMARK"],
-			["board", "WRIT BOARD"], ["shrine", "WAYSHRINE"], ["vault", "SEALED VAULT"]]
+			["board", "WRIT BOARD"], ["shrine", "WAYSHRINE"], ["vault", "SEALED VAULT"], ["boss", "BOSS YOU HAVE MET"]]
 		if not writ.is_empty():
 			key.append(["writ", "YOUR WRIT"])
 		if plane_path.size() == 2:
 			key.append(["route", "FLIGHT PATH"])
 		for e in key:
 			var ic := Vector2(kx + 9.0, ky - 4.0)
-			if e[0] == "board":
+			if e[0] == "boss":
+				_icon_boss(d, ic, true, true)
+			elif e[0] == "board":
 				_icon_board(d, ic, Writs.TINT["blood"])
 			elif e[0] == "shrine":
 				_icon_shrine(d, ic)
@@ -3363,6 +3365,10 @@ func _draw_writ_map(ctrl: Control, view: MapView, big: bool, to_map: Callable, i
 		if inner.has_point(cmp):
 			ctrl.draw_circle(cmp, 6.0, Color(0.02, 0.02, 0.03, 0.85))
 			ctrl.draw_circle(cmp, 4.5, Color(1.0, 0.62, 0.3))
+	for bm in boss_marks:
+		var bmp: Vector2 = to_map.call(bm[0])
+		if inner.has_point(bmp):
+			_icon_boss(ctrl, bmp, bool(bm[1]) and big, bool(bm[2]))
 	if big:
 		for vm in vault_marks:
 			var vp: Vector2 = to_map.call(vm[0])
@@ -3497,6 +3503,22 @@ func _draw_downed() -> void:
 	var s2 := "CRAWL TO COVER  ·  A SQUAD MATE HOLDS %s TO REVIVE YOU" % Keybinds.key("interact")
 	var sw := font_bold.get_string_size(s2, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
 	_text_out(_down_draw, Vector2((vp.x - sw) * 0.5, vp.y * 0.62 + 24), s2, 13, WHITE, 4)
+
+
+## Bosses you have come upon: [Vector2, is a Colossus, still alive].
+var boss_marks: Array = []
+
+
+func _icon_boss(ctrl: Control, p: Vector2, big: bool, alive: bool) -> void:
+	var r := 7.0 if big else 5.5
+	var col := Color(0.95, 0.3, 0.15) if alive else Color(0.5, 0.5, 0.5)
+	ctrl.draw_circle(p, r + 1.5, Color(0.02, 0.02, 0.03, 0.9))
+	ctrl.draw_circle(p, r, Color(0.92, 0.88, 0.8) if alive else Color(0.45, 0.45, 0.45))
+	ctrl.draw_circle(p + Vector2(-r * 0.38, -r * 0.1), r * 0.26, Color(0.05, 0.03, 0.03))
+	ctrl.draw_circle(p + Vector2(r * 0.38, -r * 0.1), r * 0.26, Color(0.05, 0.03, 0.03))
+	ctrl.draw_rect(Rect2(p + Vector2(-r * 0.4, r * 0.35), Vector2(r * 0.8, r * 0.3)), col)
+	if not alive:
+		ctrl.draw_line(p + Vector2(-r, -r), p + Vector2(r, r), Color(0.05, 0.05, 0.05), 2.0)
 
 
 ## The Revenant you are fighting: {name, title, hp 0..1, raged} or {}.

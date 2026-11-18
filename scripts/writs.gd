@@ -1344,6 +1344,12 @@ func apply_event(e: Dictionary) -> void:
 				game.sfx.play_ui("vault_open", -6.0)
 				hud.show_big("GIFT:  %s" % str(GIFTS[gk][0]), Color(1.0, 0.86, 0.45), 3.4)
 				hud.show_notice("%s  —  FOR THE REST OF THE MATCH" % str(GIFTS[gk][1]), 5.0)
+		"chest":
+			if game.chests != null:
+				game.chests.apply_state(int(e.get("i", -1)), str(e.get("st", "")))
+		"mimic":
+			if game.chests != null:
+				game.chests.tell_mimic()
 		"boss_fx":
 			Colossus.show_fx(game, e.get("fx", {}))
 		"idol_used":

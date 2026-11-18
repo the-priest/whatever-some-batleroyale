@@ -120,6 +120,17 @@ a man, black stone cracked with fire. They are the hardest thing on the island. 
 | Bloodthirst | A fifth of the damage you deal heals you |
 | Titan | +50 maximum health |
 
+## Chests and Mimics
+
+Fourteen banded treasure chests sit in the ruins and by the landmarks. Press **F** to open one: most
+hold a decent find and 100 Embers. About one in three is a **Mimic**. It bites whoever opens it
+(55), wakes with teeth and burning eyes, and lashes anyone within five metres. Back off and shoot it
+apart: it holds a hoard (a top-tier rifle, level 3 armour and helmet, medkits), 600 Embers and a
+**Gift**. Which chests are Mimics changes every match.
+
+Bosses you have come upon are marked on your map with a skull (crossed out once they fall), and when
+a Colossus is on you the music turns to GRAVEBLADE and comes up in the mix.
+
 ## Vaults and Sigils
 
 Five sealed **vaults** stand near the landmarks and old ruins: stone crypts with an iron door and a

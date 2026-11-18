@@ -31,6 +31,7 @@ var damage_taken := DAMAGE_TAKEN
 var leash := LEASH
 var volleys := true
 var regen_rate := REGEN
+var _away_t := 0.0
 var glow_base := 0.9
 var calm_before_regen := 5.0
 var raged := false
@@ -126,6 +127,18 @@ func _physics_process(delta: float) -> void:
 		loot_target = null
 		roam_point = home
 		alert_timer = 0.0
+		# Stranded (in the sea, down a cliff): it returns to its ground and
+		# the fight starts over, as a boss does.
+		_away_t += delta
+		if _away_t > 12.0:
+			_away_t = 0.0
+			global_position = arena + Vector3.UP * 0.5
+			velocity = Vector3.ZERO
+			hp = 100.0
+			if game != null and game.has_method("spawn_smoke"):
+				game.spawn_smoke(arena + Vector3.UP, 1.5)
+	else:
+		_away_t = 0.0
 	var fighting := enemy != null and is_instance_valid(enemy) and bool(enemy.get("alive"))
 	_calm = 0.0 if fighting else _calm + delta
 	if _calm > calm_before_regen and hp < 100.0 and not raged:

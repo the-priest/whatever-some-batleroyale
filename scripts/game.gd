@@ -88,6 +88,8 @@ var airdrops: Array = []
 var writs: Writs = null
 ## The torn pages of the island's story (see codex.gd).
 var codex: Codex = null
+## Treasure chests, and the Mimics among them (see chests.gd).
+var chests: Chests = null
 ## Reliquary, fog bank, the Hunt, Blood Moon (see island_events.gd).
 var events: IslandEvents = null
 ## The next supply drop spawned is a Reliquary.
@@ -365,6 +367,8 @@ func _ready() -> void:
 		_run_events_test()
 	elif OS.get_cmdline_user_args().has("--vault"):
 		_run_vault_test()
+	elif OS.get_cmdline_user_args().has("--chests"):
+		_run_chests_test()
 	elif OS.get_cmdline_user_args().has("--colossus"):
 		_run_colossus_test()
 	elif OS.get_cmdline_user_args().has("--revenant"):
@@ -422,6 +426,10 @@ func _build_world() -> void:
 	codex.name = "Codex"
 	world.add_child(codex)
 	codex.setup(self)
+	chests = Chests.new()
+	chests.name = "Chests"
+	world.add_child(chests)
+	chests.setup(self)
 	if events == null:
 		events = IslandEvents.new()
 		events.name = "IslandEvents"
@@ -799,6 +807,8 @@ func _start_match() -> void:
 func _after_match_setup() -> void:
 	if events != null:
 		events.reset()
+	if chests != null:
+		chests.reset()
 	match_tally = {"writs": 0, "revenants": 0, "vaults": 0, "blessings": 0}
 	_tip_t = 3.0
 	_tip_i = randi() % PLANE_TIPS.size()
@@ -1635,6 +1645,8 @@ func _update_prompt() -> void:
 	var wp := writs.prompt(player.global_position) if writs != null else ""
 	if wp == "" and codex != null:
 		wp = codex.prompt(player.global_position)
+	if wp == "" and chests != null:
+		wp = chests.prompt(player.global_position)
 	var mate := _downed_mate_near()
 	if mate != null:
 		hud.set_prompt("HOLD [%s]  REVIVE %s" % [Keybinds.key("interact"), mate.bot_name])
@@ -2117,6 +2129,7 @@ func _on_bot_eliminated(victim: Bot, killer: String) -> void:
 
 # -------------------------------------------------------------- revenants --
 const REVENANT_COUNT := 3
+var _boss_marks_t := 0.0
 const COLOSSUS_COUNT := 2
 const REVENANT_GUNS := ["lmg", "axmc", "dmr", "m24"]
 
@@ -2288,8 +2301,18 @@ func boss_fx(fx: Dictionary) -> void:
 
 ## Where the boss bar points: the nearest live Revenant you are close to.
 func _update_boss_bar() -> void:
+	_boss_marks_t -= get_process_delta_time()
+	if _boss_marks_t <= 0.0:
+		_boss_marks_t = 1.0
+		var marks: Array = []
+		for b in bots:
+			if is_instance_valid(b) and b is Revenant and b.has_meta("met"):
+				marks.append([Vector2((b as Node3D).global_position.x, (b as Node3D).global_position.z), b is Colossus, (b as Bot).alive])
+		hud.boss_marks = marks
 	if player == null or not player.alive or phase != "playing":
 		hud.set_boss({})
+		if music != null:
+			music.set_boss(false)
 		return
 	var best: Revenant = null
 	var best_d := 130.0
@@ -2301,6 +2324,8 @@ func _update_boss_bar() -> void:
 				best = b
 	if best == null:
 		hud.set_boss({})
+		if music != null:
+			music.set_boss(false)
 		return
 	# The first time you come upon one: its name, the way the old tales say it.
 	if not best.has_meta("met") and best_d < (70.0 if best is Colossus else 45.0):
@@ -2316,6 +2341,8 @@ func _update_boss_bar() -> void:
 			hud.show_notice("MORE FIRE, MORE OFTEN  —  WATCH THE GROUND" if st == 2 else "IT WILL NOT STOP NOW  —  END IT", 3.0)
 			sfx.play_ui("event_horn", -4.0)
 		hud.set_boss({"name": best.bot_name, "title": best.title, "hp": clampf(best.hp / 100.0, 0.0, 1.0), "raged": st == 3, "big": true})
+		if music != null:
+			music.set_boss(best_d < 75.0)
 		return
 	var raged := best.hp <= 50.0
 	if raged and not best.has_meta("rage_told"):
@@ -2435,6 +2462,8 @@ func try_pickup(p: Player) -> void:
 	if p == player and writs != null and car == null and (best == null or best.global_position.distance_to(p.global_position) > 1.4) and writs.interact(p.global_position):
 		return
 	if p == player and codex != null and car == null and (best == null or best.global_position.distance_to(p.global_position) > 1.2) and codex.interact(p.global_position):
+		return
+	if p == player and chests != null and car == null and (best == null or best.global_position.distance_to(p.global_position) > 1.2) and chests.interact(p.global_position):
 		return
 	if best == null:
 		return
@@ -6371,6 +6400,61 @@ func _run_vault_test() -> void:
 	get_tree().quit()
 
 
+## A chest and a Mimic: open one, get bitten by the other, shoot it apart.
+func _run_chests_test() -> void:
+	_start_match()
+	for i in 30:
+		await get_tree().physics_frame
+	_land_player_now()
+	player.give_weapon("rifle")
+	print("[chests] %d chests: %s" % [chests.spots.size(), str(chests.spots.map(func(c): return str(Vector3(c.pos).round())).slice(0, 6))])
+	_check("treasure chests in the ruins", chests.spots.size() >= 10)
+	chests._mimic[0] = false
+	chests._mimic[1] = true
+	# A true chest.
+	var c0: Vector3 = chests.spots[0].pos
+	player.global_position = c0 + Vector3(1.2, 0.4, 0.0)
+	player.velocity = Vector3.ZERO
+	await get_tree().physics_frame
+	print("[chests] at a chest: %s" % chests.prompt(player.global_position))
+	var l0 := loot_pool.size()
+	try_pickup(player)
+	await get_tree().physics_frame
+	_check("a chest opens and gives loot", chests.state[0] == "open" and loot_pool.size() >= l0 + 3)
+	# A Mimic.
+	var c1: Vector3 = chests.spots[1].pos
+	player.global_position = c1 + Vector3(1.2, 0.4, 0.0)
+	player.velocity = Vector3.ZERO
+	player.spawn_protect = 0.0
+	player.hp = 400.0
+	await get_tree().physics_frame
+	var h0 := player.hp
+	try_pickup(player)
+	await get_tree().physics_frame
+	print("[chests] mimic bite: hp %.0f -> %.0f" % [h0, player.hp])
+	_check("a mimic bites whoever opens it", chests.state[1] == "awake" and player.hp < h0 - 30.0)
+	var h1 := player.hp
+	for i in int(60 * (Chests.LASH_EVERY + 0.3)):
+		player.global_position = c1 + Vector3(2.0, 0.4, 0.0)
+		await get_tree().physics_frame
+	_check("an awake mimic lashes out", player.hp < h1 - 20.0)
+	player.spawn_protect = 99999.0
+	# Shoot it from range (as a bullet would: through its body).
+	player.global_position = c1 + Vector3(12.0, 0.4, 0.0)
+	var e0 := writs.my_embers
+	var g0 := player.gifts.size()
+	var shots := 0
+	while chests.state[1] == "awake" and shots < 200:
+		shots += 1
+		chests._nodes[1].take_damage(40.0, c1 + Vector3.UP * 0.5, false, player)
+	await get_tree().physics_frame
+	print("[chests] mimic slain in %d rifle hits, embers %d -> %d, gifts %d -> %d" % [shots, e0, writs.my_embers, g0, player.gifts.size()])
+	_check("a slain mimic gives a gift and embers", chests.state[1] == "dead" and player.gifts.size() > g0 and writs.my_embers >= e0 + 600)
+	_check("a shut chest is not damageable", chests._nodes[2].get("alive") == false)
+	print("[chests] done")
+	get_tree().quit()
+
+
 ## Dry ground about `d` metres from `from` (tries round the compass).
 func _dry_spot_near(from: Vector3, d: float) -> Vector3:
 	for k in 16:
@@ -6570,11 +6654,11 @@ func _run_revenant_test() -> void:
 		await get_tree().physics_frame
 	_check("revenant stays home after the drop", r.global_position.distance_to(r.arena) < Revenant.LEASH)
 	# Walk up to it.
-	player.global_position = ground_at(r.global_position + Vector3(14, 20, 0)) + Vector3.UP * 0.2
+	player.global_position = _dry_spot_near(r.global_position, 14.0)
 	var engaged := false
 	var rings := false
 	var bar := false
-	for i in 60 * 20:
+	for i in 60 * 35:
 		await get_tree().physics_frame
 		if r.enemy == player:
 			engaged = true
@@ -6584,6 +6668,8 @@ func _run_revenant_test() -> void:
 			bar = true
 		if engaged and rings and bar:
 			break
+		if i % 120 == 0 and OS.get_cmdline_user_args().has("--dbg"):
+			print("[revdbg] r=%s p=%s enemy=%s seen=%s" % [str(r.global_position.round()), str(player.global_position.round()), str(r.enemy), str(r.enemy_visible())])
 	_check("it fights you", engaged)
 	_check("its grenade volley is marked on the ground first", rings)
 	_check("boss bar shows its name", bar and str(hud.boss.get("name", "")) == r.bot_name)
@@ -6599,10 +6685,12 @@ func _run_revenant_test() -> void:
 	await get_tree().physics_frame
 	_check("it rages at half health", r.raged and r.shoot_skill >= 0.9)
 	# Lure it away: it goes home.
-	r.global_position = ground_at(r.arena + Vector3(85, 30, 0)) + Vector3.UP * 0.3
-	player.global_position = ground_at(r.arena + Vector3(160, 30, 0)) + Vector3.UP * 0.3
+	r.global_position = _dry_spot_near(r.arena, 85.0) + Vector3.UP * 0.1
+	player.global_position = _dry_spot_near(r.arena, 160.0)
 	for i in 60 * 25:
 		await get_tree().physics_frame
+		if i % 120 == 0 and OS.get_cmdline_user_args().has("--dbg"):
+			print("[revdbg] %s st=%d away=%.1f vel=%s storm=%s" % [str(r.global_position.round()), r.state, r._away_t, str(r.velocity.round()), str(zone.is_outside(r.arena))])
 	print("[revenant] after luring: %d m from home" % int(r.global_position.distance_to(r.arena)))
 	_check("leashed: it walks back to its arena", r.global_position.distance_to(r.arena) < Revenant.LEASH + 10.0)
 	var e0 := writs.my_embers
