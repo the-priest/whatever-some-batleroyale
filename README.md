@@ -94,6 +94,14 @@ a man, black stone cracked with fire. They are the hardest thing on the island. 
   - **Slam**: a red ring spreads round its feet, then the ground breaks. Get out of the ring.
   - **Fire**: balls of flame that fly dead straight. Sidestep them, or get behind a wall.
   - **Charge**: it roars, then runs you down. Run it into a wall and it stops, stunned.
+- Each has a move of its own:
+  - **Varghul, the Ashen Colossus**: an aftershock, a second and wider ring right after the slam.
+    Out of the first ring is not out of danger.
+  - **Orgrath, the Mountain that Walks**: every third throw is a boulder of burning rock, slow
+    but with a huge blast.
+  - **The Mother of Cinders**: her fire leaves the ground burning for six seconds.
+  - **The Drowned King**: calls lightning down round you. Pale circles mark where it will strike,
+    one always where you stand. Keep moving.
 - Three phases: below two thirds it is quicker; below a third it is furious and throws more fire.
 - It goes after players before soldiers. Hide long enough and it slowly heals.
 - When one falls everyone who stood within 90 m is given a **Gift**, and whoever felled it gets two.

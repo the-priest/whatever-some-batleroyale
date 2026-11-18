@@ -16,11 +16,19 @@ var speed := 26.0
 var life := 3.0
 var damage := 28.0
 var harmful := true
+## Bigger, slower, wider blast (a boulder of burning rock).
+var size := 1.0
+var splash := SPLASH
+## Leaves the ground burning where it bursts.
+var fire_field := false
 var _light: OmniLight3D
 
 
-static func launch(p_game: Node, from: Vector3, p_dir: Vector3, p_speed: float, p_damage: float, p_thrower: Node, p_harmful: bool) -> BossOrb:
+static func launch(p_game: Node, from: Vector3, p_dir: Vector3, p_speed: float, p_damage: float, p_thrower: Node, p_harmful: bool, p_size := 1.0, p_fire := false) -> BossOrb:
 	var o := BossOrb.new()
+	o.size = p_size
+	o.splash = SPLASH * p_size
+	o.fire_field = p_fire
 	o.game = p_game
 	o.dir = p_dir.normalized()
 	o.speed = p_speed
@@ -33,6 +41,7 @@ static func launch(p_game: Node, from: Vector3, p_dir: Vector3, p_speed: float, 
 
 
 func _ready() -> void:
+	scale = Vector3.ONE * size
 	var core := MeshInstance3D.new()
 	var sm := SphereMesh.new()
 	sm.radius = RADIUS
@@ -85,7 +94,7 @@ func _physics_process(delta: float) -> void:
 	global_position = to
 	if harmful and game != null:
 		for t in _targets():
-			if (t as Node3D).global_position.distance_to(global_position - Vector3.UP * 1.0) < HIT_RANGE:
+			if (t as Node3D).global_position.distance_to(global_position - Vector3.UP * 1.0) < HIT_RANGE * size:
 				_burst(global_position)
 				return
 	if life <= 0.0:
@@ -111,9 +120,11 @@ func _burst(at: Vector3) -> void:
 	if harmful and game != null:
 		for t in _targets():
 			var d := (t as Node3D).global_position.distance_to(at - Vector3.UP * 1.0)
-			if d < SPLASH:
-				var k := 1.0 - clampf(d / SPLASH, 0.0, 1.0) * 0.6
+			if d < splash:
+				var k := 1.0 - clampf(d / splash, 0.0, 1.0) * 0.6
 				t.take_damage(damage * k, at, false, thrower if thrower != null and is_instance_valid(thrower) else null)
 	if game != null:
 		game.spawn_explosion(at)
+		if fire_field:
+			FirePatch.spawn(game, game.ground_at(at + Vector3.UP * 0.5), harmful, thrower)
 	queue_free()

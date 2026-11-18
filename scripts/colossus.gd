@@ -40,6 +40,18 @@ var _seek_t := 0.0
 var _orbs_left := 0
 var _orb_t := 0.0
 var _target: Node3D = null
+## Each Colossus has a move of its own: "quake" (Varghul: a second, wider
+## ring after the slam), "boulder" (Orgrath: slow rock, huge blast),
+## "firefield" (Mother of Cinders: her fire leaves the ground burning),
+## "lightning" (the Drowned King: strikes called down round you).
+var signature := ""
+## Blows still to land: [seconds left, kind, position].
+var _pending: Array = []
+const SIGNATURES := {"VARGHUL": "quake", "ORGRATH": "boulder", "MOTHER OF CINDERS": "firefield", "THE DROWNED KING": "lightning"}
+const ZAP_R := 3.2
+const ZAP_DMG := 55.0
+const ZAP_WINDUP := 1.4
+const QUAKE_R := 14.0
 
 
 func setup_colossus(p_name: String, p_title: String, p_arena: Vector3, p_game: Node) -> void:
@@ -53,6 +65,7 @@ func setup_colossus(p_name: String, p_title: String, p_arena: Vector3, p_game: N
 	sight = 170.0
 	meds = 0
 	grenades = 0
+	signature = str(SIGNATURES.get(p_name, "quake"))
 	set_meta("colossus", true)
 
 
@@ -91,6 +104,27 @@ func _physics_process(delta: float) -> void:
 		return
 	if _busy == "charge":
 		_charge_step(delta)
+		_tick_pending(delta)
+		_sync_xf()
+		return
+	if _busy == "slam" or _busy == "windup":
+		# Feet planted while it winds up: the blow lands where the ring is.
+		velocity.x = 0.0
+		velocity.z = 0.0
+		if not is_on_floor():
+			velocity.y -= GRAVITY * delta
+		move_and_slide()
+		_tick_pending(delta)
+		_busy_t -= delta
+		if _busy_t <= 0.0:
+			if _busy == "slam":
+				_busy = ""
+				_slam_land()
+			else:
+				_busy = "charge"
+				_busy_t = CHARGE_TIME
+				_charge_hit.clear()
+		_sync_xf()
 		return
 	super._physics_process(delta)
 	if not alive:
@@ -113,6 +147,7 @@ func _physics_process(delta: float) -> void:
 			heard_pos = _target.global_position
 	if _target != null and (not is_instance_valid(_target) or not bool(_target.get("alive"))):
 		_target = null
+	_tick_pending(delta)
 	# Throwing fire, one ball after another.
 	if _orbs_left > 0:
 		_orb_t -= delta
@@ -120,25 +155,13 @@ func _physics_process(delta: float) -> void:
 			_orb_t = 0.16 if stage < 3 else 0.11
 			_orbs_left -= 1
 			_throw_orb()
-	if _busy == "slam":
-		_busy_t -= delta
-		if _busy_t <= 0.0:
-			_busy = ""
-			_slam_land()
-		return
-	if _busy == "windup":
-		_busy_t -= delta
-		velocity = Vector3.ZERO
-		if _busy_t <= 0.0:
-			_busy = "charge"
-			_busy_t = CHARGE_TIME
-			_charge_hit.clear()
-		return
 	_attack_t -= delta
 	if _attack_t <= 0.0 and _target != null and _orbs_left == 0:
 		var d := global_position.distance_to(_target.global_position)
 		_attack_t = [0.0, 4.6, 3.4, 2.4][stage] + randf() * 1.2
-		if d < SLAM_R * 0.95:
+		if signature == "lightning" and d < 70.0 and randf() < 0.3 + 0.1 * stage:
+			_call_lightning()
+		elif d < SLAM_R * 0.95:
 			_start_slam()
 		elif d < 38.0 and randf() < (0.35 + 0.1 * stage):
 			_start_charge()
@@ -157,6 +180,23 @@ func arm_weapon(id: String) -> void:
 	super.arm_weapon(id)
 	if body != null:
 		body.set_gun("")
+
+
+## Blows already called (lightning, the aftershock), landing on time.
+func _tick_pending(delta: float) -> void:
+	for i in range(_pending.size() - 1, -1, -1):
+		_pending[i][0] = float(_pending[i][0]) - delta
+		if float(_pending[i][0]) <= 0.0:
+			var pe: Array = _pending[i]
+			_pending.remove_at(i)
+			_land_blow(str(pe[1]), pe[2])
+
+
+## Keep the drawn body in step when its own physics step is skipped.
+func _sync_xf() -> void:
+	_xf_prev = _xf_cur if _xf_set else global_transform
+	_xf_cur = global_transform
+	_xf_set = true
 
 
 func _nearest_player() -> Node3D:
@@ -193,8 +233,12 @@ func _victims() -> Array:
 
 
 # ------------------------------------------------------------------ slam --
+var _slam_at := Vector3.ZERO
+
+
 func _start_slam() -> void:
 	_busy = "slam"
+	_slam_at = global_position
 	_busy_t = SLAM_WINDUP * (0.85 if stage == 3 else 1.0)
 	velocity = Vector3.ZERO
 	game.boss_fx({"k": "slam", "p": global_position, "r": SLAM_R, "w": _busy_t})
@@ -202,14 +246,24 @@ func _start_slam() -> void:
 
 
 func _slam_land() -> void:
-	var at := global_position
+	var at := _slam_at if _slam_at != Vector3.ZERO else global_position
+	_shockwave(at, SLAM_R, SLAM_DMG)
+	if signature == "quake":
+		# The aftershock: a wider ring, a breath later. Out of the first ring
+		# is not out of danger.
+		var w := 0.8 if stage < 3 else 0.6
+		game.boss_fx({"k": "slam", "p": at, "r": QUAKE_R, "w": w})
+		_pending.append([w, "quake", at])
+
+
+func _shockwave(at: Vector3, r: float, dmg: float) -> void:
 	game.spawn_explosion(at + Vector3.UP * 0.3)
 	game.shake(30.0)
 	for v in _victims():
 		var d := (v as Node3D).global_position.distance_to(at)
-		if d < SLAM_R:
-			var k := 1.0 - (d / SLAM_R) * 0.5
-			v.take_damage(SLAM_DMG * k, at, false, self)
+		if d < r:
+			var k := 1.0 - (d / r) * 0.5
+			v.take_damage(dmg * k, at, false, self)
 			if v == game.player:
 				var away := ((v as Node3D).global_position - at)
 				away.y = 0.0
@@ -257,6 +311,33 @@ func _charge_step(delta: float) -> void:
 		velocity = Vector3.ZERO
 
 
+# -------------------------------------------------------------- lightning --
+## The Drowned King calls the storm down: marked circles round you, then
+## lightning in each. One is always where you stand.
+func _call_lightning() -> void:
+	var tp: Vector3 = _target.global_position
+	var n := 2 + stage * 2
+	game.play_sfx_at("event_horn", global_position + Vector3.UP * 3.0, 4.0)
+	for i in n:
+		var off := Vector3.ZERO if i == 0 else Vector3(randf_range(-7.0, 7.0), 0.0, randf_range(-7.0, 7.0))
+		var p: Vector3 = game.ground_at(tp + off + Vector3.UP * 3.0)
+		var w := ZAP_WINDUP + 0.18 * float(i)
+		game.boss_fx({"k": "zap_warn", "p": p, "r": ZAP_R, "w": w})
+		_pending.append([w, "zap", p])
+
+
+func _land_blow(kind: String, at: Vector3) -> void:
+	match kind:
+		"quake":
+			_shockwave(at, QUAKE_R, SLAM_DMG * 0.7)
+		"zap":
+			game.boss_fx({"k": "zap", "p": at})
+			for v in _victims():
+				var d := Vector2((v as Node3D).global_position.x - at.x, (v as Node3D).global_position.z - at.z).length()
+				if d < ZAP_R:
+					v.take_damage(ZAP_DMG, at + Vector3.UP * 2.0, false, self)
+
+
 # ------------------------------------------------------------------- fire --
 func _throw_orb() -> void:
 	if _target == null or not is_instance_valid(_target):
@@ -269,8 +350,17 @@ func _throw_orb() -> void:
 	aim += Vector3(randf_range(-spread, spread), randf_range(-0.6, 0.8), randf_range(-spread, spread))
 	var dir := (aim - from).normalized()
 	var spd := 22.0 + 3.0 * float(stage)
-	BossOrb.launch(game, from, dir, spd, ORB_DMG, self, true)
-	game.boss_fx({"k": "orb", "p": from, "d": dir, "s": spd})
+	var size := 1.0
+	var dmg := ORB_DMG
+	if signature == "boulder" and _orbs_left % 3 == 0:
+		# Every third throw: a boulder of burning rock. Slow, but the blast
+		# is wide.
+		size = 2.2
+		spd *= 0.6
+		dmg = 70.0
+	var fire := signature == "firefield"
+	BossOrb.launch(game, from, dir, spd, dmg, self, true, size, fire)
+	game.boss_fx({"k": "orb", "p": from, "d": dir, "s": spd, "z": size, "f": fire})
 	game.play_sfx_at("jump_whoosh", from, 2.0)
 
 
@@ -319,6 +409,57 @@ static func show_fx(game: Node, fx: Dictionary) -> void:
 			tw2.tween_interval(float(fx.get("w", SLAM_WINDUP)))
 			tw2.tween_callback(disc.queue_free)
 		"orb":
-			BossOrb.launch(game, fx["p"], fx["d"], float(fx["s"]), 0.0, null, false)
+			BossOrb.launch(game, fx["p"], fx["d"], float(fx["s"]), 0.0, null, false, float(fx.get("z", 1.0)), bool(fx.get("f", false)))
+		"zap_warn":
+			# A pale ring on the ground and a thin column of light: where it
+			# will strike.
+			var ring := MeshInstance3D.new()
+			var cm := CylinderMesh.new()
+			cm.top_radius = float(fx.get("r", ZAP_R))
+			cm.bottom_radius = cm.top_radius
+			cm.height = 0.03
+			cm.radial_segments = 32
+			ring.mesh = cm
+			var m := StandardMaterial3D.new()
+			m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			m.albedo_color = Color(0.55, 0.75, 1.0, 0.22)
+			ring.material_override = m
+			ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			game.add_child(ring)
+			ring.global_position = (fx["p"] as Vector3) + Vector3.UP * 0.08
+			var tw := ring.create_tween()
+			tw.tween_property(m, "albedo_color:a", 0.5, float(fx.get("w", ZAP_WINDUP)))
+			tw.tween_callback(ring.queue_free)
+		"zap":
+			var bolt := MeshInstance3D.new()
+			var bm := CylinderMesh.new()
+			bm.top_radius = 0.35
+			bm.bottom_radius = 0.6
+			bm.height = 60.0
+			bolt.mesh = bm
+			var bmat := StandardMaterial3D.new()
+			bmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			bmat.albedo_color = Color(0.85, 0.92, 1.0)
+			bmat.emission_enabled = true
+			bmat.emission = Color(0.7, 0.85, 1.0)
+			bmat.emission_energy_multiplier = 8.0
+			bolt.material_override = bmat
+			bolt.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			game.add_child(bolt)
+			bolt.global_position = (fx["p"] as Vector3) + Vector3.UP * 30.0
+			var l := OmniLight3D.new()
+			l.light_color = Color(0.7, 0.85, 1.0)
+			l.light_energy = 10.0
+			l.omni_range = 25.0
+			game.add_child(l)
+			l.global_position = (fx["p"] as Vector3) + Vector3.UP * 3.0
+			var tw2 := bolt.create_tween()
+			tw2.tween_interval(0.18)
+			tw2.tween_callback(bolt.queue_free)
+			var tw3 := l.create_tween()
+			tw3.tween_property(l, "light_energy", 0.0, 0.35)
+			tw3.tween_callback(l.queue_free)
+			game.play_sfx_at("explosion", fx["p"], 2.0)
 		"roar":
 			game.spawn_smoke((fx["p"] as Vector3) + Vector3.UP * 0.5, 2.0)

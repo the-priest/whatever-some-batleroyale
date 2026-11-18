@@ -6371,6 +6371,16 @@ func _run_vault_test() -> void:
 	get_tree().quit()
 
 
+## Dry ground about `d` metres from `from` (tries round the compass).
+func _dry_spot_near(from: Vector3, d: float) -> Vector3:
+	for k in 16:
+		var a := TAU * float(k) / 16.0
+		var q := from + Vector3(cos(a), 0.0, sin(a)) * d
+		if terrain.height_at(q.x, q.z) > terrain.water_surface_at(q.x, q.z) + 0.5:
+			return ground_at(q + Vector3.UP * 20.0) + Vector3.UP * 0.2
+	return ground_at(from + Vector3(d, 20.0, 0.0)) + Vector3.UP * 0.2
+
+
 ## Fights a Colossus through its slam, fire and phases, kills it, and tries
 ## every Gift.
 func _run_colossus_test() -> void:
@@ -6390,13 +6400,13 @@ func _run_colossus_test() -> void:
 	_check("a colossus towers over a man", c.head_offset > 3.5 and c._cap.height > 4.0)
 	# Close in: it slams.
 	player.spawn_protect = 0.0
-	player.hp = 100.0
-	player.global_position = ground_at(c.global_position + Vector3(5.0, 20.0, 0.0)) + Vector3.UP * 0.2
+	player.hp = 400.0
+	player.global_position = _dry_spot_near(c.global_position, 5.0)
 	var slammed := false
 	var hp_before := player.hp
 	for i in 60 * 25:
-		player.global_position = ground_at(c.global_position + Vector3(5.0, 20.0, 0.0)) + Vector3.UP * 0.2
-		player.hp = maxf(player.hp, 1.0)
+		player.global_position = _dry_spot_near(c.global_position, 5.0)
+		player.hp = maxf(player.hp, 300.0)
 		await get_tree().physics_frame
 		if c._busy == "slam":
 			slammed = true
@@ -6405,7 +6415,7 @@ func _run_colossus_test() -> void:
 				await get_tree().physics_frame
 			break
 	_check("close in and it slams the ground", slammed)
-	print("[colossus] slam: hp %.0f -> %.0f" % [hp_before, player.hp])
+	print("[colossus] slam: hp %.0f -> %.0f (at %.1f m, protect %.1f)" % [hp_before, player.hp, player.global_position.distance_to(c.global_position), player.spawn_protect])
 	_check("the slam hurts", player.hp < hp_before - 20.0 or not player.alive)
 	if not player.alive:
 		print("[colossus] (the slam killed us)")
@@ -6414,10 +6424,10 @@ func _run_colossus_test() -> void:
 	player.spawn_protect = 99999.0
 	player.hp = 100.0
 	# Stand off: it throws fire.
-	player.global_position = ground_at(c.global_position + Vector3(32.0, 20.0, 0.0)) + Vector3.UP * 0.2
+	player.global_position = _dry_spot_near(c.global_position, 50.0)
 	var orbs := 0
-	for i in 60 * 20:
-		player.global_position = ground_at(c.global_position + Vector3(32.0, 20.0, 0.0)) + Vector3.UP * 0.2
+	for i in 60 * 35:
+		player.global_position = _dry_spot_near(c.global_position, 50.0)
 		await get_tree().physics_frame
 		orbs = maxi(orbs, find_children("*", "BossOrb", false, false).size())
 		var n := 0
@@ -6434,10 +6444,62 @@ func _run_colossus_test() -> void:
 		c.take_damage(30.0, c.global_position + Vector3.UP * 3.0, false, player)
 	print("[colossus] thirty rifle hits: hp %.1f -> %.1f" % [h0, c.hp])
 	_check("thirty rifle hits barely scratch it", c.hp > h0 - 45.0 and c.alive)
+	# Every Colossus's own move.
+	player.global_position = _dry_spot_near(c.global_position, 20.0)
+	player.velocity = Vector3.ZERO
+	c._target = player
+	c.signature = "lightning"
+	c._call_lightning()
+	_check("lightning: strikes are marked first", c._pending.size() >= 3)
+	player.spawn_protect = 0.0
+	# (Standing still in a lightning field kills: give the test a deep well.)
+	player.hp = 400.0
+	var hz := player.hp
+	for i in int(60 * (Colossus.ZAP_WINDUP + 0.2)):
+		player.velocity = Vector3.ZERO
+		await get_tree().physics_frame
+	print("[colossus] lightning: hp %.0f -> %.0f  (giant %s busy=%s pending=%d, you %s swimming=%s)" % [hz, player.hp, str(c.global_position.round()), c._busy, c._pending.size(), str(player.global_position.round()), str(player.swimming)])
+	_check("lightning strikes where you stood", player.hp < hz - 30.0)
+	player.hp = 400.0
+	c.signature = "quake"
+	var qp := c.global_position
+	player.global_position = _dry_spot_near(qp, 11.0)
+	c._slam_at = qp
+	c._slam_land()
+	var hq := player.hp
+	for i in 60:
+		await get_tree().physics_frame
+	print("[colossus] aftershock at 11 m (outside the slam): hp %.0f -> %.0f" % [hq, player.hp])
+	_check("the aftershock reaches past the slam", player.hp < hq - 20.0)
+	player.spawn_protect = 99999.0
+	player.hp = 100.0
+	c.signature = "firefield"
+	c._orbs_left = 1
+	c._throw_orb()
+	var fp_seen := false
+	for i in 60 * 4:
+		await get_tree().physics_frame
+		for ch in get_children():
+			if ch is FirePatch:
+				fp_seen = true
+		if fp_seen:
+			break
+	_check("mother of cinders: her fire leaves the ground burning", fp_seen)
+	c.signature = "boulder"
+	c._orbs_left = 3
+	c._throw_orb()
+	var big := false
+	for ch in get_children():
+		if ch is BossOrb and (ch as BossOrb).size > 2.0:
+			big = true
+	_check("orgrath: a boulder of burning rock", big)
+	c._orbs_left = 0
+	c._pending.clear()
 	# Phases.
 	c.hp = 60.0
 	for i in 3:
 		await get_tree().physics_frame
+	print("[colossus] phase check: busy=%s stage=%d hp=%.0f alive=%s pos=%s arena=%s physics=%s" % [c._busy, c.stage, c.hp, str(c.alive), str(c.global_position.round()), str(c.arena.round()), str(c.is_physics_processing())])
 	_check("below two thirds: second phase", c.stage == 2)
 	c.hp = 30.0
 	for i in 3:
@@ -6445,7 +6507,7 @@ func _run_colossus_test() -> void:
 	_check("below a third: furious", c.stage == 3)
 	# Fell it.
 	var e0 := writs.my_embers
-	player.global_position = ground_at(c.global_position + Vector3(20.0, 20.0, 0.0)) + Vector3.UP * 0.2
+	player.global_position = _dry_spot_near(c.global_position, 20.0)
 	var guard := 0
 	while c.alive and guard < 500:
 		guard += 1
