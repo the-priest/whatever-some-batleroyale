@@ -14,12 +14,16 @@ const DRAIN := 3.0
 const WARM_R := 11.0
 const USE_R := 2.6
 const HEART_R := 3.6
-const SENTINELS := 3
+const SENTINELS := 2
 
 var game: Node
 var data: Dictionary = {}
 var lit: Array[bool] = []
 var cleansed := false
+## The Hollow Warden (on every machine; it acts only on the host).
+var warden: Node = null
+## The Warden has fallen this match (from the host).
+var warden_down := false
 var _seen := false
 var _drain_t := 0.0
 var _k := 0.0
@@ -63,8 +67,18 @@ func reset() -> void:
 	for i in lit.size():
 		lit[i] = false
 	cleansed = false
+	warden_down = false
 	_seen = false
 	_show()
+
+
+func warden_awake() -> bool:
+	return lit_count() == lit.size() and not warden_down and warden != null and is_instance_valid(warden)
+
+
+## Whether the Warden still keeps the Heart.
+func guarded() -> bool:
+	return not warden_down and warden != null and is_instance_valid(warden) and (warden as Bot).alive
 
 
 func lit_count() -> int:
@@ -115,6 +129,8 @@ func prompt(p: Vector3) -> String:
 	if _at_heart(p):
 		if lit_count() < lit.size():
 			return "THE HEART IS WARDED  —  LIGHT THE BRAZIERS  (%d / %d)" % [lit_count(), lit.size()]
+		if guarded():
+			return "THE WARDEN KEEPS THE HEART  —  FELL IT FIRST"
 		return "[%s]  TAKE THE HEART OF THE HOLLOW" % Keybinds.key("interact")
 	return ""
 
@@ -129,7 +145,7 @@ func interact(p: Vector3) -> bool:
 		else:
 			light_on(0, i)
 		return true
-	if _at_heart(p) and lit_count() == lit.size():
+	if _at_heart(p) and lit_count() == lit.size() and not guarded():
 		if game.net_is_client():
 			game.net.send_hollow(-1)
 		else:
@@ -166,10 +182,18 @@ func light_on(o: int, i: int) -> void:
 	_broadcast("last" if last else "lit", o, i)
 	if last:
 		_wake_sentinels(who)
+		if warden != null and is_instance_valid(warden) and warden.has_method("wake"):
+			warden.wake()
+
+
+## Host: the Warden fell; the Heart is free to take.
+func on_warden_fell() -> void:
+	warden_down = true
+	_broadcast("warden", -1, -1)
 
 
 func claim_on(o: int) -> void:
-	if not active() or cleansed or lit_count() < lit.size():
+	if not active() or cleansed or lit_count() < lit.size() or guarded():
 		return
 	var who := _owner_node(o)
 	if who == null or who.global_position.distance_to(data.heart) > HEART_R + 3.0:
@@ -182,7 +206,7 @@ func claim_on(o: int) -> void:
 
 
 func _broadcast(what: String, o: int, i: int) -> void:
-	var e := {"ev": "hollow", "lit": lit.duplicate(), "cl": cleansed, "what": what, "who": _owner_name(o), "i": i, "o": o}
+	var e := {"ev": "hollow", "lit": lit.duplicate(), "cl": cleansed, "wd": warden_down, "what": what, "who": _owner_name(o) if o >= 0 else "", "i": i, "o": o}
 	if game.net_on() and game.net.hosting:
 		for pid in game.net.roster:
 			if int(pid) != 1:
@@ -246,6 +270,7 @@ func apply_state(e: Dictionary) -> void:
 	for i in mini(l.size(), lit.size()):
 		lit[i] = bool(l[i])
 	cleansed = bool(e.get("cl", cleansed))
+	warden_down = bool(e.get("wd", warden_down))
 	_show()
 	var what := str(e.get("what", ""))
 	var mine := bool(e.get("mine", false))
@@ -260,7 +285,10 @@ func apply_state(e: Dictionary) -> void:
 			game.sfx.play_ui("event_horn", -4.0)
 			if mine or depth(game.player.global_position) > 0.0:
 				game.hud.show_big("THE WARD FALLS", Color(1.0, 0.55, 0.25), 2.6)
-				game.hud.show_notice("THE HOLLOW'S SENTINELS WAKE  —  TAKE THE HEART", 4.0)
+				game.hud.show_notice("THE HOLLOW WARDEN RISES  —  FELL IT, THEN TAKE THE HEART", 4.0)
+		"warden":
+			if depth(game.player.global_position) > 0.0 or game.player.global_position.distance_to(data.heart) < 120.0:
+				game.hud.show_notice("THE WARDEN IS ASH  —  THE HEART IS FREE TO TAKE", 4.0)
 		"cleansed":
 			game.sfx.play_ui("writ_done", -2.0)
 			if mine:

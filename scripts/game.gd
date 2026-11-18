@@ -2239,13 +2239,29 @@ func _spawn_revenants() -> void:
 		cg.eliminated.connect(_on_bot_eliminated)
 		bots.append(cg)
 		giants += 1
+	# The Hollow Warden, kneeling before the Heart of the Ashen Hollow.
+	if hollow != null and hollow.active():
+		var hd: Vector3 = hollow.data.heart
+		var yaw: float = float(hollow.data.get("yaw", 0.0))
+		var fwd := Basis(Vector3.UP, yaw) * Vector3(0, 0, 1)
+		var wat := ground_at(hd + fwd * 5.5 + Vector3.UP * 20.0)
+		var wd := HollowWarden.new()
+		wd.setup_warden(hd, self)
+		add_child(wd)
+		wd.global_position = wat
+		wd.rotation.y = atan2(fwd.x, fwd.z)
+		wd.arm_weapon("dmr")
+		wd.eliminated.connect(_on_bot_eliminated)
+		bots.append(wd)
+		hollow.warden = wd
+		giants += 1
 	print("[revenants] %d hold the island: %s" % [made + giants, str(bots.filter(func(b): return is_instance_valid(b) and b is Revenant).map(func(b): return "%s @ %s" % [b.display_name(), str(Vector3(b.arena).round())]))])
 
 
 ## A Revenant fell: a bell over the whole island, and its hoard on the ground.
 func _revenant_fell(r: Revenant, killer: String) -> void:
 	sfx.play_ui("writ_done", -1.0)
-	hud.show_big("COLOSSUS FELLED" if r is Colossus else "REVENANT FELLED", Color(1.0, 0.82, 0.38), 3.6)
+	hud.show_big("COLOSSUS FELLED" if r is Colossus else ("WARDEN FELLED" if r is HollowWarden else "REVENANT FELLED"), Color(1.0, 0.82, 0.38), 3.6)
 	hud.show_notice("%s  —  SLAIN BY %s" % [r.display_name(), killer if killer != "" else "THE STORM"], 4.0)
 	if net_is_client():
 		return
@@ -2330,6 +2346,9 @@ func _update_boss_bar() -> void:
 	var best_d := 130.0
 	for b in bots:
 		if is_instance_valid(b) and b is Revenant and (b as Bot).alive:
+			# The Warden kneels unseen until the Hollow's last flame is lit.
+			if b is HollowWarden and hollow != null and not hollow.warden_awake():
+				continue
 			var d: float = (b as Node3D).global_position.distance_to(player.global_position)
 			if d < (130.0 if b is Colossus else 85.0) and d < best_d:
 				best_d = d
@@ -2362,7 +2381,9 @@ func _update_boss_bar() -> void:
 		hud.show_big("%s RAGES" % best.bot_name, HUD.DANGER, 2.4)
 		hud.show_notice("THE PACK ANSWERS ITS CALL", 2.6)
 		sfx.play_ui("writ_fail", -4.0)
-	hud.set_boss({"name": best.bot_name, "title": best.title, "hp": clampf(best.hp / 100.0, 0.0, 1.0), "raged": raged})
+	hud.set_boss({"name": best.bot_name, "title": best.title, "hp": clampf(best.hp / 100.0, 0.0, 1.0), "raged": raged, "big": best is HollowWarden})
+	if music != null:
+		music.set_boss(best is HollowWarden and best_d < 60.0)
 
 
 func _drop_bot_loot(b: Bot) -> void:
@@ -5045,7 +5066,7 @@ func _net_send_setup() -> void:
 		var b = bots[bi]
 		bot_names.append(b.bot_name)
 		if is_instance_valid(b) and b is Revenant:
-			revs.append([bi, (b as Revenant).title, (b as Revenant).arena, b is Colossus])
+			revs.append([bi, (b as Revenant).title, (b as Revenant).arena, b is Colossus, "warden" if b is HollowWarden else ""])
 	var list: Array = []
 	for id in net.roster:
 		list.append([id, net.roster[id]])
@@ -5119,7 +5140,13 @@ func net_start_match(setup: Dictionary) -> void:
 	for i in names.size():
 		var b: Bot = null
 		if rev_at.has(i):
-			if (rev_at[i] as Array).size() > 3 and bool(rev_at[i][3]):
+			if (rev_at[i] as Array).size() > 4 and str(rev_at[i][4]) == "warden":
+				var hw := HollowWarden.new()
+				hw.setup_warden(rev_at[i][2], self)
+				b = hw
+				if hollow != null:
+					hollow.warden = hw
+			elif (rev_at[i] as Array).size() > 3 and bool(rev_at[i][3]):
 				var cg := Colossus.new()
 				cg.setup_colossus(str(names[i]), str(rev_at[i][1]), rev_at[i][2], self)
 				b = cg
@@ -6514,6 +6541,12 @@ func _run_hollow_test() -> void:
 	_check("the ash drains you", player.hp < h0 - 6.0 and player.hp > h0 - 20.0)
 	_check("the hollow darkens the world", hollow._k > 0.5 and world._hollow_k > 0.5)
 	_check("the heart is warded", hollow.prompt(ground_at(hollow.data.heart + Vector3(2.5, 10, 0))).begins_with("THE HEART IS WARDED"))
+	var wd: HollowWarden = hollow.warden
+	_check("the hollow warden kneels at the heart", wd != null and wd.dormant and wd.global_position.distance_to(hollow.data.heart) < 9.0)
+	if wd != null:
+		var wh := wd.hp
+		wd.take_damage(80.0, wd.global_position + Vector3.UP, false, player)
+		_check("the ward keeps the warden from harm", wd.hp == wh and wd.alive)
 	player.hp = 100.0
 	# Wait for soldiers on the ground (the sentinels are drawn from them).
 	player.spawn_protect = 99999.0
@@ -6549,6 +6582,46 @@ func _run_hollow_test() -> void:
 			near += 1
 	print("[hollow] sentinels at the heart: %d" % near)
 	_check("the sentinels wake", near >= 2)
+	_check("the warden wakes", wd != null and not wd.dormant)
+	if wd != null:
+		# Fight it: up close it calls an ash nova; far off it steps through smoke.
+		player.spawn_protect = 99999.0
+		player.global_position = _dry_spot_near(wd.global_position, 6.0)
+		player.velocity = Vector3.ZERO
+		var nova := false
+		for i in 60 * 20:
+			await get_tree().physics_frame
+			if wd._nova_in >= 0.0:
+				nova = true
+				break
+		_check("the warden calls an ash nova", nova)
+		var far := _dry_spot_near(wd.arena, 34.0)
+		player.global_position = far
+		player.velocity = Vector3.ZERO
+		wd._step_t = 0.0
+		var stepped := false
+		var s_from := wd.global_position
+		for i in 60 * 15:
+			await get_tree().physics_frame
+			player.global_position = far
+			if wd.global_position.distance_to(s_from) > 10.0 and wd.global_position.distance_to(player.global_position) < 10.0:
+				stepped = true
+				break
+		print("[hollow] warden at %d m from you after its step" % int(wd.global_position.distance_to(player.global_position)))
+		_check("the warden steps through smoke to you", stepped)
+		player.global_position = ground_at(hollow.data.heart + Vector3(2.8, 20.0, 0.0)) + Vector3.UP * 0.3
+		player.velocity = Vector3.ZERO
+		for f in 10:
+			await get_tree().physics_frame
+		_check("the warden keeps the heart", hollow.prompt(player.global_position).begins_with("THE WARDEN KEEPS") and not hollow.interact(player.global_position))
+		var e2 := writs.my_embers
+		var guard := 0
+		while wd.alive and guard < 300:
+			guard += 1
+			wd.take_damage(60.0, wd.global_position + Vector3.UP * 1.7, true, player)
+		await get_tree().physics_frame
+		print("[hollow] warden felled in %d hits, embers %d -> %d" % [guard, e2, writs.my_embers])
+		_check("the warden falls and pays", not wd.alive and hollow.warden_down and writs.my_embers >= e2 + 1600)
 	for b in bots:
 		if is_instance_valid(b) and b.global_position.distance_to(hollow.data.heart) < 30.0:
 			b.alert_timer = 0.0
@@ -6767,7 +6840,7 @@ func _run_revenant_test() -> void:
 	_land_player_now()
 	player.spawn_protect = 99999.0
 	player.give_weapon("rifle")
-	var revs: Array = bots.filter(func(b): return is_instance_valid(b) and b is Revenant and not (b is Colossus))
+	var revs: Array = bots.filter(func(b): return is_instance_valid(b) and b is Revenant and not (b is Colossus) and not (b is HollowWarden))
 	_check("three revenants hold the island", revs.size() == REVENANT_COUNT)
 	_check("revenants are not counted among the living", alive == total_players)
 	if revs.is_empty():

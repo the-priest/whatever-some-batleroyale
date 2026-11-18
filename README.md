@@ -138,9 +138,13 @@ the trees are dead, the ground is grey, ash falls without end and the light goes
 ash drains the life out of anyone in it (up to 3 health a second), except in the warmth of a lit
 brazier. Four cold braziers stand round its edge; press **F** at one to light it (150 Embers, and it
 stays lit for everyone). Light all four and the ward on the **Heart of the Hollow**, a beating
-crimson crystal chained over a stone dais at the middle, falls, and the Hollow's sentinels (armed,
-armoured soldiers) rise round the Heart and come for whoever lit the last flame. Take the Heart
-(**F**) for 1,500 Embers, a Sigil and a **Gift**; the Hollow is cleansed for everyone and the ash
+crimson crystal chained over a stone dais at the middle, falls. Then **the Hollow Warden** rises: an
+ash-grey knight that knelt before the Heart all match, untouchable while the ward held. Up close it
+calls an **ash nova** (a grey ring on the ground, then a blast that throws you clear; step out of the
+ring); keep your distance and it goes up in smoke and comes out of the smoke beside you. At half
+health it rages and both come faster. Two of the Hollow's sentinels (armed, armoured soldiers) rise
+with it. Fell the Warden (1,600 Embers, a Sigil, a Gift), then take the Heart
+(**F**) for 1,500 Embers, a Sigil and another **Gift**; the Hollow is cleansed for everyone and the ash
 stops. The map shows the Hollow, its braziers (lit or cold) and the Heart. Over LAN the host settles
 every brazier and the Heart; everyone sees the same flames.
 
@@ -417,7 +421,7 @@ the mushroom caps, and `--drive` tests the jeep.
 
 Souls-like systems: `--writs`, `--revenant`, `--colossus`, `--vault`, `--gods`, `--events`,
 `--renown`, `--codex`, `--chests` and `--hollow` (walks into the Ashen Hollow, lights its braziers,
-wakes its sentinels and takes the Heart).
+wakes and fells the Warden and takes the Heart).
 
 ## Anti-cheat
 
