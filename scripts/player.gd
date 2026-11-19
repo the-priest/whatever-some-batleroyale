@@ -108,6 +108,17 @@ var _reload_dur := 1.0
 ## Squad games: at 0 HP you go down instead of dying, crawl, and bleed out
 ## unless a squad mate revives you. Damage while down drains the bleed.
 var downed := false
+## Dodge roll: a burst along the ground, untouchable for a breath.
+const DODGE_SPEED := 15.5
+const DODGE_TIME := 0.32
+const DODGE_IFRAMES := 0.28
+const DODGE_CD := 0.9
+var dodge_t := 0.0
+var dodge_cd := 0.0
+var iframes := 0.0
+## Blows the roll let pass (for the checks and the HUD).
+var dodged := 0
+var _dodge_dir := Vector3.ZERO
 var bleed := 0.0
 const BLEED_TIME := 30.0
 const DOWN_EYE := 0.42
@@ -588,6 +599,8 @@ func _physics_process_body(delta: float) -> void:
 	flash.visible = flash_time > 0.0
 	flash_light.light_energy = 2.2 if flash_time > 0.0 else 0.0
 	spawn_protect = maxf(0.0, spawn_protect - delta)
+	dodge_cd = maxf(0.0, dodge_cd - delta)
+	iframes = maxf(0.0, iframes - delta)
 	if not gifts.is_empty():
 		_tick_gifts(delta)
 	if downed:
@@ -825,8 +838,16 @@ func _ground(delta: float) -> void:
 	var wish := basis_yaw * Vector3(input.x, 0.0, input.y)
 	var target := wish * speed * (0.55 if not is_on_floor() else 1.0)
 	var accel := ACCEL if is_on_floor() else AIR_ACCEL
-	velocity.x = move_toward(velocity.x, target.x, accel * delta)
-	velocity.z = move_toward(velocity.z, target.z, accel * delta)
+	if dodge_t <= 0.0 and _ajp("dodge"):
+		_start_dodge(wish, basis_yaw)
+	if dodge_t > 0.0:
+		dodge_t -= delta
+		var k := clampf(dodge_t / DODGE_TIME, 0.0, 1.0)
+		velocity.x = _dodge_dir.x * DODGE_SPEED * (0.45 + 0.55 * k)
+		velocity.z = _dodge_dir.z * DODGE_SPEED * (0.45 + 0.55 * k)
+	else:
+		velocity.x = move_toward(velocity.x, target.x, accel * delta)
+		velocity.z = move_toward(velocity.z, target.z, accel * delta)
 	if is_on_floor():
 		_coyote = 0.12
 	else:
@@ -2164,6 +2185,10 @@ const ABSORB := [0.0, 0.30, 0.40, 0.55]
 func take_damage(amount: float, from_pos: Vector3 = Vector3.ZERO, headshot: bool = false, source: Node = null) -> bool:
 	if not alive or spawn_protect > 0.0:
 		return false
+	# Mid-roll, blows and bullets pass through you (the storm and the ash do not).
+	if iframes > 0.0 and source != null:
+		dodged += 1
+		return false
 	var dmg := amount * (0.88 if blessings.has("warding") and source != null else 1.0)
 	if source != null:
 		# The storm ignores armour; bullets and blasts do not.
@@ -2239,6 +2264,28 @@ func _tick_gifts(delta: float) -> void:
 
 ## Blink: a step through the air, nine metres the way you look (stopping
 ## short of walls), landing on whatever is below.
+## Roll the way you are moving (a quick step back if you are standing still).
+func _start_dodge(wish: Vector3, basis_yaw: Basis) -> void:
+	if dodge_cd > 0.0 or not is_on_floor() or downed or healing or swimming or in_water:
+		return
+	var dir := wish
+	dir.y = 0.0
+	if dir.length() < 0.2:
+		dir = basis_yaw * Vector3(0, 0, 1)
+	_dodge_dir = dir.normalized()
+	dodge_t = DODGE_TIME
+	dodge_cd = DODGE_CD
+	iframes = DODGE_IFRAMES
+	_sprint_on = false
+	land_dip = 0.28
+	add_trauma(0.08)
+	if game != null:
+		if game.get("anticheat") != null:
+			game.anticheat.grace(0.6)
+		if game.sfx != null:
+			game.sfx.play_2d("jump_whoosh", -8.0, 0.12)
+
+
 func _blink() -> void:
 	if blink_cd > 0.0 or mode != Mode.GROUND or downed or swimming:
 		return

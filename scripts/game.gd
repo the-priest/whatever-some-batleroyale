@@ -382,6 +382,8 @@ func _ready() -> void:
 		_run_ordeal_test()
 	elif OS.get_cmdline_user_args().has("--bell"):
 		_run_bell_test()
+	elif OS.get_cmdline_user_args().has("--dodge"):
+		_run_dodge_test()
 	elif OS.get_cmdline_user_args().has("--unkindled"):
 		_run_unkindled_test()
 	elif OS.get_cmdline_user_args().has("--colossus"):
@@ -1787,6 +1789,7 @@ func _update_prompt() -> void:
 
 ## While the plane flies: what is waiting on the island, one line at a time.
 const PLANE_TIPS := [
+	"Z  DODGE ROLL  —  FOR A BREATH MID-ROLL, NO BLOW OR BULLET CAN TOUCH YOU",
 	"WRIT BOARDS STAND IN EVERY TOWN  —  TAKE A JOB, EARN EMBERS",
 	"EMBERS BUY KIT AT THE WAYSHRINES  ·  A STONE SHRINE WITH A FIRE BOWL",
 	"THREE REVENANTS HOLD THE LANDMARKS  —  EACH CARRIES A SIGIL",
@@ -6734,6 +6737,53 @@ func _run_unkindled_test() -> void:
 	_check("the fire is yours", phase == "end" and hud.end_title.text == "THE FIRE IS YOURS" and Ordeal.unkindled_slain)
 	_check("the light comes back", hollow == null or hollow.force_k < 0.0)
 	print("[unkindled] done")
+	get_tree().quit()
+
+
+## The dodge roll: a burst of speed, a breath untouchable, a cooldown.
+func _run_dodge_test() -> void:
+	_start_match()
+	for i in 30:
+		await get_tree().physics_frame
+	_land_player_now()
+	for i in 60:
+		await get_tree().physics_frame
+	player.spawn_protect = 0.0
+	player.vest_level = 0
+	player.helmet_level = 0
+	var p0 := player.global_position
+	Input.action_press("dodge")
+	await get_tree().physics_frame
+	Input.action_release("dodge")
+	var top := 0.0
+	var hit_in := false
+	var hp0 := player.hp
+	for i in 3:
+		await get_tree().physics_frame
+		top = maxf(top, Vector2(player.velocity.x, player.velocity.z).length())
+	if player.iframes > 0.0:
+		player.take_damage(40.0, player.global_position + Vector3.FORWARD, false, _net_dummy)
+		hit_in = player.hp < hp0
+	print("[dodge] speed %.1f, iframes %.2f, cooldown %.2f, hp %.0f -> %.0f, dodged %d" % [top, player.iframes, player.dodge_cd, hp0, player.hp, player.dodged])
+	_check("the roll throws you along the ground", top > 10.0)
+	_check("mid-roll a blow passes through you", not hit_in and player.dodged == 1)
+	Input.action_press("dodge")
+	await get_tree().physics_frame
+	Input.action_release("dodge")
+	_check("it needs a moment before the next", player.dodge_t <= 0.0 or player.dodge_cd > 0.5)
+	for i in 30:
+		await get_tree().physics_frame
+	var moved := Vector2(player.global_position.x - p0.x, player.global_position.z - p0.z).length()
+	print("[dodge] moved %.1f m" % moved)
+	_check("a roll carries you a few metres", moved > 3.0 and moved < 9.0)
+	var hp1 := player.hp
+	player.take_damage(20.0, player.global_position + Vector3.FORWARD, false, _net_dummy)
+	_check("after the roll you can be hurt again", player.hp < hp1)
+	var hp2 := player.hp
+	player.iframes = 0.2
+	player.take_damage(10.0, Vector3.ZERO, false, null)
+	_check("the storm is not dodged", player.hp < hp2)
+	print("[dodge] done")
 	get_tree().quit()
 
 

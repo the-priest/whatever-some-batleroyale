@@ -131,6 +131,13 @@ apart: it holds a hoard (a top-tier rifle, level 3 armour and helmet, medkits), 
 Bosses you have come upon are marked on your map with a skull (crossed out once they fall), and when
 a Colossus is on you the music turns to GRAVEBLADE and comes up in the mix.
 
+## The dodge roll
+
+**Z** (rebindable under DODGE ROLL) rolls you a few metres the way you are moving, or a quick step
+back if you are standing still. For a breath mid-roll no blow, bullet, fireball, nova or ring can
+touch you (the storm and the Hollow's ash still can). It needs most of a second before the next.
+Read the boss, roll through the blow. Works over LAN too.
+
 ## The Bellkeeper
 
 **Mourne, the Bellkeeper**, a pale knight under a great bronze bell that hangs over it from
@@ -463,7 +470,7 @@ fires rays through every window and door opening on the map, `--fantasy` climbs 
 the mushroom caps, and `--drive` tests the jeep.
 
 Souls-like systems: `--writs`, `--revenant`, `--colossus`, `--vault`, `--gods`, `--events`,
-`--renown`, `--codex`, `--chests`, `--unkindled` (an Ordeal already endured, all seven bouts, then the hidden one through its three
+`--renown`, `--codex`, `--chests`, `--dodge` (the roll's speed, its moment untouchable, its cooldown), `--unkindled` (an Ordeal already endured, all seven bouts, then the hidden one through its three
 parts), `--bell` (the toll strikes you on the ground and passes under you in the air), `--ordeal` (all seven bouts, the altars, the win, the ring's edge
 and a fall) and `--hollow` (walks into the Ashen Hollow, lights its braziers,
 wakes and fells the Warden and takes the Heart).

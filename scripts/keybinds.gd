@@ -12,7 +12,7 @@ const BINDABLE := [
 	["interact", "USE / PICK UP"], ["grenade", "GRENADE"], ["heal", "HEAL"],
 	["use_bandage", "BANDAGE"], ["use_med", "MEDKIT"], ["use_energy", "ENERGY DRINK"],
 	["swap_weapon", "SWAP WEAPON"], ["fire_mode", "FIRE MODE"],
-	["ability", "USE GIFT (BLINK)"], ["inspect", "INSPECT WEAPON"], ["map", "MAP"], ["marker", "MARK ON MAP"], ["free_look", "FREE LOOK"],
+	["dodge", "DODGE ROLL"], ["ability", "USE GIFT (BLINK)"], ["inspect", "INSPECT WEAPON"], ["map", "MAP"], ["marker", "MARK ON MAP"], ["free_look", "FREE LOOK"],
 ]
 
 static var _defaults: Dictionary = {}
