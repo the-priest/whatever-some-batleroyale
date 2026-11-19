@@ -133,6 +133,8 @@ static func _clock(t: float) -> String:
 
 func setup(p_game: Node) -> void:
 	game = p_game
+	# After the foes each frame, so what it tells them sticks.
+	process_physics_priority = 100
 	load_record()
 	centre = _find_ground()
 	_build()
@@ -494,11 +496,16 @@ func _physics_process(delta: float) -> void:
 			if _rest_t <= 0.0:
 				_spawn_bout()
 		"fight":
+			# They always know where you are: there is nowhere in the ring to hide.
+			var any := false
 			for f in foes:
 				if is_instance_valid(f) and f.alive:
-					f.enemy = p if f.enemy == null else f.enemy
-					return
-			_bout_won()
+					f.enemy = p
+					f.heard_pos = p.global_position
+					f.alert_timer = maxf(f.alert_timer, 3.0)
+					any = true
+			if not any:
+				_bout_won()
 
 
 func _bout_won() -> void:

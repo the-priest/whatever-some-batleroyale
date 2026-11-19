@@ -7155,6 +7155,8 @@ func _run_ordeal_test() -> void:
 				await get_tree().physics_frame
 				if live[0].enemy == player:
 					hunted = true
+			if not hunted:
+				print("[ordeal] foe enemy=%s state=%d dist=%.0f leash=%.0f arena_d=%.0f" % [str(live[0].enemy), live[0].state, live[0].global_position.distance_to(player.global_position), live[0].leash, Vector2(live[0].global_position.x - live[0].arena.x, live[0].global_position.z - live[0].arena.z).length()])
 			_check("the foe hunts you", hunted)
 			_check("no sudden victory in the ring", phase == "playing")
 		for f in live:
