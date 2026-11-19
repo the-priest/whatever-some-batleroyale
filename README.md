@@ -230,6 +230,11 @@ toll and the peal; below two thirds the ash nova and the ashen step; below one t
 everything comes faster, and it calls two echoes of the Revenants into the ring. Your time for the ten
 is recorded before it rises. Slay it and the end screen says so; the menu remembers.
 
+**The Hall of Echoes** (main menu): every kind of boss you have slain with your own hand, on the
+island or in the Ordeal, leaves an echo there. Pick one to fight it again, alone, in the ring (the
+Ordeal's kit, no Gifts). Your best time against each is kept and shown beside its name; bosses you have
+not yet slain stay hidden.
+
 **Bindings** (in the OATHS screen) make it harder, for those who have endured it: the **Binding of
 Flesh** (no armour, no helmet), **of Breath** (no health back between bouts), **of Want** (no Gifts:
 the altars never rise) and **of Arms** (a sidearm and nothing more). They hold until you break them,
@@ -510,7 +515,8 @@ Souls-like systems: `--writs`, `--revenant`, `--colossus`, `--vault`, `--gods`, 
 `--renown`, `--codex`, `--chests`, `--wyrm` (under, the ring, the eruption, exposed, the roll through it), `--flask` (a swallow, an
 empty flask, a shrine's refill), `--dodge` (the roll's speed, its moment untouchable, its cooldown), `--unkindled` (an Ordeal already endured, all ten bouts, then the hidden one through its three
 parts), `--bell` (the toll strikes you on the ground and passes under you in the air), `--carrion` (aloft, the strip, the dive, the perch), `--witch` (low beam jumped, high beam
-crouched under, and both standing), `--ordeal` (all ten bouts, the altars, the win, the ring's edge
+crouched under, and both standing), `--echo` (a slain boss leaves its echo; fought again alone, its
+time kept), `--ordeal` (all ten bouts, the altars, the win, the ring's edge
 and a fall) and `--hollow` (walks into the Ashen Hollow, lights its braziers,
 wakes and fells the Warden and takes the Heart).
 

@@ -32,6 +32,14 @@ const BINDINGS := [
 	["want", "BINDING OF WANT", "No Gifts from the altars"],
 	["arms", "BINDING OF ARMS", "A sidearm and nothing more"],
 ]
+## The Hall of Echoes: every kind of boss, to be fought again alone once
+## slain. [kind, name]
+const ECHOES := [
+	["revenant", "A REVENANT"], ["warden", "THE HOLLOW WARDEN"], ["colossus", "A COLOSSUS"],
+	["bell", "MOURNE, THE BELLKEEPER"], ["wyrm", "SKARN, THE WYRM BENEATH"],
+	["carrion", "VESPERA, THE CARRION QUEEN"], ["witch", "ISOLDE, THE LANTERN WITCH"],
+	["unkindled", "THE UNKINDLED"],
+]
 ## The hidden bout, for those who have endured the Ordeal before.
 const SECRET := ["THE UNKINDLED", ["unkindled"]]
 ## Gifts no use in the ring.
@@ -52,6 +60,8 @@ var _used_rev: Array = []
 var _used_giant: Array = []
 var _floor_lo := 0.0
 var secret_open := false
+## The Hall of Echoes: one boss of this kind, alone ("" = the Ordeal).
+var echo := ""
 ## Seven endured this run (the hidden bout may follow).
 var endured_run := false
 var _hud_t := 0.0
@@ -62,6 +72,8 @@ static var best_time := 0.0
 static var best_bound := 0
 ## The Unkindled has been slain (ever).
 static var unkindled_slain := false
+## Kinds of boss slain by your hand (ever) -> best echo time (0: none yet).
+static var slain: Dictionary = {}
 static var bound: Dictionary = {}
 static var _loaded := false
 ## Headless checks run the Ordeal without touching the player's records.
@@ -79,6 +91,9 @@ static func load_record() -> void:
 	best_time = float(cfg.get_value("ordeal", "best_time", 0.0))
 	best_bound = int(cfg.get_value("ordeal", "best_bound", 0))
 	unkindled_slain = bool(cfg.get_value("ordeal", "unkindled", false))
+	for e in ECHOES:
+		if cfg.has_section_key("echoes", e[0]):
+			slain[e[0]] = float(cfg.get_value("echoes", e[0], 0.0))
 	for b in BINDINGS:
 		if bool(cfg.get_value("ordeal_bind", b[0], false)):
 			bound[b[0]] = true
@@ -93,6 +108,8 @@ static func save_record() -> void:
 	cfg.set_value("ordeal", "best_time", best_time)
 	cfg.set_value("ordeal", "best_bound", best_bound)
 	cfg.set_value("ordeal", "unkindled", unkindled_slain)
+	for k in slain:
+		cfg.set_value("echoes", k, float(slain[k]))
 	cfg.save(PATH)
 
 
@@ -103,6 +120,41 @@ static func save_bindings() -> void:
 	for b in BINDINGS:
 		cfg.set_value("ordeal_bind", b[0], bound.has(b[0]))
 	cfg.save(PATH)
+
+
+## What kind of boss `b` is (for the Hall of Echoes).
+static func kind_of(b: Node) -> String:
+	if b is Unkindled:
+		return "unkindled"
+	if b is Colossus:
+		return "colossus"
+	if b is HollowWarden:
+		return "warden"
+	if b is Bellkeeper:
+		return "bell"
+	if b is Wyrm:
+		return "wyrm"
+	if b is Carrion:
+		return "carrion"
+	if b is LanternWitch:
+		return "witch"
+	return "revenant"
+
+
+## A boss of this kind fell to your hand: its echo waits in the Hall.
+static func mark_slain(kind: String) -> void:
+	load_record()
+	if slain.has(kind):
+		return
+	slain[kind] = 0.0
+	save_record()
+
+
+static func echo_name(kind: String) -> String:
+	for e in ECHOES:
+		if e[0] == kind:
+			return str(e[1])
+	return kind.to_upper()
 
 
 static func is_bound(id: String) -> bool:
@@ -351,22 +403,28 @@ func begin() -> void:
 	bout = -1
 	time = 0.0
 	# Those who have endured it once find something more waiting at its end.
-	secret_open = best_time > 0.0
+	secret_open = best_time > 0.0 and echo == ""
 	_next_bout()
+
+
+func n_bouts() -> int:
+	return 1 if echo != "" else BOUTS.size()
 
 
 ## The bout `i`: one of the seven, or the hidden one after them.
 func bout_def(i: int) -> Array:
+	if echo != "":
+		return [echo_name(echo), [echo]]
 	return BOUTS[i] if i < BOUTS.size() else SECRET
 
 
 func in_secret() -> bool:
-	return bout >= BOUTS.size()
+	return echo == "" and bout >= BOUTS.size()
 
 
 func _next_bout() -> void:
 	bout += 1
-	if bout > BOUTS.size() or (bout == BOUTS.size() and not secret_open):
+	if bout > n_bouts() or (bout == n_bouts() and not secret_open):
 		_endured()
 		return
 	state = "rest"
@@ -479,7 +537,10 @@ func _physics_process(delta: float) -> void:
 		if in_secret():
 			game.hud.lbl_alive.text = "THE LAST BOUT   ·   %s" % _clock(time)
 		else:
-			game.hud.lbl_alive.text = "BOUT %d / %d   ·   %s" % [clampi(bout + 1, 1, BOUTS.size()), BOUTS.size(), _clock(time)]
+			if echo != "":
+				game.hud.lbl_alive.text = "ECHO   ·   %s" % _clock(time)
+			else:
+				game.hud.lbl_alive.text = "BOUT %d / %d   ·   %s" % [clampi(bout + 1, 1, BOUTS.size()), BOUTS.size(), _clock(time)]
 	# The ring holds you.
 	var off := p.global_position - centre
 	off.y = 0.0
@@ -520,6 +581,14 @@ func _bout_won() -> void:
 		if w != "":
 			p.add_ammo_cal(Weapons.caliber(w), int(Weapons.AMMO_BOX.get(Weapons.caliber(w), 30)) * 2)
 	p.inventory_changed.emit()
+	if echo != "":
+		var prev := float(slain.get(echo, 0.0))
+		if prev <= 0.0 or time < prev:
+			slain[echo] = time
+		save_record()
+		state = "done"
+		game.ordeal_endured()
+		return
 	if bout + 1 > best_bout and not in_secret():
 		best_bout = bout + 1
 		save_record()
@@ -549,7 +618,7 @@ func _bout_won() -> void:
 
 
 func _offer() -> Array:
-	if is_bound("want"):
+	if is_bound("want") or echo != "":
 		return []
 	var have: Dictionary = game.player.gifts
 	var pool: Array = Writs.GIFTS.keys().filter(func(k): return not have.has(k) and not NO_GIFTS.has(k))
@@ -656,6 +725,8 @@ func on_player_fell() -> void:
 	state = "fallen"
 	_clear_altars()
 	_set_dark(-1.0)
+	if echo != "":
+		return
 	if bout > best_bout:
 		best_bout = bout
 		save_record()
@@ -664,6 +735,11 @@ func on_player_fell() -> void:
 ## Text for the end screen.
 func end_line() -> String:
 	var bt := ("   ·   %d BOUND" % bound.size()) if bound.size() > 0 else ""
+	if echo != "":
+		var best := float(slain.get(echo, 0.0))
+		if state == "done":
+			return "%s  ·  %s   ·   BEST %s" % [echo_name(echo), _clock(time), _clock(best)]
+		return "%s PREVAILS  ·  %s%s" % [echo_name(echo), _clock(time), ("   ·   BEST %s" % _clock(best)) if best > 0.0 else ""]
 	if state == "done" and in_secret():
 		return "THE UNKINDLED IS SLAIN  ·  %s%s" % [_clock(time), bt]
 	if in_secret():

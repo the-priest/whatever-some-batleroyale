@@ -96,6 +96,9 @@ var hollow: Hollow = null
 var ordeal: Ordeal = null
 var ordeal_mode := false
 var _ordeal_requested := false
+## The Hall of Echoes: which boss ("" = the whole Ordeal).
+var echo_kind := ""
+var _echo_requested := ""
 ## Reliquary, fog bank, the Hunt, Blood Moon (see island_events.gd).
 var events: IslandEvents = null
 ## The next supply drop spawned is a Reliquary.
@@ -208,6 +211,7 @@ func _ready() -> void:
 	add_child(hud)
 	hud.play_pressed.connect(_start_match_ui)
 	hud.ordeal_pressed.connect(_start_ordeal_ui)
+	hud.echo_pressed.connect(_start_echo_ui)
 	hud.resume_pressed.connect(_resume)
 	hud.quit_pressed.connect(_quit_to_menu)
 	hud.settings_changed.connect(_on_settings_changed)
@@ -392,6 +396,8 @@ func _ready() -> void:
 		_run_carrion_test()
 	elif OS.get_cmdline_user_args().has("--witch"):
 		_run_witch_test()
+	elif OS.get_cmdline_user_args().has("--echo"):
+		_run_echo_test()
 	elif OS.get_cmdline_user_args().has("--unkindled"):
 		_run_unkindled_test()
 	elif OS.get_cmdline_user_args().has("--colossus"):
@@ -669,6 +675,11 @@ func _start_ordeal_ui() -> void:
 	_start_match_ui()
 
 
+func _start_echo_ui(kind: String) -> void:
+	_echo_requested = kind
+	_start_ordeal_ui()
+
+
 func _start_match_ui() -> void:
 	if _starting:
 		return
@@ -676,7 +687,9 @@ func _start_match_ui() -> void:
 	# the same again.
 	if phase == "menu" or phase == "":
 		ordeal_mode = _ordeal_requested
+		echo_kind = _echo_requested if ordeal_mode else ""
 	_ordeal_requested = false
+	_echo_requested = ""
 	if net != null and net.active:
 		ordeal_mode = false
 	_starting = true
@@ -855,6 +868,7 @@ func _start_match() -> void:
 func _begin_ordeal() -> void:
 	ordeal = Ordeal.new()
 	ordeal.name = "Ordeal"
+	ordeal.echo = echo_kind
 	add_child(ordeal)
 	ordeal.setup(self)
 	anticheat.grace(3.0)
@@ -894,7 +908,9 @@ func _begin_ordeal() -> void:
 	player.inventory_changed.emit()
 	player._emit_health()
 	hud.set_plane_path(Vector3.ZERO, Vector3.ZERO)
-	if Ordeal.bound.is_empty():
+	if echo_kind != "":
+		hud.show_notice("THE HALL OF ECHOES  —  %s, ALONE" % Ordeal.echo_name(echo_kind), 4.0)
+	elif Ordeal.bound.is_empty():
 		hud.show_notice("%d BOUTS. HEALTH CARRIES OVER. A GIFT AFTER EACH. THE RING HOLDS YOU." % Ordeal.BOUTS.size(), 5.0)
 	else:
 		hud.show_notice("%d BOUTS, BOUND BY %s." % [Ordeal.BOUTS.size(), ", ".join(Ordeal.BINDINGS.filter(func(b): return Ordeal.bound.has(b[0])).map(func(b): return str(b[1]).replace("BINDING OF ", "")))], 5.0)
@@ -905,6 +921,9 @@ func _begin_ordeal() -> void:
 func ordeal_endured() -> void:
 	_win()
 	var slew := ordeal != null and ordeal.in_secret()
+	if ordeal != null and ordeal.echo != "":
+		hud.set_end_text("ECHO DEFEATED", ordeal.end_line(), Color(0.75, 0.85, 1.0))
+		return
 	hud.set_end_text("THE FIRE IS YOURS" if slew else "ORDEAL ENDURED", ordeal.end_line() if ordeal != null else "", Color(0.75, 0.85, 1.0) if slew else Color(1.0, 0.82, 0.4))
 
 
@@ -2157,7 +2176,7 @@ func _on_player_died_rest(killer: String) -> void:
 	hud.show_death(killer, placement, _stats())
 	if ordeal != null:
 		ordeal.on_player_fell()
-		hud.set_end_text("THE ORDEAL", ordeal.end_line(), HUD.DANGER)
+		hud.set_end_text("THE ECHO PREVAILS" if ordeal.echo != "" else "THE ORDEAL", ordeal.end_line(), HUD.DANGER)
 	_pay_renown(false, placement)
 	_net_end_hint()
 	sfx.play_ui("defeat", -4.0)
@@ -2180,6 +2199,9 @@ func _on_notice(text: String) -> void:
 func _on_bot_eliminated(victim: Bot, killer: String) -> void:
 	if victim is Revenant:
 		_revenant_fell(victim as Revenant, killer)
+		# By your own hand: its echo waits in the Hall.
+		if victim.last_killer_node == player and not victim.has_meta("echo"):
+			Ordeal.mark_slain(Ordeal.kind_of(victim))
 	else:
 		alive = maxi(0, alive - 1)
 	if writs != null:
@@ -3857,6 +3879,12 @@ func _run_shot() -> void:
 			hud._open_loadout()
 		if OS.get_cmdline_user_args().has("--oaths"):
 			hud._open_oaths()
+		if OS.get_cmdline_user_args().has("--echoes"):
+			Ordeal.load_record()
+			Ordeal.slain["revenant"] = 72.0
+			Ordeal.slain["bell"] = 0.0
+			Ordeal.slain["wyrm"] = 131.0
+			hud._open_echoes()
 		if OS.get_cmdline_user_args().has("--lobby"):
 			_net_host()
 			if OS.get_cmdline_user_args().has("--fake"):
@@ -6802,6 +6830,54 @@ func _test_fell(f: Node) -> void:
 	while is_instance_valid(f) and f.alive and g < 600:
 		g += 1
 		f.take_damage(80.0, f.global_position + Vector3.UP * 1.7, true, player)
+
+
+## The Hall of Echoes: a slain boss, fought again alone, its time kept.
+func _run_echo_test() -> void:
+	Ordeal.no_save = true
+	Ordeal.load_record()
+	Ordeal.slain.erase("wyrm")
+	# Felling one by your own hand leaves its echo.
+	_start_match()
+	for i in 30:
+		await get_tree().physics_frame
+	_land_player_now()
+	var wy: Wyrm = null
+	for b in bots:
+		if is_instance_valid(b) and b is Wyrm:
+			wy = b
+	if wy != null:
+		_test_fell(wy)
+		await get_tree().physics_frame
+	_check("a boss slain by your hand leaves its echo", Ordeal.slain.has("wyrm"))
+	# Into the Hall.
+	ordeal_mode = true
+	echo_kind = "wyrm"
+	_start_match()
+	for i in 20:
+		await get_tree().physics_frame
+	player.spawn_protect = 99999.0
+	_check("the echo begins in the ring", ordeal != null and ordeal.echo == "wyrm")
+	var w := 0
+	while ordeal.state != "fight" and w < 60 * 10:
+		w += 1
+		await get_tree().physics_frame
+	var foes: Array = ordeal.foes.filter(func(f): return is_instance_valid(f) and f.alive)
+	_check("one foe: the wyrm, alone", foes.size() == 1 and foes[0] is Wyrm)
+	for i in 60 * 3:
+		await get_tree().physics_frame
+	for f in foes:
+		_test_fell(f)
+	for i in 5:
+		await get_tree().physics_frame
+	print("[echo] end: %s  /  %s" % [hud.end_title.text, hud.end_sub.text])
+	_check("the echo is defeated", phase == "end" and hud.end_title.text == "ECHO DEFEATED")
+	_check("its time is kept", float(Ordeal.slain.get("wyrm", 0.0)) > 0.0)
+	_check("the hidden bout does not come for an echo", not ordeal.in_secret())
+	echo_kind = ""
+	ordeal_mode = false
+	print("[echo] done")
+	get_tree().quit()
 
 
 ## Isolde's beams: the low one is jumped, the high one crouched under.

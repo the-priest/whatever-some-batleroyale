@@ -3,6 +3,7 @@ extends CanvasLayer
 
 signal play_pressed
 signal ordeal_pressed
+signal echo_pressed(kind: String)
 signal music_changed(menu_volume: float, match_volume: float)
 signal music_skip
 signal graphics_changed(quality: int)
@@ -803,7 +804,7 @@ func _build_menu() -> void:
 	col.add_child(menu_ordeal)
 	menu_ordeal_rec = _lv("", 11, Color(0.85, 0.62, 0.42), false)
 	col.add_child(menu_ordeal_rec)
-	for pair in [[["LOADOUT", "_open_loadout"], ["OATHS", "_open_oaths"]], [["CODEX", "_open_codex"], ["SETTINGS", "_open_settings"]], [["QUIT", "_quit"]]]:
+	for pair in [[["LOADOUT", "_open_loadout"], ["OATHS", "_open_oaths"]], [["CODEX", "_open_codex"], ["SETTINGS", "_open_settings"]], [["HALL OF ECHOES", "_open_echoes"], ["QUIT", "_quit"]]]:
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 8)
 		for item in pair:
@@ -888,6 +889,65 @@ func _open_oaths() -> void:
 
 
 var _bind_buttons: Dictionary = {}
+var _echoes_panel: Control = null
+var _echo_box: VBoxContainer = null
+
+
+## The Hall of Echoes: every boss you have slain, to fight again alone.
+func _open_echoes() -> void:
+	sfx_click()
+	Ordeal.load_record()
+	if _echoes_panel == null:
+		_echoes_panel = ColorRect.new()
+		(_echoes_panel as ColorRect).color = Color(0.01, 0.012, 0.016, 0.82)
+		_echoes_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_echoes_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+		_echoes_panel.z_index = 25
+		root.add_child(_echoes_panel)
+		var box := _panel(0.96)
+		box.set_anchors_preset(Control.PRESET_CENTER)
+		box.offset_left = -360
+		box.offset_right = 360
+		box.offset_top = -300
+		box.offset_bottom = 300
+		_echoes_panel.add_child(box)
+		var vb := VBoxContainer.new()
+		vb.add_theme_constant_override("separation", 8)
+		box.add_child(vb)
+		vb.add_child(_lv("THE HALL OF ECHOES", 22, Color(0.75, 0.85, 1.0)))
+		var sub := _lv("Every boss you have slain with your own hand leaves an echo here. Fight it again, alone, in the ring. Your best time against each is kept.", 13, MUTED, false)
+		sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		sub.custom_minimum_size = Vector2(660, 0)
+		vb.add_child(sub)
+		vb.add_child(_spacer(4))
+		_echo_box = VBoxContainer.new()
+		_echo_box.add_theme_constant_override("separation", 6)
+		vb.add_child(_echo_box)
+		vb.add_child(_spacer(4))
+		var done := _button("BACK", true)
+		done.custom_minimum_size = Vector2(660, 44)
+		done.pressed.connect(func(): sfx_click(); _echoes_panel.visible = false)
+		vb.add_child(done)
+	for c in _echo_box.get_children():
+		c.queue_free()
+	for e in Ordeal.ECHOES:
+		var kind: String = e[0]
+		var known := Ordeal.slain.has(kind)
+		var best := float(Ordeal.slain.get(kind, 0.0))
+		var b := _button("", false)
+		b.custom_minimum_size = Vector2(660, 42)
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		if known:
+			b.text = "  %s   %s" % [str(e[1]), ("·   BEST %d:%02d" % [int(best) / 60, int(best) % 60]) if best > 0.0 else "·   NOT YET FOUGHT HERE"]
+			b.pressed.connect(func():
+				sfx_click()
+				_echoes_panel.visible = false
+				echo_pressed.emit(kind))
+		else:
+			b.text = "  ???   —   NOT YET SLAIN BY YOUR HAND"
+			b.disabled = true
+		_echo_box.add_child(b)
+	_echoes_panel.visible = true
 
 
 func _build_oaths() -> void:
