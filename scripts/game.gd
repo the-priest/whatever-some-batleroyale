@@ -390,6 +390,8 @@ func _ready() -> void:
 		_run_flask_test()
 	elif OS.get_cmdline_user_args().has("--carrion"):
 		_run_carrion_test()
+	elif OS.get_cmdline_user_args().has("--witch"):
+		_run_witch_test()
 	elif OS.get_cmdline_user_args().has("--unkindled"):
 		_run_unkindled_test()
 	elif OS.get_cmdline_user_args().has("--colossus"):
@@ -2361,7 +2363,7 @@ func _spawn_revenants() -> void:
 		giants += 1
 	# Mourne, the Bellkeeper, and Skarn, the Wyrm Beneath, at landmarks of
 	# their own.
-	for kind in ["bell", "wyrm", "carrion"]:
+	for kind in ["bell", "wyrm", "carrion", "witch"]:
 		var at2 := _lone_boss_ground(sites)
 		if at2 == Vector3.INF:
 			continue
@@ -2374,6 +2376,10 @@ func _spawn_revenants() -> void:
 			var cr := Carrion.new()
 			cr.setup_carrion(at2, self)
 			lb = cr
+		elif kind == "witch":
+			var lw := LanternWitch.new()
+			lw.setup_witch(at2, self)
+			lb = lw
 		else:
 			var wy := Wyrm.new()
 			wy.setup_wyrm(at2, self)
@@ -2413,7 +2419,7 @@ func _lone_boss_ground(sites: Array) -> Vector3:
 ## A Revenant fell: a bell over the whole island, and its hoard on the ground.
 func _revenant_fell(r: Revenant, killer: String) -> void:
 	sfx.play_ui("writ_done", -1.0)
-	hud.show_big("COLOSSUS FELLED" if r is Colossus else ("WARDEN FELLED" if r is HollowWarden else ("THE UNKINDLED FALLS" if r is Unkindled else ("THE BELL FALLS SILENT" if r is Bellkeeper else ("THE WYRM IS SLAIN" if r is Wyrm else ("THE CARRION QUEEN FALLS" if r is Carrion else "REVENANT FELLED"))))), Color(1.0, 0.82, 0.38), 3.6)
+	hud.show_big("COLOSSUS FELLED" if r is Colossus else ("WARDEN FELLED" if r is HollowWarden else ("THE UNKINDLED FALLS" if r is Unkindled else ("THE BELL FALLS SILENT" if r is Bellkeeper else ("THE WYRM IS SLAIN" if r is Wyrm else ("THE CARRION QUEEN FALLS" if r is Carrion else ("THE LANTERN GOES OUT" if r is LanternWitch else "REVENANT FELLED")))))), Color(1.0, 0.82, 0.38), 3.6)
 	hud.show_notice("%s  —  SLAIN BY %s" % [r.display_name(), killer if killer != "" else "THE STORM"], 4.0)
 	if net_is_client() or ordeal != null:
 		return
@@ -2533,9 +2539,9 @@ func _update_boss_bar() -> void:
 		hud.show_big("%s RAGES" % best.bot_name, HUD.DANGER, 2.4)
 		hud.show_notice("THE PACK ANSWERS ITS CALL", 2.6)
 		sfx.play_ui("writ_fail", -4.0)
-	hud.set_boss({"name": best.bot_name, "title": best.title, "hp": clampf(best.hp / 100.0, 0.0, 1.0), "raged": raged, "big": best is HollowWarden or best is Bellkeeper or best is Wyrm or best is Carrion})
+	hud.set_boss({"name": best.bot_name, "title": best.title, "hp": clampf(best.hp / 100.0, 0.0, 1.0), "raged": raged, "big": best is HollowWarden or best is Bellkeeper or best is Wyrm or best is Carrion or best is LanternWitch})
 	if music != null:
-		music.set_boss((best is HollowWarden or best is Bellkeeper or best is Wyrm or best is Carrion) and best_d < 60.0)
+		music.set_boss((best is HollowWarden or best is Bellkeeper or best is Wyrm or best is Carrion or best is LanternWitch) and best_d < 60.0)
 
 
 func _drop_bot_loot(b: Bot) -> void:
@@ -4020,6 +4026,10 @@ func _run_shot() -> void:
 			var rv: Array = bots.filter(func(b): return is_instance_valid(b) and b is Revenant)
 			var ri := int(a.substr(6))
 			if ri < rv.size():
+				if rv[ri] is LanternWitch and OS.get_cmdline_user_args().has("--beamfx"):
+					var lp: Vector3 = (rv[ri] as Node3D).global_position
+					Colossus.show_fx(self, {"k": "beam", "p": lp, "a": 0.6, "s": 0.01, "h": LanternWitch.LOW_H, "l": LanternWitch.BEAM_LEN, "w": 0.01, "d": 30.0, "c": false})
+					Colossus.show_fx(self, {"k": "beam", "p": lp, "a": 0.6 + PI * 0.6, "s": 0.01, "h": LanternWitch.HIGH_H, "l": LanternWitch.BEAM_LEN, "w": 0.01, "d": 30.0, "c": true})
 				if rv[ri] is Carrion:
 					var cr0: Carrion = rv[ri]
 					cr0.global_position = ground_at(cr0.arena + Vector3.UP * 20.0) + Vector3.UP * 0.1
@@ -4029,7 +4039,7 @@ func _run_shot() -> void:
 					wy0.global_position = ground_at(wy0.arena + Vector3.UP * 20.0)
 					wy0.phase = "up"
 				var rp: Vector3 = (rv[ri] as Node3D).global_position
-				var far := 3.0 if rv[ri] is Colossus or rv[ri] is Wyrm or rv[ri] is Carrion else 1.0
+				var far := 3.0 if rv[ri] is Colossus or rv[ri] is Wyrm or rv[ri] is Carrion or rv[ri] is LanternWitch else 1.0
 				spot = Vector3(rp.x + 3.2 * far, 0.0, rp.z + 2.0 * far)
 				ang = atan2(3.2, 2.0)
 				if rv[ri] is Bellkeeper and OS.get_cmdline_user_args().has("--tollfx"):
@@ -5252,7 +5262,7 @@ func _net_send_setup() -> void:
 		var b = bots[bi]
 		bot_names.append(b.bot_name)
 		if is_instance_valid(b) and b is Revenant:
-			revs.append([bi, (b as Revenant).title, (b as Revenant).arena, b is Colossus, "warden" if b is HollowWarden else ("bell" if b is Bellkeeper else ("wyrm" if b is Wyrm else ("carrion" if b is Carrion else "")))])
+			revs.append([bi, (b as Revenant).title, (b as Revenant).arena, b is Colossus, "warden" if b is HollowWarden else ("bell" if b is Bellkeeper else ("wyrm" if b is Wyrm else ("carrion" if b is Carrion else ("witch" if b is LanternWitch else ""))))])
 	var list: Array = []
 	for id in net.roster:
 		list.append([id, net.roster[id]])
@@ -5326,7 +5336,11 @@ func net_start_match(setup: Dictionary) -> void:
 	for i in names.size():
 		var b: Bot = null
 		if rev_at.has(i):
-			if (rev_at[i] as Array).size() > 4 and str(rev_at[i][4]) == "carrion":
+			if (rev_at[i] as Array).size() > 4 and str(rev_at[i][4]) == "witch":
+				var lw := LanternWitch.new()
+				lw.setup_witch(rev_at[i][2], self)
+				b = lw
+			elif (rev_at[i] as Array).size() > 4 and str(rev_at[i][4]) == "carrion":
 				var cr := Carrion.new()
 				cr.setup_carrion(rev_at[i][2], self)
 				b = cr
@@ -6790,6 +6804,66 @@ func _test_fell(f: Node) -> void:
 		f.take_damage(80.0, f.global_position + Vector3.UP * 1.7, true, player)
 
 
+## Isolde's beams: the low one is jumped, the high one crouched under.
+func _run_witch_test() -> void:
+	_start_match()
+	for i in 30:
+		await get_tree().physics_frame
+	_land_player_now()
+	var ws: Array = bots.filter(func(b): return is_instance_valid(b) and b is LanternWitch)
+	_check("the lantern witch holds a landmark", ws.size() == 1)
+	if ws.is_empty():
+		get_tree().quit()
+		return
+	var lw: LanternWitch = ws[0]
+	print("[witch] %s at %s" % [lw.display_name(), str(lw.arena.round())])
+	player.vest_level = 3
+	player.armor = 100.0
+	player.helmet_level = 3
+	player.helmet_hp = 100.0
+	var cases := [[false, "stand", true], [false, "jump", false], [true, "stand", true], [true, "crouch", false]]
+	for c in cases:
+		var high: bool = c[0]
+		var how: String = c[1]
+		lw.set_physics_process(false)
+		var spot := _dry_spot_near(lw.global_position, 9.0)
+		lw.set_physics_process(true)
+		player.global_position = spot
+		player.velocity = Vector3.ZERO
+		for i in 10:
+			await get_tree().physics_frame
+		lw._hit_by.clear()
+		lw._sweep_t = 999.0
+		lw._lantern_t = 999.0
+		lw._blink_t = 999.0
+		var off := player.global_position - lw.global_position
+		var a0 := atan2(off.z, off.x) - 1.2
+		lw._beams = [{"a0": a0, "spin": LanternWitch.BEAM_SPIN, "high": high, "t": 0.0, "last": a0}]
+		var h0 := lw.beam_hits
+		if how == "crouch":
+			Input.action_press("crouch")
+		for i in 60 * 3:
+			await get_tree().physics_frame
+			player.hp = 100.0
+			if how == "jump":
+				player.global_position = Vector3(spot.x, spot.y + 1.6, spot.z)
+				player.velocity = Vector3.ZERO
+			else:
+				player.global_position = Vector3(spot.x, player.global_position.y, spot.z)
+			if lw._beams.is_empty():
+				break
+		Input.action_release("crouch")
+		var struck := lw.beam_hits > h0
+		print("[witch] %s beam, you %s: struck %s" % ["high" if high else "low", how, str(struck)])
+		_check("%s beam, %s: %s" % ["high" if high else "low", how, "struck" if c[2] else "passes"], struck == bool(c[2]))
+	var em := writs.my_embers
+	_test_fell(lw)
+	await get_tree().physics_frame
+	_check("the lantern goes out and pays", not lw.alive and writs.my_embers >= em + 1600)
+	print("[witch] done")
+	get_tree().quit()
+
+
 ## Vespera: aloft and hard to hurt, the strip, the dive, the perch.
 func _run_carrion_test() -> void:
 	_start_match()
@@ -7495,7 +7569,7 @@ func _run_revenant_test() -> void:
 	_land_player_now()
 	player.spawn_protect = 99999.0
 	player.give_weapon("rifle")
-	var revs: Array = bots.filter(func(b): return is_instance_valid(b) and b is Revenant and not (b is Colossus) and not (b is HollowWarden) and not (b is Bellkeeper) and not (b is Wyrm) and not (b is Carrion))
+	var revs: Array = bots.filter(func(b): return is_instance_valid(b) and b is Revenant and not (b is Colossus) and not (b is HollowWarden) and not (b is Bellkeeper) and not (b is Wyrm) and not (b is Carrion) and not (b is LanternWitch))
 	_check("three revenants hold the island", revs.size() == REVENANT_COUNT)
 	_check("revenants are not counted among the living", alive == total_players)
 	if revs.is_empty():

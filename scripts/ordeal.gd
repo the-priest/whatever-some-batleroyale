@@ -20,6 +20,7 @@ const BOUTS := [
 	["THE TOLLING", ["bell"]],
 	["THE WYRM BENEATH", ["wyrm"]],
 	["THE CARRION QUEEN", ["carrion"]],
+	["THE LANTERN WITCH", ["witch"]],
 	["THE TWIN OATHS", ["revenant", "revenant"]],
 	["THE SECOND GIANT", ["colossus"]],
 	["THE ASHEN CHOIR", ["warden", "colossus"]],
@@ -419,6 +420,10 @@ func _spawn(kind: String, at: Vector3) -> Revenant:
 			var bk := Bellkeeper.new()
 			bk.setup_bell(centre, game)
 			f = bk
+		"witch":
+			var lw := LanternWitch.new()
+			lw.setup_witch(centre, game)
+			f = lw
 		"carrion":
 			var cr := Carrion.new()
 			cr.setup_carrion(centre, game)
@@ -444,7 +449,7 @@ func _spawn(kind: String, at: Vector3) -> Revenant:
 		f.arm_weapon("lmg")
 	elif f is Unkindled:
 		f.arm_weapon("axmc")
-	elif f is Bellkeeper:
+	elif f is Bellkeeper or f is LanternWitch:
 		f.arm_weapon("dmr")
 	elif f is HollowWarden:
 		f.arm_weapon("dmr")

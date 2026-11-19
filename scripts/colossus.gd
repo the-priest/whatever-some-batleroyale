@@ -490,6 +490,38 @@ static func show_fx(game: Node, fx: Dictionary) -> void:
 			tw.tween_property(ring, "scale", Vector3(mx, 1.0, mx), dur)
 			tw.parallel().tween_property(m, "albedo_color:a", 0.25, dur)
 			tw.tween_callback(ring.queue_free)
+		"beam":
+			# A long bar of light wheeling round the witch: amber and low (jump
+			# it) or violet at the chest (crouch under it). Dim, then burning.
+			var pivot := Node3D.new()
+			game.add_child(pivot)
+			pivot.global_position = fx["p"] as Vector3
+			var a := float(fx.get("a", 0.0))
+			var sp := float(fx.get("s", 2.0))
+			var l := float(fx.get("l", 19.0))
+			var high := bool(fx.get("c", false))
+			var bar := MeshInstance3D.new()
+			var bm := BoxMesh.new()
+			bm.size = Vector3(l, 0.28 if high else 0.22, 0.28 if high else 0.22)
+			bar.mesh = bm
+			var m := StandardMaterial3D.new()
+			m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+			var col := Color(0.75, 0.45, 1.0) if high else Color(1.0, 0.72, 0.25)
+			m.albedo_color = Color(col.r, col.g, col.b, 0.22)
+			bar.material_override = m
+			bar.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			bar.position = Vector3(l * 0.5, float(fx.get("h", 0.45)), 0.0)
+			pivot.add_child(bar)
+			pivot.rotation.y = -a
+			var warn := float(fx.get("w", 0.85))
+			var dur := float(fx.get("d", 3.0))
+			var tw := pivot.create_tween()
+			tw.tween_interval(warn)
+			tw.tween_callback(func(): m.albedo_color = Color(col.r, col.g, col.b, 0.95))
+			tw.tween_property(pivot, "rotation:y", -(a + sp * dur), dur)
+			tw.tween_callback(pivot.queue_free)
 		"line":
 			# A red strip across the ground: where something is about to come.
 			var a: Vector3 = fx["a"]
