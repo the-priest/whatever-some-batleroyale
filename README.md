@@ -138,6 +138,22 @@ back if you are standing still. For a breath mid-roll no blow, bullet, fireball,
 touch you (the storm and the Hollow's ash still can). It needs most of a second before the next.
 Read the boss, roll through the blow. Works over LAN too.
 
+## The Ember Flask
+
+Everyone drops with an **Ember Flask** of two swallows (**T**, rebindable). A swallow takes a moment
+to drink and closes 50 health of wounds. Kneel at any Wayshrine (opening its shop) and the flask is
+rekindled to the brim. In the Ordeal you carry three, and each bout won puts one back.
+
+## Skarn, the Wyrm Beneath
+
+A great worm that swims through the ground under a landmark of its own. While it is under, nothing
+can reach it. Then a **ring of cracked earth** opens where it will come up, a breath before it bursts
+out of it: anyone standing in the ring is struck and thrown into the air (roll, or run). Up, it
+stands arched over you and **spits acid**, fans of green fire that burn the ground, for a few
+seconds: that is when it can be hurt. Then it sinks and comes again. At half health it rages: less
+time under, a second eruption straight after the first, wider fans. 1,600 Embers, a Sigil and a Gift.
+It is the fifth bout of the Ordeal.
+
 ## The Bellkeeper
 
 **Mourne, the Bellkeeper**, a pale knight under a great bronze bell that hangs over it from
@@ -168,15 +184,16 @@ every brazier and the Heart; everyone sees the same flames.
 
 **THE ORDEAL** on the main menu is a solo boss rush. You start in a ring of standing stones on a level
 stone floor, cleared of trees, with a rifle, a marksman rifle, level 2 armour, two medkits and
-bandages. No soldiers, no storm, no loot from the fallen. Seven bouts, one after another:
+bandages. No soldiers, no storm, no loot from the fallen. Eight bouts, one after another:
 
 1. **The First Bout**: a Revenant.
 2. **The Keeper**: the Hollow Warden.
 3. **The Giant**: a Colossus.
 4. **The Tolling**: the Bellkeeper.
-5. **The Twin Oaths**: two Revenants at once.
-6. **The Second Giant**: another Colossus, with a different signature attack.
-7. **The Ashen Choir**: the Warden and a Colossus together.
+5. **The Wyrm Beneath**: Skarn.
+6. **The Twin Oaths**: two Revenants at once.
+7. **The Second Giant**: another Colossus, with a different signature attack.
+8. **The Ashen Choir**: the Warden and a Colossus together.
 
 Your health carries from bout to bout; winning one gives back 30 and refills your ammo. Then three
 altars rise, each holding a Gift, and you take one of the three for the rest of the Ordeal (choose
@@ -186,11 +203,11 @@ embers and it pushes you back and burns you. Fall and the Ordeal is over. The bo
 the top of the screen; the furthest bout you have reached and your fastest full Ordeal are kept and
 shown under the menu button. SPACE on the end screen starts another.
 
-**The last bout.** Endure the Ordeal once and it is never quite over again: win the seventh bout
+**The last bout.** Endure the Ordeal once and it is never quite over again: win the last bout
 and the stones do not open. The ring darkens, and **the Unkindled** rises, a tall black knight
 crowned with a cold iron bell, the toughest thing on the island. It fights in three parts: first the
 toll and the peal; below two thirds the ash nova and the ashen step; below one third it burns,
-everything comes faster, and it calls two echoes of the Revenants into the ring. Your seven-bout time
+everything comes faster, and it calls two echoes of the Revenants into the ring. Your time for the eight
 is recorded before it rises. Slay it and the end screen says so; the menu remembers.
 
 **Bindings** (in the OATHS screen) make it harder, for those who have endured it: the **Binding of
@@ -470,8 +487,9 @@ fires rays through every window and door opening on the map, `--fantasy` climbs 
 the mushroom caps, and `--drive` tests the jeep.
 
 Souls-like systems: `--writs`, `--revenant`, `--colossus`, `--vault`, `--gods`, `--events`,
-`--renown`, `--codex`, `--chests`, `--dodge` (the roll's speed, its moment untouchable, its cooldown), `--unkindled` (an Ordeal already endured, all seven bouts, then the hidden one through its three
-parts), `--bell` (the toll strikes you on the ground and passes under you in the air), `--ordeal` (all seven bouts, the altars, the win, the ring's edge
+`--renown`, `--codex`, `--chests`, `--wyrm` (under, the ring, the eruption, exposed, the roll through it), `--flask` (a swallow, an
+empty flask, a shrine's refill), `--dodge` (the roll's speed, its moment untouchable, its cooldown), `--unkindled` (an Ordeal already endured, all eight bouts, then the hidden one through its three
+parts), `--bell` (the toll strikes you on the ground and passes under you in the air), `--ordeal` (all eight bouts, the altars, the win, the ring's edge
 and a fall) and `--hollow` (walks into the Ashen Hollow, lights its braziers,
 wakes and fells the Warden and takes the Heart).
 

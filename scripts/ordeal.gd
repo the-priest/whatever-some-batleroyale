@@ -18,6 +18,7 @@ const BOUTS := [
 	["THE KEEPER", ["warden"]],
 	["THE GIANT", ["colossus"]],
 	["THE TOLLING", ["bell"]],
+	["THE WYRM BENEATH", ["wyrm"]],
 	["THE TWIN OATHS", ["revenant", "revenant"]],
 	["THE SECOND GIANT", ["colossus"]],
 	["THE ASHEN CHOIR", ["warden", "colossus"]],
@@ -417,6 +418,10 @@ func _spawn(kind: String, at: Vector3) -> Revenant:
 			var bk := Bellkeeper.new()
 			bk.setup_bell(centre, game)
 			f = bk
+		"wyrm":
+			var wy := Wyrm.new()
+			wy.setup_wyrm(centre, game)
+			f = wy
 		"unkindled":
 			var uk := Unkindled.new()
 			uk.setup_unkindled(centre, game)
@@ -491,6 +496,8 @@ func _bout_won() -> void:
 	if not is_bound("breath"):
 		p.hp = minf(p.max_hp(), p.hp + BREATH)
 		p._emit_health()
+		# A swallow of fire back in the flask.
+		p.flask = mini(p.flask_max, p.flask + 1)
 	for i in p.loadout.size():
 		var w: String = str(p.loadout[i])
 		if w != "":
@@ -510,7 +517,7 @@ func _bout_won() -> void:
 			return
 		# The seven are endured; the record is kept. Then the ring darkens.
 		game.sfx.play_ui("writ_done", -3.0)
-		game.hud.show_big("SEVEN BOUTS ENDURED", Color(1.0, 0.86, 0.45), 2.4)
+		game.hud.show_big("ALL %d BOUTS ENDURED" % BOUTS.size(), Color(1.0, 0.86, 0.45), 2.4)
 		_next_bout()
 		return
 	game.sfx.play_ui("writ_done", -3.0)

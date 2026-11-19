@@ -24,6 +24,7 @@ func _enter_tree() -> void:
 	_key("grenade", [KEY_G])
 	_key("ability", [KEY_V])
 	_key("dodge", [KEY_Z])
+	_key("flask", [KEY_T])
 	_key("slot_1", [KEY_1])
 	_key("slot_2", [KEY_2])
 	_key("swap_weapon", [KEY_X])

@@ -186,7 +186,7 @@ func _roll_rings(delta: float) -> void:
 				continue
 			hit[v] = true
 			v.take_damage(TOLL_DMG, o, false, self)
-			if v == game.player:
+			if v == game.player and game.player.iframes <= 0.0:
 				toll_hits += 1
 				var away := vp - o
 				away.y = 0.0

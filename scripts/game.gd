@@ -384,6 +384,10 @@ func _ready() -> void:
 		_run_bell_test()
 	elif OS.get_cmdline_user_args().has("--dodge"):
 		_run_dodge_test()
+	elif OS.get_cmdline_user_args().has("--wyrm"):
+		_run_wyrm_test()
+	elif OS.get_cmdline_user_args().has("--flask"):
+		_run_flask_test()
 	elif OS.get_cmdline_user_args().has("--unkindled"):
 		_run_unkindled_test()
 	elif OS.get_cmdline_user_args().has("--colossus"):
@@ -880,6 +884,8 @@ func _begin_ordeal() -> void:
 		player.helmet_hp = 100.0
 	player.meds = 2
 	player.bandages = 5
+	player.flask_max = 3
+	player.flask = 3
 	player.refresh_viewmodel()
 	player.inventory_changed.emit()
 	player._emit_health()
@@ -2351,7 +2357,32 @@ func _spawn_revenants() -> void:
 		bots.append(wd)
 		hollow.warden = wd
 		giants += 1
-	# Mourne, the Bellkeeper, at a landmark of its own.
+	# Mourne, the Bellkeeper, and Skarn, the Wyrm Beneath, at landmarks of
+	# their own.
+	for kind in ["bell", "wyrm"]:
+		var at2 := _lone_boss_ground(sites)
+		if at2 == Vector3.INF:
+			continue
+		var lb: Revenant = null
+		if kind == "bell":
+			var bk := Bellkeeper.new()
+			bk.setup_bell(at2, self)
+			lb = bk
+		else:
+			var wy := Wyrm.new()
+			wy.setup_wyrm(at2, self)
+			lb = wy
+		add_child(lb)
+		lb.global_position = at2 + (Vector3.DOWN * Wyrm.DEPTH if kind == "wyrm" else Vector3.UP * 0.3)
+		lb.arm_weapon("dmr")
+		lb.eliminated.connect(_on_bot_eliminated)
+		bots.append(lb)
+		giants += 1
+	print("[revenants] %d hold the island: %s" % [made + giants, str(bots.filter(func(b): return is_instance_valid(b) and b is Revenant).map(func(b): return "%s @ %s" % [b.display_name(), str(Vector3(b.arena).round())]))])
+
+
+## Open ground by a landmark no other boss holds (Vector3.INF if none).
+func _lone_boss_ground(sites: Array) -> Vector3:
 	for l in sites:
 		var c2: Vector2 = l[1]
 		var taken2 := false
@@ -2360,7 +2391,6 @@ func _spawn_revenants() -> void:
 				taken2 = true
 		if taken2:
 			continue
-		var at2 := Vector3.INF
 		for k in 60:
 			var a2 := randf() * TAU
 			var q2 := c2 + Vector2(cos(a2), sin(a2)) * randf_range(8.0, 40.0)
@@ -2370,26 +2400,14 @@ func _spawn_revenants() -> void:
 			var g2 := ground_at(Vector3(q2.x, h2 + 30.0, q2.y))
 			if absf(g2.y - h2) > 0.8:
 				continue
-			at2 = g2
-			break
-		if at2 == Vector3.INF:
-			continue
-		var bk := Bellkeeper.new()
-		bk.setup_bell(at2, self)
-		add_child(bk)
-		bk.global_position = at2 + Vector3.UP * 0.3
-		bk.arm_weapon("dmr")
-		bk.eliminated.connect(_on_bot_eliminated)
-		bots.append(bk)
-		giants += 1
-		break
-	print("[revenants] %d hold the island: %s" % [made + giants, str(bots.filter(func(b): return is_instance_valid(b) and b is Revenant).map(func(b): return "%s @ %s" % [b.display_name(), str(Vector3(b.arena).round())]))])
+			return g2
+	return Vector3.INF
 
 
 ## A Revenant fell: a bell over the whole island, and its hoard on the ground.
 func _revenant_fell(r: Revenant, killer: String) -> void:
 	sfx.play_ui("writ_done", -1.0)
-	hud.show_big("COLOSSUS FELLED" if r is Colossus else ("WARDEN FELLED" if r is HollowWarden else ("THE UNKINDLED FALLS" if r is Unkindled else ("THE BELL FALLS SILENT" if r is Bellkeeper else "REVENANT FELLED"))), Color(1.0, 0.82, 0.38), 3.6)
+	hud.show_big("COLOSSUS FELLED" if r is Colossus else ("WARDEN FELLED" if r is HollowWarden else ("THE UNKINDLED FALLS" if r is Unkindled else ("THE BELL FALLS SILENT" if r is Bellkeeper else ("THE WYRM IS SLAIN" if r is Wyrm else "REVENANT FELLED")))), Color(1.0, 0.82, 0.38), 3.6)
 	hud.show_notice("%s  —  SLAIN BY %s" % [r.display_name(), killer if killer != "" else "THE STORM"], 4.0)
 	if net_is_client() or ordeal != null:
 		return
@@ -2509,9 +2527,9 @@ func _update_boss_bar() -> void:
 		hud.show_big("%s RAGES" % best.bot_name, HUD.DANGER, 2.4)
 		hud.show_notice("THE PACK ANSWERS ITS CALL", 2.6)
 		sfx.play_ui("writ_fail", -4.0)
-	hud.set_boss({"name": best.bot_name, "title": best.title, "hp": clampf(best.hp / 100.0, 0.0, 1.0), "raged": raged, "big": best is HollowWarden or best is Bellkeeper})
+	hud.set_boss({"name": best.bot_name, "title": best.title, "hp": clampf(best.hp / 100.0, 0.0, 1.0), "raged": raged, "big": best is HollowWarden or best is Bellkeeper or best is Wyrm})
 	if music != null:
-		music.set_boss((best is HollowWarden or best is Bellkeeper) and best_d < 60.0)
+		music.set_boss((best is HollowWarden or best is Bellkeeper or best is Wyrm) and best_d < 60.0)
 
 
 func _drop_bot_loot(b: Bot) -> void:
@@ -3996,8 +4014,12 @@ func _run_shot() -> void:
 			var rv: Array = bots.filter(func(b): return is_instance_valid(b) and b is Revenant)
 			var ri := int(a.substr(6))
 			if ri < rv.size():
+				if rv[ri] is Wyrm:
+					var wy0: Wyrm = rv[ri]
+					wy0.global_position = ground_at(wy0.arena + Vector3.UP * 20.0)
+					wy0.phase = "up"
 				var rp: Vector3 = (rv[ri] as Node3D).global_position
-				var far := 3.0 if rv[ri] is Colossus else 1.0
+				var far := 3.0 if rv[ri] is Colossus or rv[ri] is Wyrm else 1.0
 				spot = Vector3(rp.x + 3.2 * far, 0.0, rp.z + 2.0 * far)
 				ang = atan2(3.2, 2.0)
 				if rv[ri] is Bellkeeper and OS.get_cmdline_user_args().has("--tollfx"):
@@ -5220,7 +5242,7 @@ func _net_send_setup() -> void:
 		var b = bots[bi]
 		bot_names.append(b.bot_name)
 		if is_instance_valid(b) and b is Revenant:
-			revs.append([bi, (b as Revenant).title, (b as Revenant).arena, b is Colossus, "warden" if b is HollowWarden else ("bell" if b is Bellkeeper else "")])
+			revs.append([bi, (b as Revenant).title, (b as Revenant).arena, b is Colossus, "warden" if b is HollowWarden else ("bell" if b is Bellkeeper else ("wyrm" if b is Wyrm else ""))])
 	var list: Array = []
 	for id in net.roster:
 		list.append([id, net.roster[id]])
@@ -5294,7 +5316,11 @@ func net_start_match(setup: Dictionary) -> void:
 	for i in names.size():
 		var b: Bot = null
 		if rev_at.has(i):
-			if (rev_at[i] as Array).size() > 4 and str(rev_at[i][4]) == "bell":
+			if (rev_at[i] as Array).size() > 4 and str(rev_at[i][4]) == "wyrm":
+				var wy := Wyrm.new()
+				wy.setup_wyrm(rev_at[i][2], self)
+				b = wy
+			elif (rev_at[i] as Array).size() > 4 and str(rev_at[i][4]) == "bell":
 				var bk := Bellkeeper.new()
 				bk.setup_bell(rev_at[i][2], self)
 				b = bk
@@ -5432,7 +5458,7 @@ func net_player_state() -> Variant:
 	if player.has_gun():
 		flags |= Bot.NF_ARMED
 	if player.healing:
-		flags |= int(Bot.HEAL_FLAGS.get(player.heal_item, 0))
+		flags |= int(Bot.HEAL_FLAGS.get(player.heal_anim(), 0))
 	if player.swimming:
 		flags |= Bot.NF_SWIM
 	if player.downed:
@@ -6685,10 +6711,7 @@ func _run_unkindled_test() -> void:
 				ordeal.interact(player.global_position)
 			await get_tree().physics_frame
 		for f in ordeal.foes:
-			var g := 0
-			while is_instance_valid(f) and f.alive and g < 400:
-				g += 1
-				f.take_damage(80.0, f.global_position + Vector3.UP * 1.7, true, player)
+			_test_fell(f)
 		for i in 5:
 			await get_tree().physics_frame
 	_check("seven endured: the ring darkens instead of opening", ordeal.in_secret() and phase == "playing" and ordeal.state == "rest")
@@ -6727,16 +6750,120 @@ func _run_unkindled_test() -> void:
 	print("[unkindled] part %d, foes %d -> %d" % [uk.part, n0, ordeal.foes.size()])
 	_check("its third part calls two echoes", uk.part == 3 and ordeal.foes.size() == n0 + 2)
 	for f in ordeal.foes:
-		var g2 := 0
-		while is_instance_valid(f) and f.alive and g2 < 600:
-			g2 += 1
-			f.take_damage(80.0, f.global_position + Vector3.UP * 1.7, true, player)
+		_test_fell(f)
 	for i in 5:
 		await get_tree().physics_frame
 	print("[unkindled] end: %s  /  %s" % [hud.end_title.text, hud.end_sub.text])
 	_check("the fire is yours", phase == "end" and hud.end_title.text == "THE FIRE IS YOURS" and Ordeal.unkindled_slain)
 	_check("the light comes back", hollow == null or hollow.force_k < 0.0)
 	print("[unkindled] done")
+	get_tree().quit()
+
+
+## Checks: fell a boss outright (the Wyrm is brought up out of the earth).
+func _test_fell(f: Node) -> void:
+	if not is_instance_valid(f):
+		return
+	if f is Wyrm:
+		(f as Wyrm).phase = "up"
+		(f as Wyrm)._t = 99.0
+	var g := 0
+	while is_instance_valid(f) and f.alive and g < 600:
+		g += 1
+		f.take_damage(80.0, f.global_position + Vector3.UP * 1.7, true, player)
+
+
+## The Ember Flask: a swallow heals, the charges run out, a shrine refills it.
+func _run_flask_test() -> void:
+	_start_match()
+	for i in 30:
+		await get_tree().physics_frame
+	_land_player_now()
+	for i in 30:
+		await get_tree().physics_frame
+	player.spawn_protect = 99999.0
+	_check("you drop with a full flask", player.flask == player.flask_max and player.flask_max == 2)
+	player.hp = 40.0
+	Input.action_press("flask")
+	var drank := false
+	for i in 100:
+		await get_tree().physics_frame
+		if i == 2:
+			Input.action_release("flask")
+		if player.healing and player.heal_item == "flask":
+			drank = true
+	_check("drinking from the flask", drank)
+	print("[flask] hp 40 -> %.0f, flask %d / %d" % [player.hp, player.flask, player.flask_max])
+	_check("a swallow heals", player.hp >= 89.0 and player.flask == 1)
+	player.flask = 0
+	player.hp = 50.0
+	player.use_item("flask")
+	_check("an empty flask gives nothing", not player.healing)
+	if not writs.shrines.is_empty():
+		writs.open_shop(0)
+		_check("a wayshrine rekindles it", player.flask == player.flask_max)
+		writs.close_shop()
+	print("[flask] done")
+	get_tree().quit()
+
+
+## Skarn: it hides in the earth, comes up under you, spits, and goes down.
+func _run_wyrm_test() -> void:
+	_start_match()
+	for i in 30:
+		await get_tree().physics_frame
+	_land_player_now()
+	var ws: Array = bots.filter(func(b): return is_instance_valid(b) and b is Wyrm)
+	_check("the wyrm lies under a landmark", ws.size() == 1)
+	if ws.is_empty():
+		get_tree().quit()
+		return
+	var wy: Wyrm = ws[0]
+	print("[wyrm] %s at %s" % [wy.display_name(), str(wy.arena.round())])
+	_check("it waits deep in the earth", wy.global_position.y < terrain.height_at(wy.global_position.x, wy.global_position.z) - 5.0)
+	var h0 := wy.hp
+	wy.take_damage(80.0, wy.global_position, true, player)
+	_check("nothing reaches it underground", wy.hp == h0)
+	player.vest_level = 3
+	player.armor = 100.0
+	player.helmet_level = 3
+	player.helmet_hp = 100.0
+	var spot := _dry_spot_near(wy.arena, 10.0)
+	var phases := {}
+	var hit := false
+	var e0 := wy.erupt_hits
+	for i in 60 * 14:
+		await get_tree().physics_frame
+		player.global_position = Vector3(spot.x, player.global_position.y, spot.z)
+		player.hp = 100.0
+		phases[wy.phase] = true
+		if wy.erupt_hits > e0:
+			hit = true
+		if hit and phases.has("up") and phases.has("sink"):
+			break
+	print("[wyrm] phases seen %s, eruptions that struck you %d" % [str(phases.keys()), wy.erupt_hits - e0])
+	_check("it marks where it will come up, then erupts under you", phases.has("tell") and hit)
+	_check("it stands exposed, then sinks again", phases.has("up") and phases.has("sink"))
+	# Roll through the next one.
+	var dodged0 := player.dodged
+	player.dodged = 0
+	var rolled := false
+	for i in 60 * 10:
+		await get_tree().physics_frame
+		player.global_position = Vector3(spot.x, player.global_position.y, spot.z)
+		player.hp = 100.0
+		if wy.phase == "tell" and wy._t < 0.1 and not rolled:
+			player.iframes = 0.3
+			rolled = true
+		if rolled and wy.phase == "up":
+			break
+	_check("a roll lets the eruption pass", rolled and player.dodged >= 1)
+	player.dodged = dodged0
+	var em := writs.my_embers
+	_test_fell(wy)
+	await get_tree().physics_frame
+	_check("the wyrm is slain and pays", not wy.alive and writs.my_embers >= em + 1600)
+	print("[wyrm] done")
 	get_tree().quit()
 
 
@@ -6888,10 +7015,7 @@ func _run_ordeal_test() -> void:
 			_check("the foe hunts you", hunted)
 			_check("no sudden victory in the ring", phase == "playing")
 		for f in live:
-			var g := 0
-			while f.alive and g < 400:
-				g += 1
-				f.take_damage(80.0, f.global_position + Vector3.UP * 1.7, true, player)
+			_test_fell(f)
 		for i in 5:
 			await get_tree().physics_frame
 		print("[ordeal] after the kill: state %s, bout %d, foes alive %s, phase %s" % [ordeal.state, ordeal.bout, str(ordeal.foes.map(func(f): return is_instance_valid(f) and f.alive)), phase])
@@ -6952,10 +7076,7 @@ func _run_ordeal_test() -> void:
 		await get_tree().physics_frame
 	player.hp = 60.0
 	for f in ordeal.foes:
-		var g2 := 0
-		while f.alive and g2 < 400:
-			g2 += 1
-			f.take_damage(80.0, f.global_position + Vector3.UP * 1.7, true, player)
+		_test_fell(f)
 	for i in 5:
 		await get_tree().physics_frame
 	_check("bound by breath: no health back", player.hp <= 60.0)
@@ -7305,7 +7426,7 @@ func _run_revenant_test() -> void:
 	_land_player_now()
 	player.spawn_protect = 99999.0
 	player.give_weapon("rifle")
-	var revs: Array = bots.filter(func(b): return is_instance_valid(b) and b is Revenant and not (b is Colossus) and not (b is HollowWarden) and not (b is Bellkeeper))
+	var revs: Array = bots.filter(func(b): return is_instance_valid(b) and b is Revenant and not (b is Colossus) and not (b is HollowWarden) and not (b is Bellkeeper) and not (b is Wyrm))
 	_check("three revenants hold the island", revs.size() == REVENANT_COUNT)
 	_check("revenants are not counted among the living", alive == total_players)
 	if revs.is_empty():

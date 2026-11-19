@@ -166,6 +166,11 @@ var helmet_level := 0
 var helmet_hp := 0.0
 var attachments: Array = [{}, {}]
 var heal_item := ""
+## The Ember Flask: a few swallows of fire that close wounds. Refilled at a
+## Wayshrine (and between the Ordeal's bouts).
+const FLASK_HEAL := 50.0
+var flask := 0
+var flask_max := 2
 var heal_dur := 1.0
 var _boost_acc := 0.0
 var _throw_cd := 0.0
@@ -557,7 +562,7 @@ func _update_self_body(at: Vector3) -> void:
 	# hip cut would show up as a forearm floating over the ground.
 	var arms := "idle"
 	if healing:
-		arms = heal_item
+		arms = heal_anim()
 	elif gid != "":
 		arms = "reload" if reloading else ("aim" if aiming else "idle")
 	self_body.set_arms(arms)
@@ -940,6 +945,8 @@ func _ground(delta: float) -> void:
 		use_item("med")
 	if _ajp("use_energy"):
 		use_item("energy")
+	if _ajp("flask"):
+		use_item("flask")
 	if gifts.has("blink") and _ajp("ability"):
 		_blink()
 	_throw_cd = maxf(0.0, _throw_cd - delta)
@@ -1379,7 +1386,7 @@ func _update_hands(delta: float) -> void:
 		act = "grenade"
 		t = _throw_t
 	elif healing:
-		act = heal_item
+		act = heal_anim()
 		t = heal_progress()
 	elif swimming and mode == Mode.GROUND:
 		act = "swim"
@@ -2069,7 +2076,7 @@ func recoil_mult() -> float:
 
 
 # -------------------------------------------------------------- consumables --
-const USE_TIME := {"bandage": 2.2, "med": 4.0, "energy": 1.6}
+const USE_TIME := {"bandage": 2.2, "med": 4.0, "energy": 1.6, "flask": 1.3}
 
 
 func use_item(item: String) -> void:
@@ -2077,9 +2084,12 @@ func use_item(item: String) -> void:
 		if heal_item == item:
 			return
 		cancel_heal()
-	var have := {"bandage": bandages, "med": meds, "energy": energy}
+	var have := {"bandage": bandages, "med": meds, "energy": energy, "flask": flask}
 	if int(have.get(item, 0)) <= 0:
-		notice.emit("NO %s" % {"bandage": "BANDAGES", "med": "MEDKITS", "energy": "ENERGY DRINKS"}[item])
+		notice.emit("NO %s" % {"bandage": "BANDAGES", "med": "MEDKITS", "energy": "ENERGY DRINKS", "flask": "FIRE LEFT IN THE FLASK  —  A WAYSHRINE REKINDLES IT"}[item])
+		return
+	if item == "flask" and hp >= max_hp():
+		notice.emit("ALREADY AT FULL HEALTH")
 		return
 	if item == "bandage" and hp >= 75.0:
 		notice.emit("BANDAGES ONLY HEAL TO 75")
@@ -2136,6 +2146,12 @@ func _finish_heal() -> void:
 			if energy > 0:
 				energy -= 1
 				boost = minf(100.0, boost + 40.0)
+		"flask":
+			if flask > 0:
+				flask -= 1
+				hp = minf(max_hp(), hp + FLASK_HEAL)
+				if game != null and game.has_method("spawn_smoke"):
+					game.play_sfx_at("ember", global_position, -4.0)
 	_emit_health()
 	inventory_changed.emit()
 
@@ -2147,7 +2163,21 @@ func heal_progress() -> float:
 
 
 func heal_label() -> String:
-	return {"bandage": "BANDAGING", "med": "USING MEDKIT", "energy": "DRINKING"}.get(heal_item, "HEALING")
+	return {"bandage": "BANDAGING", "med": "USING MEDKIT", "energy": "DRINKING", "flask": "DRINKING FROM THE FLASK"}.get(heal_item, "HEALING")
+
+
+## What the hands and the rig show for the item being used.
+func heal_anim() -> String:
+	return "energy" if heal_item == "flask" else heal_item
+
+
+## Fill the flask to the brim (a Wayshrine).
+func refill_flask() -> bool:
+	if flask >= flask_max:
+		return false
+	flask = flask_max
+	inventory_changed.emit()
+	return true
 
 
 func _tick_boost(delta: float) -> void:
@@ -2727,6 +2757,8 @@ func reset_for_match() -> void:
 	chute_mesh.visible = false
 	landed = false
 	spawn_protect = 0.0
+	flask_max = 2
+	flask = flask_max
 	meds = 0
 	bandages = 0
 	energy = 0

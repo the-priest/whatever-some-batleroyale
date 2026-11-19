@@ -1910,6 +1910,8 @@ func set_inventory(p: Player) -> void:
 			l.add_theme_color_override("font_color", DIM)
 	lbl_meds.text = ""
 	var parts: Array[String] = []
+	if p.flask_max > 0:
+		parts.append("[%s] FLASK %s" % [Keybinds.key("flask"), "●".repeat(p.flask) + "○".repeat(maxi(0, p.flask_max - p.flask))])
 	if p.bandages > 0:
 		parts.append("[%s] BANDAGE ×%d" % [Keybinds.key("use_bandage"), p.bandages])
 	if p.meds > 0:

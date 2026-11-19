@@ -133,7 +133,7 @@ func _nova() -> void:
 		var dd := (v as Node3D).global_position.distance_to(at)
 		if dd < NOVA_R:
 			v.take_damage(NOVA_DMG * (1.0 - (dd / NOVA_R) * 0.4), at, false, self)
-			if v == game.player:
+			if v == game.player and game.player.iframes <= 0.0:
 				var away := (v as Node3D).global_position - at
 				away.y = 0.0
 				game.player.velocity += away.normalized() * 8.0 + Vector3.UP * 5.0
