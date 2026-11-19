@@ -398,6 +398,8 @@ func _ready() -> void:
 		_run_witch_test()
 	elif OS.get_cmdline_user_args().has("--echo"):
 		_run_echo_test()
+	elif OS.get_cmdline_user_args().has("--talisman"):
+		_run_talisman_test()
 	elif OS.get_cmdline_user_args().has("--unkindled"):
 		_run_unkindled_test()
 	elif OS.get_cmdline_user_args().has("--colossus"):
@@ -902,8 +904,8 @@ func _begin_ordeal() -> void:
 		player.helmet_hp = 100.0
 	player.meds = 2
 	player.bandages = 5
-	player.flask_max = 3
-	player.flask = 3
+	player.flask_max = 3 + (1 if Talismans.wears("scale") else 0)
+	player.flask = player.flask_max
 	player.refresh_viewmodel()
 	player.inventory_changed.emit()
 	player._emit_health()
@@ -2201,7 +2203,11 @@ func _on_bot_eliminated(victim: Bot, killer: String) -> void:
 		_revenant_fell(victim as Revenant, killer)
 		# By your own hand: its echo waits in the Hall.
 		if victim.last_killer_node == player and not victim.has_meta("echo"):
-			Ordeal.mark_slain(Ordeal.kind_of(victim))
+			var kind := Ordeal.kind_of(victim)
+			if Ordeal.mark_slain(kind):
+				for t in Talismans.LIST:
+					if str(t[2]) == kind:
+						hud.show_notice("TALISMAN WON: %s  —  %s  (WEAR IT FROM THE MAIN MENU)" % [str(t[1]), str(t[4]).to_upper()], 5.0)
 	else:
 		alive = maxi(0, alive - 1)
 	if writs != null:
@@ -3879,6 +3885,13 @@ func _run_shot() -> void:
 			hud._open_loadout()
 		if OS.get_cmdline_user_args().has("--oaths"):
 			hud._open_oaths()
+		if OS.get_cmdline_user_args().has("--talismans"):
+			Ordeal.load_record()
+			Talismans.no_save = true
+			for k in ["revenant", "warden", "colossus", "wyrm", "witch"]:
+				Ordeal.slain[k] = 0.0
+			Talismans.worn = {"giant": true, "feather": true}
+			hud._open_talismans()
 		if OS.get_cmdline_user_args().has("--echoes"):
 			Ordeal.load_record()
 			Ordeal.slain["revenant"] = 72.0
@@ -6830,6 +6843,52 @@ func _test_fell(f: Node) -> void:
 	while is_instance_valid(f) and f.alive and g < 600:
 		g += 1
 		f.take_damage(80.0, f.global_position + Vector3.UP * 1.7, true, player)
+
+
+## Talismans: won from bosses, five notches, each doing what it says.
+func _run_talisman_test() -> void:
+	Talismans.no_save = true
+	Ordeal.no_save = true
+	Ordeal.load_record()
+	Talismans.load_worn()
+	Ordeal.slain.clear()
+	Talismans.worn.clear()
+	_check("none are yours until their boss falls", not Talismans.owned("giant") and not Talismans.toggle("giant"))
+	for t in Talismans.LIST:
+		Ordeal.slain[str(t[2])] = 0.0
+	_check("the giant's heart goes on (3 notches)", Talismans.toggle("giant") and Talismans.used() == 3)
+	_check("the ashen step goes on (2 more: 5 of 5)", Talismans.toggle("ash") and Talismans.used() == 5)
+	_check("no room for a third", not Talismans.toggle("feather") and Talismans.used() == 5)
+	Talismans.toggle("giant")
+	_check("taking one off frees its notches", Talismans.used() == 2)
+	Talismans.toggle("giant")
+	_start_match()
+	for i in 30:
+		await get_tree().physics_frame
+	_land_player_now()
+	for i in 30:
+		await get_tree().physics_frame
+	_check("the giant's heart: 130 health", is_equal_approx(player.max_hp(), 130.0))
+	player.dodge_cd = 0.0
+	player._start_dodge(Vector3.FORWARD, Basis.IDENTITY)
+	print("[talisman] roll cooldown %.2f (plain %.2f)" % [player.dodge_cd, Player.DODGE_CD])
+	_check("the ashen step: the roll is ready sooner", player.dodge_cd < Player.DODGE_CD * 0.7)
+	Talismans.worn.clear()
+	Talismans.toggle("scale")
+	Talismans.toggle("lantern")
+	Talismans.toggle("feather")
+	player.reset_for_match()
+	_check("the wyrm scale: three swallows", player.flask_max == 3)
+	player.mode = Player.Mode.GROUND
+	player.alive = true
+	player.hp = 40.0
+	player.flask = 1
+	player.use_item("flask")
+	print("[talisman] flask drink %.2f s (plain %.2f)" % [player.heal_dur, Player.USE_TIME["flask"]])
+	_check("the witch's lantern: drunk twice as fast", player.heal_dur < Player.USE_TIME["flask"] * 0.6)
+	Talismans.worn.clear()
+	print("[talisman] done")
+	get_tree().quit()
 
 
 ## The Hall of Echoes: a slain boss, fought again alone, its time kept.

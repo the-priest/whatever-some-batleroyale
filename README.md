@@ -235,6 +235,23 @@ island or in the Ordeal, leaves an echo there. Pick one to fight it again, alone
 Ordeal's kit, no Gifts). Your best time against each is kept and shown beside its name; bosses you have
 not yet slain stay hidden.
 
+## Talismans
+
+Every kind of boss you slay with your own hand gives up its **talisman**, yours for good (the game tells
+you when you win one). Wear them from **TALISMANS** on the main menu, as many as your **five notches**
+hold; they go with you into every match, LAN included, and into the Ordeal.
+
+| Talisman | Won from | Notches | What it does |
+|---|---|---|---|
+| Talisman of Iron | a Revenant | 2 | Bullets and blows hurt you a tenth less |
+| Ashen Step | the Hollow Warden | 2 | Your roll is ready again much sooner |
+| Giant's Heart | a Colossus | 3 | +30 maximum health |
+| Quiet Bell | the Bellkeeper | 2 | Your roll keeps you untouchable for longer |
+| Wyrm Scale | the Wyrm | 2 | One more swallow in the Ember Flask |
+| Carrion Feather | the Carrion Queen | 1 | You jump higher |
+| Witch's Lantern | the Lantern Witch | 1 | You drink from the flask twice as fast |
+| Unkindled Crown | the Unkindled | 3 | Your bullets hit a tenth harder |
+
 **Bindings** (in the OATHS screen) make it harder, for those who have endured it: the **Binding of
 Flesh** (no armour, no helmet), **of Breath** (no health back between bouts), **of Want** (no Gifts:
 the altars never rise) and **of Arms** (a sidearm and nothing more). They hold until you break them,
@@ -516,7 +533,7 @@ Souls-like systems: `--writs`, `--revenant`, `--colossus`, `--vault`, `--gods`, 
 empty flask, a shrine's refill), `--dodge` (the roll's speed, its moment untouchable, its cooldown), `--unkindled` (an Ordeal already endured, all ten bouts, then the hidden one through its three
 parts), `--bell` (the toll strikes you on the ground and passes under you in the air), `--carrion` (aloft, the strip, the dive, the perch), `--witch` (low beam jumped, high beam
 crouched under, and both standing), `--echo` (a slain boss leaves its echo; fought again alone, its
-time kept), `--ordeal` (all ten bouts, the altars, the win, the ring's edge
+time kept), `--talisman` (won from bosses, five notches, each one's effect), `--ordeal` (all ten bouts, the altars, the win, the ring's edge
 and a fall) and `--hollow` (walks into the Ashen Hollow, lights its braziers,
 wakes and fells the Warden and takes the Heart).
 

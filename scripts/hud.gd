@@ -763,7 +763,7 @@ func _build_menu() -> void:
 	col.offset_right = 760
 	col.offset_top = -300
 	col.offset_bottom = 300
-	col.add_theme_constant_override("separation", 10)
+	col.add_theme_constant_override("separation", 7)
 	col.alignment = BoxContainer.ALIGNMENT_CENTER
 	menu.add_child(col)
 
@@ -776,10 +776,10 @@ func _build_menu() -> void:
 	col.add_child(_lv("DROP  ·  LOOT  ·  OUTLAST", 18, MUTED, false))
 	menu_rank = _lv("", 14, Color(1.0, 0.76, 0.42))
 	col.add_child(menu_rank)
-	col.add_child(_spacer(18))
+	col.add_child(_spacer(8))
 
 	play_button = _button("P L A Y   S O L O", true)
-	play_button.custom_minimum_size = Vector2(340, 64)
+	play_button.custom_minimum_size = Vector2(340, 56)
 	play_button.pressed.connect(func(): play_pressed.emit())
 	col.add_child(play_button)
 	var lan := HBoxContainer.new()
@@ -804,16 +804,16 @@ func _build_menu() -> void:
 	col.add_child(menu_ordeal)
 	menu_ordeal_rec = _lv("", 11, Color(0.85, 0.62, 0.42), false)
 	col.add_child(menu_ordeal_rec)
-	for pair in [[["LOADOUT", "_open_loadout"], ["OATHS", "_open_oaths"]], [["CODEX", "_open_codex"], ["SETTINGS", "_open_settings"]], [["HALL OF ECHOES", "_open_echoes"], ["QUIT", "_quit"]]]:
+	for pair in [[["LOADOUT", "_open_loadout"], ["OATHS", "_open_oaths"]], [["TALISMANS", "_open_talismans"], ["HALL OF ECHOES", "_open_echoes"]], [["CODEX", "_open_codex"], ["SETTINGS", "_open_settings"]], [["QUIT", "_quit"]]]:
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 8)
 		for item in pair:
 			var b := _button(item[0], false)
-			b.custom_minimum_size = Vector2(166 if pair.size() > 1 else 340, 44)
+			b.custom_minimum_size = Vector2(166 if pair.size() > 1 else 340, 38)
 			b.pressed.connect(Callable(self, item[1]))
 			row.add_child(b)
 		col.add_child(row)
-	col.add_child(_spacer(10))
+	col.add_child(_spacer(2))
 	menu_seed = _lv("", 11, DIM, false)
 	col.add_child(menu_seed)
 
@@ -889,6 +889,77 @@ func _open_oaths() -> void:
 
 
 var _bind_buttons: Dictionary = {}
+var _tal_panel: Control = null
+var _tal_box: VBoxContainer = null
+var _tal_notch: Label = null
+
+
+## Talismans: wear the ones you have won, as many as five notches hold.
+func _open_talismans() -> void:
+	sfx_click()
+	Talismans.load_worn()
+	if _tal_panel == null:
+		_tal_panel = ColorRect.new()
+		(_tal_panel as ColorRect).color = Color(0.01, 0.012, 0.016, 0.82)
+		_tal_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_tal_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+		_tal_panel.z_index = 25
+		root.add_child(_tal_panel)
+		var box := _panel(0.96)
+		box.set_anchors_preset(Control.PRESET_CENTER)
+		box.offset_left = -380
+		box.offset_right = 380
+		box.offset_top = -270
+		box.offset_bottom = 270
+		_tal_panel.add_child(box)
+		var vb := VBoxContainer.new()
+		vb.add_theme_constant_override("separation", 7)
+		box.add_child(vb)
+		vb.add_child(_lv("TALISMANS", 22, Color(1.0, 0.8, 0.45)))
+		var sub := _lv("Each kind of boss you slay with your own hand gives up its talisman, yours for good. Wear as many as your notches hold; they go with you into every match and into the Ordeal.", 13, MUTED, false)
+		sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		sub.custom_minimum_size = Vector2(700, 0)
+		vb.add_child(sub)
+		_tal_notch = _lv("", 16, Color(1.0, 0.8, 0.45))
+		vb.add_child(_tal_notch)
+		_tal_box = VBoxContainer.new()
+		_tal_box.add_theme_constant_override("separation", 5)
+		vb.add_child(_tal_box)
+		var done := _button("DONE", true)
+		done.custom_minimum_size = Vector2(700, 42)
+		done.pressed.connect(func(): sfx_click(); _tal_panel.visible = false)
+		vb.add_child(done)
+	_sync_talismans()
+	_tal_panel.visible = true
+
+
+func _sync_talismans() -> void:
+	for c in _tal_box.get_children():
+		c.queue_free()
+	var used := Talismans.used()
+	_tal_notch.text = "NOTCHES   %s   %d / %d" % ["◆".repeat(used) + "◇".repeat(maxi(0, Talismans.NOTCHES - used)), used, Talismans.NOTCHES]
+	for t in Talismans.LIST:
+		var id: String = t[0]
+		var b := _button("", false)
+		b.custom_minimum_size = Vector2(700, 40)
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		var cost := "◆".repeat(int(t[3]))
+		if Talismans.owned(id):
+			var on := Talismans.wears(id)
+			b.text = "  %s   %s  %s  —  %s" % ["■" if on else "□", str(t[1]), cost, str(t[4]).to_upper()]
+			b.pressed.connect(func():
+				if Talismans.toggle(id):
+					sfx_click()
+				else:
+					sfx_click()
+					show_notice("NOT ENOUGH NOTCHES  —  TAKE ANOTHER OFF FIRST", 2.0)
+				_sync_talismans())
+		else:
+			b.text = "  ???   %s  —  SLAY %s TO WIN IT" % [cost, Ordeal.echo_name(str(t[2]))]
+			b.disabled = true
+		_tal_box.add_child(b)
+
+
 var _echoes_panel: Control = null
 var _echo_box: VBoxContainer = null
 

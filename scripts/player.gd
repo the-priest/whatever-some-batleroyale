@@ -143,7 +143,7 @@ func max_hp() -> float:
 	var m := 100.0
 	if game != null and game.has_method("oath") and game.oath("glass"):
 		m = 75.0
-	return m + (25.0 if blessings.has("vigour") else 0.0) + (50.0 if gifts.has("titan") else 0.0)
+	return m + (25.0 if blessings.has("vigour") else 0.0) + (50.0 if gifts.has("titan") else 0.0) + (30.0 if Talismans.wears("giant") else 0.0)
 var _reload_need := 1
 var _reload_was_empty := false
 var _reload_events: Dictionary = {}
@@ -861,7 +861,7 @@ func _ground(delta: float) -> void:
 	if _ajp("jump") and not in_water and velocity.y > -6.0 and (_try_mantle() or _try_window_vault()):
 		return
 	if _ajp("jump") and _coyote > 0.0 and not in_water:
-		velocity.y = JUMP
+		velocity.y = JUMP * (1.16 if Talismans.wears("feather") else 1.0)
 		_coyote = 0.0
 		if game != null and game.sfx != null:
 			game.sfx.play_2d("jump", -12.0, 0.08)
@@ -1775,7 +1775,7 @@ func _try_fire() -> void:
 		var offset := camera.global_basis * Vector3(cos(ang) * rad, sin(ang) * rad, 0.0)
 		var shot_dir := (dir + offset).normalized()
 		if game != null and game.ballistics != null:
-			game.ballistics.fire(self, from, shot_dir, id, muzzle_pos, _shot_seq)
+			game.ballistics.fire(self, from, shot_dir, id, muzzle_pos, _shot_seq, 1.1 if Talismans.wears("crown") else 1.0)
 	if game != null and game.has_method("on_gunshot"):
 		game.on_gunshot(from, self)
 	if game != null and game.has_method("play_sfx_at"):
@@ -2106,7 +2106,7 @@ func use_item(item: String) -> void:
 	reloading = false
 	healing = true
 	heal_item = item
-	heal_dur = float(USE_TIME[item])
+	heal_dur = float(USE_TIME[item]) * (0.5 if item == "flask" and Talismans.wears("lantern") else 1.0)
 	heal_timer = heal_dur
 
 
@@ -2219,7 +2219,7 @@ func take_damage(amount: float, from_pos: Vector3 = Vector3.ZERO, headshot: bool
 	if iframes > 0.0 and source != null:
 		dodged += 1
 		return false
-	var dmg := amount * (0.88 if blessings.has("warding") and source != null else 1.0)
+	var dmg := amount * (0.88 if blessings.has("warding") and source != null else 1.0) * (0.9 if Talismans.wears("iron") and source != null else 1.0)
 	if source != null:
 		# The storm ignores armour; bullets and blasts do not.
 		if headshot and helmet_level > 0:
@@ -2304,8 +2304,8 @@ func _start_dodge(wish: Vector3, basis_yaw: Basis) -> void:
 		dir = basis_yaw * Vector3(0, 0, 1)
 	_dodge_dir = dir.normalized()
 	dodge_t = DODGE_TIME
-	dodge_cd = DODGE_CD
-	iframes = DODGE_IFRAMES
+	dodge_cd = DODGE_CD * (0.55 if Talismans.wears("ash") else 1.0)
+	iframes = DODGE_IFRAMES + (0.12 if Talismans.wears("bell") else 0.0)
 	_sprint_on = false
 	land_dip = 0.28
 	add_trauma(0.08)
@@ -2757,7 +2757,8 @@ func reset_for_match() -> void:
 	chute_mesh.visible = false
 	landed = false
 	spawn_protect = 0.0
-	flask_max = 2
+	Talismans.load_worn()
+	flask_max = 2 + (1 if Talismans.wears("scale") else 0)
 	flask = flask_max
 	meds = 0
 	bandages = 0

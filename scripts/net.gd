@@ -1402,7 +1402,8 @@ static func _pstate_ok(st: Array) -> bool:
 			return false
 	if typeof(st[5]) != TYPE_STRING or (st[5] as String).length() > 24:
 		return false
-	return float(st[8]) <= 100.5 and int(st[6]) >= 0 and int(st[6]) <= 3 and int(st[7]) >= 0 and int(st[7]) <= 3
+	# Health can go over 100 (Titan, Vigour, the Giant's Heart).
+	return float(st[8]) <= 200.5 and int(st[6]) >= 0 and int(st[6]) <= 3 and int(st[7]) >= 0 and int(st[7]) <= 3
 
 
 var _relay: Array = []

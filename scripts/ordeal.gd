@@ -142,12 +142,13 @@ static func kind_of(b: Node) -> String:
 
 
 ## A boss of this kind fell to your hand: its echo waits in the Hall.
-static func mark_slain(kind: String) -> void:
+static func mark_slain(kind: String) -> bool:
 	load_record()
 	if slain.has(kind):
-		return
+		return false
 	slain[kind] = 0.0
 	save_record()
+	return true
 
 
 static func echo_name(kind: String) -> String:
