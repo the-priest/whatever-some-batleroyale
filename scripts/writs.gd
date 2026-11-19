@@ -1043,7 +1043,8 @@ func on_bot_eliminated(victim: Bot) -> void:
 		if victim is Revenant:
 			n += 2500 if victim is Colossus else (1600 if victim is HollowWarden else 1200)
 			why = "COLOSSUS FELLED" if victim is Colossus else ("WARDEN FELLED" if victim is HollowWarden else "REVENANT FELLED")
-			give_sigil(killer_o, 1, "THE %s'S SIGIL IS YOURS  —  IT OPENS A SEALED VAULT" % ("COLOSSUS" if victim is Colossus else "REVENANT"))
+			if game.ordeal == null:
+				give_sigil(killer_o, 1, "THE %s'S SIGIL IS YOURS  —  IT OPENS A SEALED VAULT" % ("COLOSSUS" if victim is Colossus else "REVENANT"))
 		award(killer_o, n, why)
 		_count_kill(killer_o)
 	if victim.is_human and branded.has(victim.peer_id):
@@ -1053,8 +1054,8 @@ func on_bot_eliminated(victim: Bot) -> void:
 	if game.events != null:
 		game.events.on_bot_eliminated(victim)
 	# A fallen boss gives Gifts: a Revenant to whoever felled it, a Colossus
-	# to everyone who stood against it.
-	if victim is Revenant:
+	# to everyone who stood against it. (In the Ordeal the altars give them.)
+	if victim is Revenant and game.ordeal == null:
 		var takers: Array = []
 		if killer_o >= 0:
 			takers.append(killer_o)
@@ -1174,6 +1175,17 @@ func give_gift(o: int) -> void:
 		return
 	var k: String = pool[randi() % pool.size()]
 	have.append(k)
+	_gifted[o] = have
+	_send_event(o, {"ev": "gift", "kind": k})
+
+
+## A chosen Gift (the Ordeal's altars).
+func give_gift_kind(o: int, k: String) -> void:
+	if not GIFTS.has(k):
+		return
+	var have: Array = _gifted.get(o, [])
+	if not have.has(k):
+		have.append(k)
 	_gifted[o] = have
 	_send_event(o, {"ev": "gift", "kind": k})
 

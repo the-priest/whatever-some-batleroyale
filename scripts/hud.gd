@@ -2,6 +2,7 @@ class_name HUD
 extends CanvasLayer
 
 signal play_pressed
+signal ordeal_pressed
 signal music_changed(menu_volume: float, match_volume: float)
 signal music_skip
 signal graphics_changed(quality: int)
@@ -729,6 +730,10 @@ func _build_big_map() -> void:
 	big_map.add_child(big_map_draw)
 
 
+var menu_ordeal: Button
+var menu_ordeal_rec: Label
+
+
 func _build_menu() -> void:
 	menu = Control.new()
 	menu.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -791,12 +796,23 @@ func _build_menu() -> void:
 	qb.custom_minimum_size = Vector2(340, 44)
 	qb.pressed.connect(func(): sfx_click(); quick_lan_pressed.emit())
 	col.add_child(qb)
-	for item in [["LOADOUT", "_open_loadout"], ["OATHS", "_open_oaths"], ["CODEX", "_open_codex"], ["SETTINGS", "_open_settings"], ["QUIT", "_quit"]]:
-		var b := _button(item[0], false)
-		b.custom_minimum_size = Vector2(340, 48)
-		b.pressed.connect(Callable(self, item[1]))
-		col.add_child(b)
-	col.add_child(_spacer(20))
+	menu_ordeal = _button("THE ORDEAL  ·  BOSS RUSH", false)
+	menu_ordeal.custom_minimum_size = Vector2(340, 48)
+	menu_ordeal.add_theme_color_override("font_color", Color(1.0, 0.72, 0.42))
+	menu_ordeal.pressed.connect(func(): sfx_click(); ordeal_pressed.emit())
+	col.add_child(menu_ordeal)
+	menu_ordeal_rec = _lv("", 11, Color(0.85, 0.62, 0.42), false)
+	col.add_child(menu_ordeal_rec)
+	for pair in [[["LOADOUT", "_open_loadout"], ["OATHS", "_open_oaths"]], [["CODEX", "_open_codex"], ["SETTINGS", "_open_settings"]], [["QUIT", "_quit"]]]:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		for item in pair:
+			var b := _button(item[0], false)
+			b.custom_minimum_size = Vector2(166 if pair.size() > 1 else 340, 44)
+			b.pressed.connect(Callable(self, item[1]))
+			row.add_child(b)
+		col.add_child(row)
+	col.add_child(_spacer(10))
 	menu_seed = _lv("", 11, DIM, false)
 	col.add_child(menu_seed)
 
@@ -2103,6 +2119,15 @@ func show_menu(seed_text: String) -> void:
 	lbl_spectate.text = ""
 	if menu_seed != null:
 		menu_seed.text = seed_text
+	if menu_ordeal_rec != null:
+		menu_ordeal_rec.text = Ordeal.record_line()
+
+
+## The end screen's headline and line under it (the Ordeal has its own).
+func set_end_text(title: String, sub: String, col: Color) -> void:
+	end_title.text = title
+	end_title.add_theme_color_override("font_color", col)
+	end_sub.text = sub
 
 
 func hide_menu() -> void:

@@ -270,3 +270,11 @@ so on.
   - cheaper grass on LOW;
   - animation rate for far bots tied to screen size;
   - occlusion culling inside towns.
+
+
+## Phase 7: The Ordeal DONE
+
+A solo boss rush: six bouts in a ring of standing stones (Revenant, the Hollow Warden, a Colossus,
+twin Revenants, a second Colossus, then the Warden and a Colossus together), health carried over,
+a choice of one Gift of three after each bout, records kept in the profile. Next: bindings (optional
+handicaps for the Ordeal: no armour, half health, no Gifts) and more bouts as new bosses arrive.

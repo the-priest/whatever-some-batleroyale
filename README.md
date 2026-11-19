@@ -148,6 +148,26 @@ with it. Fell the Warden (1,600 Embers, a Sigil, a Gift), then take the Heart
 stops. The map shows the Hollow, its braziers (lit or cold) and the Heart. Over LAN the host settles
 every brazier and the Heart; everyone sees the same flames.
 
+## The Ordeal (boss rush)
+
+**THE ORDEAL** on the main menu is a solo boss rush. You start in a ring of standing stones on a level
+stone floor, cleared of trees, with a rifle, a marksman rifle, level 2 armour, two medkits and
+bandages. No soldiers, no storm, no loot from the fallen. Six bouts, one after another:
+
+1. **The First Bout**: a Revenant.
+2. **The Keeper**: the Hollow Warden.
+3. **The Giant**: a Colossus.
+4. **The Twin Oaths**: two Revenants at once.
+5. **The Second Giant**: another Colossus, with a different signature attack.
+6. **The Ashen Choir**: the Warden and a Colossus together.
+
+Your health carries from bout to bout; winning one gives back 30 and refills your ammo. Then three
+altars rise, each holding a Gift, and you take one of the three for the rest of the Ordeal (choose
+well: Titan, Second Wind, Blink, Ember Aegis, Bloodthirst). The ring holds you: step past its edge of
+embers and it pushes you back and burns you. Fall and the Ordeal is over. The bout and timer show at
+the top of the screen; the furthest bout you have reached and your fastest full Ordeal are kept and
+shown under the menu button. SPACE on the end screen starts another.
+
 ## Vaults and Sigils
 
 Five sealed **vaults** stand near the landmarks and old ruins: stone crypts with an iron door and a
@@ -420,7 +440,8 @@ fires rays through every window and door opening on the map, `--fantasy` climbs 
 the mushroom caps, and `--drive` tests the jeep.
 
 Souls-like systems: `--writs`, `--revenant`, `--colossus`, `--vault`, `--gods`, `--events`,
-`--renown`, `--codex`, `--chests` and `--hollow` (walks into the Ashen Hollow, lights its braziers,
+`--renown`, `--codex`, `--chests`, `--ordeal` (all six bouts, the altars, the win, the ring's edge
+and a fall) and `--hollow` (walks into the Ashen Hollow, lights its braziers,
 wakes and fells the Warden and takes the Heart).
 
 ## Anti-cheat

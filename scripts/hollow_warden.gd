@@ -196,5 +196,5 @@ func take_damage(amount: float, pos: Vector3 = Vector3.ZERO, headshot: bool = fa
 
 func _die(source: Node) -> void:
 	super._die(source)
-	if game != null and game.hollow != null and not puppet:
+	if game != null and game.hollow != null and not puppet and game.hollow.warden == self:
 		game.hollow.on_warden_fell()

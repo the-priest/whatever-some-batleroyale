@@ -1188,6 +1188,51 @@ func _hollow_tree(x: float, z: float) -> int:
 	return 1
 
 
+## Every tree: where it stands, its instance in its MultiMesh, and its
+## shapes in the one tree body (so a place can be cleared of trees and given
+## them back: the Ordeal's ring).
+var _tree_pos := PackedVector3Array()
+var _tree_mm: Array = []
+var _tree_i := PackedInt32Array()
+var _tree_s0 := PackedInt32Array()
+var _tree_n := PackedInt32Array()
+var _tree_shapes := 0
+var _tree_body: StaticBody3D = null
+var _trees_hidden: Array = []
+
+
+## Clears the trees within `r` of `c` (drawn and solid). Returns how many.
+func hide_trees(c: Vector3, r: float) -> int:
+	if _tree_body == null:
+		return 0
+	var rid := _tree_body.get_rid()
+	var c2 := Vector2(c.x, c.z)
+	var n := 0
+	for k in _tree_pos.size():
+		var tp := _tree_pos[k]
+		if Vector2(tp.x, tp.z).distance_to(c2) > r:
+			continue
+		var mm: MultiMesh = _tree_mm[k]
+		_trees_hidden.append([k, mm.get_instance_transform(_tree_i[k])])
+		mm.set_instance_transform(_tree_i[k], Transform3D(Basis().scaled(Vector3.ONE * 0.0001), tp + Vector3.DOWN * 50.0))
+		for s in _tree_n[k]:
+			PhysicsServer3D.body_set_shape_disabled(rid, _tree_s0[k] + s, true)
+		n += 1
+	return n
+
+
+func restore_trees() -> void:
+	if _tree_body == null:
+		return
+	var rid := _tree_body.get_rid()
+	for h in _trees_hidden:
+		var k: int = h[0]
+		(_tree_mm[k] as MultiMesh).set_instance_transform(_tree_i[k], h[1])
+		for s in _tree_n[k]:
+			PhysicsServer3D.body_set_shape_disabled(rid, _tree_s0[k] + s, false)
+	_trees_hidden.clear()
+
+
 func _scatter_trees() -> void:
 	var species := [
 		# Old growth: 18-32 m broadleaves, 20-35 m pines with trunks you can
@@ -1348,14 +1393,22 @@ func _scatter_trees() -> void:
 		# more than they add. Straight to the physics server: tens of
 		# thousands of shape nodes would only slow the load.
 		var hulls := _trunk_hulls(parts[0], canopy)
-		for it in list:
+		for ti in list.size():
+			var it: Dictionary = list[ti]
 			var xf := Transform3D(Basis(Vector3.UP, float(it.rot)).scaled(Vector3.ONE * float(it.scale)), Vector3(it.pos))
+			_tree_pos.append(Vector3(it.pos))
+			_tree_mm.append(mm)
+			_tree_i.append(ti)
+			_tree_s0.append(_tree_shapes)
+			_tree_n.append(hulls.size())
 			for hull in hulls:
 				PhysicsServer3D.body_add_shape(trunk_rid, (hull as Shape3D).get_rid(), xf)
 				stats.colliders += 1
+				_tree_shapes += 1
 	# Into the tree only once every shape is attached: adding shapes to a live
 	# body rebuilds its compound shape each time.
 	add_child(trunk_body)
+	_tree_body = trunk_body
 
 
 func _scatter_ground_cover() -> void:

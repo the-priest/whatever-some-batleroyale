@@ -92,6 +92,10 @@ var codex: Codex = null
 var chests: Chests = null
 ## The Ashen Hollow (see hollow.gd).
 var hollow: Hollow = null
+## THE ORDEAL (boss rush, solo): the run in progress, if any.
+var ordeal: Ordeal = null
+var ordeal_mode := false
+var _ordeal_requested := false
 ## Reliquary, fog bank, the Hunt, Blood Moon (see island_events.gd).
 var events: IslandEvents = null
 ## The next supply drop spawned is a Reliquary.
@@ -203,6 +207,7 @@ func _ready() -> void:
 	hud.name = "HUD"
 	add_child(hud)
 	hud.play_pressed.connect(_start_match_ui)
+	hud.ordeal_pressed.connect(_start_ordeal_ui)
 	hud.resume_pressed.connect(_resume)
 	hud.quit_pressed.connect(_quit_to_menu)
 	hud.settings_changed.connect(_on_settings_changed)
@@ -373,6 +378,8 @@ func _ready() -> void:
 		_run_chests_test()
 	elif OS.get_cmdline_user_args().has("--hollow"):
 		_run_hollow_test()
+	elif OS.get_cmdline_user_args().has("--ordeal"):
+		_run_ordeal_test()
 	elif OS.get_cmdline_user_args().has("--colossus"):
 		_run_colossus_test()
 	elif OS.get_cmdline_user_args().has("--revenant"):
@@ -640,11 +647,26 @@ var _starting := false
 
 ## Starting a match takes a moment (loot, 60-odd soldiers): show it rather
 ## than freeze on the menu.
+func _start_ordeal_ui() -> void:
+	if net != null and net.active:
+		hud.show_notice("THE ORDEAL IS FOR ONE  —  LEAVE THE LAN GAME FIRST", 2.5)
+		return
+	_ordeal_requested = true
+	_start_match_ui()
+
+
 func _start_match_ui() -> void:
 	if _starting:
 		return
+	# From the menu: a match or the Ordeal, as asked. From the end screen:
+	# the same again.
+	if phase == "menu" or phase == "":
+		ordeal_mode = _ordeal_requested
+	_ordeal_requested = false
+	if net != null and net.active:
+		ordeal_mode = false
 	_starting = true
-	hud.show_loading("PREPARING THE DROP", 0.5)
+	hud.show_loading("THE RING OF STONES" if ordeal_mode else "PREPARING THE DROP", 0.5)
 	await get_tree().process_frame
 	await get_tree().process_frame
 	_start_match()
@@ -737,7 +759,7 @@ func _start_match() -> void:
 	var drop_targets: Array = []
 	var route := plane_end - plane_start
 	var route_len2 := maxf(1.0, route.x * route.x + route.z * route.z)
-	for i in range(MAX_BOTS):
+	for i in range(0 if ordeal_mode else MAX_BOTS):
 		var b := Bot.new()
 		var target := _bot_drop_point()
 		# Spread the lobby out: no two landing spots within 45 m.
@@ -777,7 +799,8 @@ func _start_match() -> void:
 		b.eliminated.connect(_on_bot_eliminated)
 		bots.append(b)
 
-	_spawn_revenants()
+	if not ordeal_mode:
+		_spawn_revenants()
 
 	# Zone.
 	zone = Zone.new()
@@ -789,7 +812,7 @@ func _start_match() -> void:
 	zone.phase_changed.connect(_on_zone_phase)
 	zone_was_warning = false
 
-	alive = MAX_BOTS + 1
+	alive = (0 if ordeal_mode else MAX_BOTS) + 1
 	if net != null and net.active:
 		alive += net.roster.size() - 1
 	total_players = alive
@@ -810,6 +833,51 @@ func _start_match() -> void:
 		_net_setup_ok = true
 		_net_send_setup()
 	_after_match_setup()
+	if ordeal_mode:
+		_begin_ordeal()
+
+
+## Into the ring: no plane, no storm, a soldier's kit, and the first bout.
+func _begin_ordeal() -> void:
+	ordeal = Ordeal.new()
+	ordeal.name = "Ordeal"
+	add_child(ordeal)
+	ordeal.setup(self)
+	anticheat.grace(3.0)
+	_player_jump(true)
+	var start: Vector3 = ground_at(ordeal.centre + Vector3(0, 30, Ordeal.R * 0.6))
+	player.global_position = start + Vector3.UP * 0.4
+	player.mode = Player.Mode.GROUND
+	player.landed = true
+	player.velocity = Vector3.ZERO
+	var to := ordeal.centre - start
+	player.yaw = atan2(-to.x, -to.z)
+	on_player_landed()
+	if not loadout_enabled:
+		player.give_weapon("rifle")
+		player.give_weapon("dmr")
+	for w in player.loadout:
+		if w != "":
+			for k in 3:
+				player.add_ammo_cal(Weapons.caliber(w), int(Weapons.AMMO_BOX.get(Weapons.caliber(w), 30)))
+	player.vest_level = 2
+	player.armor = 100.0
+	player.helmet_level = 2
+	player.helmet_hp = 100.0
+	player.meds = 2
+	player.bandages = 5
+	player.refresh_viewmodel()
+	player.inventory_changed.emit()
+	player._emit_health()
+	hud.set_plane_path(Vector3.ZERO, Vector3.ZERO)
+	hud.show_notice("SIX BOUTS. HEALTH CARRIES OVER. A GIFT AFTER EACH. THE RING HOLDS YOU.", 5.0)
+	ordeal.begin()
+
+
+## The last bout is won.
+func ordeal_endured() -> void:
+	_win()
+	hud.set_end_text("ORDEAL ENDURED", ordeal.end_line() if ordeal != null else "", Color(1.0, 0.82, 0.4))
 
 
 func _after_match_setup() -> void:
@@ -962,6 +1030,10 @@ func _spawn_loot(kind: String, id: String, pos: Vector3, mag := -1, reserve := -
 
 func _cleanup_match() -> void:
 	_net_setup_ok = false
+	if ordeal != null and is_instance_valid(ordeal):
+		ordeal.cleanup()
+		ordeal.queue_free()
+	ordeal = null
 	if writs != null and is_instance_valid(writs):
 		writs.reset()
 	if codex != null and is_instance_valid(codex):
@@ -1497,7 +1569,7 @@ func _update_play(delta: float) -> void:
 	_pt = Time.get_ticks_usec()
 	_update_driving(delta)
 	Prof.add("g_update_driving", Time.get_ticks_usec() - _pt)
-	if zone != null and not zone.is_processing() and (player.landed or match_time > 50.0) and not net_is_client():
+	if zone != null and not zone.is_processing() and (player.landed or match_time > 50.0) and not net_is_client() and ordeal == null:
 		zone.set_process(true)
 	hud.set_crosshair_visible(player.mode == Player.Mode.GROUND and player.has_gun() and player.aim_blend < 0.6)
 	_update_world_sim(delta)
@@ -1528,7 +1600,7 @@ func _update_play(delta: float) -> void:
 	hud.set_crosshair_spread(_crosshair_spread())
 	Prof.add("g_xhair", Time.get_ticks_usec() - _pt)
 
-	if alive <= 1 and player.alive and phase == "playing" and not net_on():
+	if alive <= 1 and player.alive and phase == "playing" and not net_on() and ordeal == null:
 		_win()
 
 
@@ -1659,6 +1731,8 @@ func _update_prompt() -> void:
 		wp = chests.prompt(player.global_position)
 	if wp == "" and hollow != null:
 		wp = hollow.prompt(player.global_position)
+	if wp == "" and ordeal != null:
+		wp = ordeal.prompt(player.global_position)
 	var mate := _downed_mate_near()
 	if mate != null:
 		hud.set_prompt("HOLD [%s]  REVIVE %s" % [Keybinds.key("interact"), mate.bot_name])
@@ -1907,7 +1981,7 @@ func _on_player_died(killer: String) -> void:
 	if player.mode == Player.Mode.VEHICLE:
 		_leave_seat()
 	# Kindling: rise again at a Wayshrine (solo).
-	if player.mode == Player.Mode.GROUND and writs != null and writs.try_rise():
+	if player.mode == Player.Mode.GROUND and writs != null and ordeal == null and writs.try_rise():
 		hud.killfeed("%s   >   YOU" % killer, HUD.DANGER)
 		return
 	# Hosting: your own kit falls where you did, for the others to take.
@@ -2052,6 +2126,9 @@ func _on_player_died_rest(killer: String) -> void:
 	_stop_ambience()
 	hud.killfeed("%s   >   YOU" % killer, HUD.DANGER)
 	hud.show_death(killer, placement, _stats())
+	if ordeal != null:
+		ordeal.on_player_fell()
+		hud.set_end_text("THE ORDEAL", ordeal.end_line(), HUD.DANGER)
 	_pay_renown(false, placement)
 	_net_end_hint()
 	sfx.play_ui("defeat", -4.0)
@@ -2135,7 +2212,7 @@ func _on_bot_eliminated(victim: Bot, killer: String) -> void:
 			hud.set_spectate("")
 	if net_on():
 		_net_check_win()
-	elif alive <= 1 and player != null and player.alive and phase == "playing":
+	elif alive <= 1 and player != null and player.alive and phase == "playing" and ordeal == null:
 		_win()
 
 
@@ -2263,7 +2340,7 @@ func _revenant_fell(r: Revenant, killer: String) -> void:
 	sfx.play_ui("writ_done", -1.0)
 	hud.show_big("COLOSSUS FELLED" if r is Colossus else ("WARDEN FELLED" if r is HollowWarden else "REVENANT FELLED"), Color(1.0, 0.82, 0.38), 3.6)
 	hud.show_notice("%s  —  SLAIN BY %s" % [r.display_name(), killer if killer != "" else "THE STORM"], 4.0)
-	if net_is_client():
+	if net_is_client() or ordeal != null:
 		return
 	var base := ground_at(r.global_position + Vector3.UP)
 	var items: Array = [["armor", "3"], ["helmet", "3"], ["med", ""], ["med", ""], ["scope", "8x"], ["grenade", ""]]
@@ -2499,6 +2576,8 @@ func try_pickup(p: Player) -> void:
 	if p == player and chests != null and car == null and (best == null or best.global_position.distance_to(p.global_position) > 1.2) and chests.interact(p.global_position):
 		return
 	if p == player and hollow != null and car == null and (best == null or best.global_position.distance_to(p.global_position) > 1.2) and hollow.interact(p.global_position):
+		return
+	if p == player and ordeal != null and car == null and ordeal.interact(p.global_position):
 		return
 	if best == null:
 		return
@@ -3580,6 +3659,17 @@ func _run_shot() -> void:
 	# Free camera: --lm=<landmark> or --cam=x,y,z --look=x,y,z.
 	var cam_pos := Vector3.INF
 	var cam_look := Vector3.ZERO
+	if OS.get_cmdline_user_args().has("--ordealring"):
+		var od := Ordeal.new()
+		add_child(od)
+		od.setup(self)
+		cam_pos = od.centre + Vector3(0, 7.0, Ordeal.R * 0.95)
+		cam_look = od.centre + Vector3(0, 2.0, 0)
+		if OS.get_cmdline_user_args().has("--altars"):
+			player.global_position = od.centre + Vector3(0, 1, 6)
+			od._raise_altars(["titan", "blink", "second"])
+			cam_pos = od.centre + Vector3(0, 2.4, 13.0)
+			cam_look = od.centre + Vector3(0, 1.2, 0)
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--cam="):
 			# --cam=x,y,z[,lx,ly,lz]: explicit camera (and look-at point).
@@ -6501,6 +6591,86 @@ func _run_chests_test() -> void:
 	_check("a slain mimic gives a gift and embers", chests.state[1] == "dead" and player.gifts.size() > g0 and writs.my_embers >= e0 + 600)
 	_check("a shut chest is not damageable", chests._nodes[2].get("alive") == false)
 	print("[chests] done")
+	get_tree().quit()
+
+
+## Runs the Ordeal: all six bouts, a Gift from each altar, the win; then a
+## second run that falls.
+func _run_ordeal_test() -> void:
+	Ordeal.no_save = true
+	ordeal_mode = true
+	_start_match()
+	for i in 20:
+		await get_tree().physics_frame
+	_check("the ordeal begins in the ring", ordeal != null and phase == "playing" and player.mode == Player.Mode.GROUND)
+	if ordeal == null:
+		get_tree().quit()
+		return
+	print("[ordeal] ring at %s, player %d m from its middle" % [str(ordeal.centre.round()), int(player.global_position.distance_to(ordeal.centre))])
+	_check("no soldiers, only you", bots.is_empty() and alive == 1)
+	_check("a soldier's kit", player.has_gun() and player.vest_level == 2 and player.meds == 2)
+	_check("the storm does not come", zone != null and not zone.is_processing())
+	player.spawn_protect = 99999.0
+	var gifts0 := player.gifts.size()
+	for b in Ordeal.BOUTS.size():
+		var w := 0
+		while ordeal.state != "fight" and w < 60 * 10:
+			w += 1
+			await get_tree().physics_frame
+		var live: Array = ordeal.foes.filter(func(f): return is_instance_valid(f) and f.alive)
+		var want: int = (Ordeal.BOUTS[b][1] as Array).size()
+		print("[ordeal] bout %d: %s" % [b + 1, str(live.map(func(f): return f.display_name()))])
+		_check("bout %d brings its %d foe(s)" % [b + 1, want], live.size() == want and live.all(func(f): return f.global_position.distance_to(ordeal.centre) < Ordeal.R))
+		if b == 0:
+			for i in 60 * 3:
+				await get_tree().physics_frame
+			_check("the foe hunts you", live[0].enemy == player)
+			_check("no sudden victory in the ring", phase == "playing")
+		for f in live:
+			var g := 0
+			while f.alive and g < 400:
+				g += 1
+				f.take_damage(80.0, f.global_position + Vector3.UP * 1.7, true, player)
+		for i in 5:
+			await get_tree().physics_frame
+		print("[ordeal] after the kill: state %s, bout %d, foes alive %s, phase %s" % [ordeal.state, ordeal.bout, str(ordeal.foes.map(func(f): return is_instance_valid(f) and f.alive)), phase])
+		if b < Ordeal.BOUTS.size() - 1:
+			_check("bout %d won: three altars" % (b + 1), ordeal.state == "choose" and ordeal._altars.size() == mini(3, Writs.GIFTS.size() - Ordeal.NO_GIFTS.size() - b))
+			if ordeal.state != "choose":
+				continue
+			var ap: Vector3 = ordeal._altars[0].pos
+			player.global_position = ap + Vector3(0.6, 0.3, 0.0)
+			player.velocity = Vector3.ZERO
+			for i in 3:
+				await get_tree().physics_frame
+			if b == 0:
+				print("[ordeal] at an altar: %s" % ordeal.prompt(player.global_position))
+			_check("a gift taken from the altar", ordeal.interact(player.global_position) and player.gifts.size() == gifts0 + b + 1)
+	for i in 5:
+		await get_tree().physics_frame
+	print("[ordeal] endured in %.0f s; best bout %d, best time %.0f" % [ordeal.time if ordeal != null else -1.0, Ordeal.best_bout, Ordeal.best_time])
+	_check("the ordeal is endured", phase == "end" and winner and hud.end_title.text == "ORDEAL ENDURED")
+	_check("the record is kept", Ordeal.best_bout == Ordeal.BOUTS.size() and Ordeal.best_time > 0.0)
+	# Again, and this time fall.
+	_start_match()
+	for i in 20:
+		await get_tree().physics_frame
+	_check("a second ordeal, a clean ring", ordeal != null and ordeal.bout == 0 and bots.is_empty())
+	# The ring holds you.
+	player.spawn_protect = 0.0
+	var h0 := player.hp
+	player.global_position = ground_at(ordeal.centre + Vector3(Ordeal.R + 6.0, 30.0, 0.0)) + Vector3.UP * 0.3
+	for i in 60 * 2:
+		await get_tree().physics_frame
+	var out_d := Vector2(player.global_position.x - ordeal.centre.x, player.global_position.z - ordeal.centre.z).length()
+	print("[ordeal] outside the ring: hp %.0f -> %.0f, now %.0f m out" % [h0, player.hp, out_d])
+	_check("the ring holds you", player.hp < h0 and out_d < Ordeal.R + 6.0)
+	player.take_damage(999.0, player.global_position, false, null)
+	for i in 5:
+		await get_tree().physics_frame
+	_check("falling ends it", phase == "end" and hud.end_title.text == "THE ORDEAL" and ordeal.state == "fallen")
+	print("[ordeal] end line: %s" % hud.end_sub.text)
+	print("[ordeal] done")
 	get_tree().quit()
 
 
