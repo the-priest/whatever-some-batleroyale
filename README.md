@@ -131,6 +131,15 @@ apart: it holds a hoard (a top-tier rifle, level 3 armour and helmet, medkits), 
 Bosses you have come upon are marked on your map with a skull (crossed out once they fall), and when
 a Colossus is on you the music turns to GRAVEBLADE and comes up in the mix.
 
+## The Bellkeeper
+
+**Mourne, the Bellkeeper**, a pale knight under a great bronze bell that hangs over it from
+nothing, holds a landmark of its own. When it tolls, the bell swings and **rings of sound roll out
+along the ground** from it, one after another (three at a time once it rages). Jump as each ring
+reaches you: anyone with their feet on the ground when it passes is struck and thrown. Keep your
+distance and it throws a **peal**: a wide fan of five slow balls of pale fire. Felling it pays
+1,600 Embers, a Sigil and a Gift. It is also the fourth bout of the Ordeal.
+
 ## The Ashen Hollow
 
 Somewhere on every island stands a wall of ash a hundred metres across: the **Ashen Hollow**. Inside,
@@ -152,18 +161,20 @@ every brazier and the Heart; everyone sees the same flames.
 
 **THE ORDEAL** on the main menu is a solo boss rush. You start in a ring of standing stones on a level
 stone floor, cleared of trees, with a rifle, a marksman rifle, level 2 armour, two medkits and
-bandages. No soldiers, no storm, no loot from the fallen. Six bouts, one after another:
+bandages. No soldiers, no storm, no loot from the fallen. Seven bouts, one after another:
 
 1. **The First Bout**: a Revenant.
 2. **The Keeper**: the Hollow Warden.
 3. **The Giant**: a Colossus.
-4. **The Twin Oaths**: two Revenants at once.
-5. **The Second Giant**: another Colossus, with a different signature attack.
-6. **The Ashen Choir**: the Warden and a Colossus together.
+4. **The Tolling**: the Bellkeeper.
+5. **The Twin Oaths**: two Revenants at once.
+6. **The Second Giant**: another Colossus, with a different signature attack.
+7. **The Ashen Choir**: the Warden and a Colossus together.
 
 Your health carries from bout to bout; winning one gives back 30 and refills your ammo. Then three
 altars rise, each holding a Gift, and you take one of the three for the rest of the Ordeal (choose
-well: Titan, Second Wind, Blink, Ember Aegis, Bloodthirst). The ring holds you: step past its edge of
+well: Titan, Second Wind, Blink, Ember Aegis, Bloodthirst; once all five are yours the altars stop
+rising). The ring holds you: step past its edge of
 embers and it pushes you back and burns you. Fall and the Ordeal is over. The bout and timer show at
 the top of the screen; the furthest bout you have reached and your fastest full Ordeal are kept and
 shown under the menu button. SPACE on the end screen starts another.
@@ -445,7 +456,7 @@ fires rays through every window and door opening on the map, `--fantasy` climbs 
 the mushroom caps, and `--drive` tests the jeep.
 
 Souls-like systems: `--writs`, `--revenant`, `--colossus`, `--vault`, `--gods`, `--events`,
-`--renown`, `--codex`, `--chests`, `--ordeal` (all six bouts, the altars, the win, the ring's edge
+`--renown`, `--codex`, `--chests`, `--bell` (the toll strikes you on the ground and passes under you in the air), `--ordeal` (all seven bouts, the altars, the win, the ring's edge
 and a fall) and `--hollow` (walks into the Ashen Hollow, lights its braziers,
 wakes and fells the Warden and takes the Heart).
 

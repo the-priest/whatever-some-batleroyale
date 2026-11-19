@@ -274,7 +274,7 @@ so on.
 
 ## Phase 7: The Ordeal DONE
 
-A solo boss rush: six bouts in a ring of standing stones (Revenant, the Hollow Warden, a Colossus,
+A solo boss rush: seven bouts in a ring of standing stones (Revenant, the Hollow Warden, a Colossus, the Bellkeeper,
 twin Revenants, a second Colossus, then the Warden and a Colossus together), health carried over,
 a choice of one Gift of three after each bout, records kept in the profile. Next: bindings (optional
 handicaps for the Ordeal: no armour, half health, no Gifts) and more bouts as new bosses arrive.

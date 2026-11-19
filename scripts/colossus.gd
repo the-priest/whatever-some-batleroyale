@@ -461,5 +461,34 @@ static func show_fx(game: Node, fx: Dictionary) -> void:
 			tw3.tween_property(l, "light_energy", 0.0, 0.35)
 			tw3.tween_callback(l.queue_free)
 			game.play_sfx_at("explosion", fx["p"], 2.0)
+		"toll":
+			# A knee-high wall of sound rolling out along the ground: jump it.
+			var ring := MeshInstance3D.new()
+			var cm := CylinderMesh.new()
+			cm.top_radius = 1.0
+			cm.bottom_radius = 1.0
+			cm.height = 0.9
+			cm.radial_segments = 72
+			cm.rings = 1
+			cm.cap_top = false
+			cm.cap_bottom = false
+			ring.mesh = cm
+			var m := StandardMaterial3D.new()
+			m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+			m.albedo_color = Color(1.0, 0.82, 0.45, 0.85)
+			m.cull_mode = BaseMaterial3D.CULL_DISABLED
+			ring.material_override = m
+			ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			game.add_child(ring)
+			ring.global_position = (fx["p"] as Vector3) + Vector3.UP * 0.45
+			var mx := float(fx.get("m", 44.0))
+			var dur := mx / maxf(1.0, float(fx.get("s", 12.0)))
+			ring.scale = Vector3(0.6, 1.0, 0.6)
+			var tw := ring.create_tween()
+			tw.tween_property(ring, "scale", Vector3(mx, 1.0, mx), dur)
+			tw.parallel().tween_property(m, "albedo_color:a", 0.25, dur)
+			tw.tween_callback(ring.queue_free)
 		"roar":
 			game.spawn_smoke((fx["p"] as Vector3) + Vector3.UP * 0.5, 2.0)

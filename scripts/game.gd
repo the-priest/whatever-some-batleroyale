@@ -380,6 +380,8 @@ func _ready() -> void:
 		_run_hollow_test()
 	elif OS.get_cmdline_user_args().has("--ordeal"):
 		_run_ordeal_test()
+	elif OS.get_cmdline_user_args().has("--bell"):
+		_run_bell_test()
 	elif OS.get_cmdline_user_args().has("--colossus"):
 		_run_colossus_test()
 	elif OS.get_cmdline_user_args().has("--revenant"):
@@ -879,9 +881,9 @@ func _begin_ordeal() -> void:
 	player._emit_health()
 	hud.set_plane_path(Vector3.ZERO, Vector3.ZERO)
 	if Ordeal.bound.is_empty():
-		hud.show_notice("SIX BOUTS. HEALTH CARRIES OVER. A GIFT AFTER EACH. THE RING HOLDS YOU.", 5.0)
+		hud.show_notice("%d BOUTS. HEALTH CARRIES OVER. A GIFT AFTER EACH. THE RING HOLDS YOU." % Ordeal.BOUTS.size(), 5.0)
 	else:
-		hud.show_notice("SIX BOUTS, BOUND BY %s." % ", ".join(Ordeal.BINDINGS.filter(func(b): return Ordeal.bound.has(b[0])).map(func(b): return str(b[1]).replace("BINDING OF ", ""))), 5.0)
+		hud.show_notice("%d BOUTS, BOUND BY %s." % [Ordeal.BOUTS.size(), ", ".join(Ordeal.BINDINGS.filter(func(b): return Ordeal.bound.has(b[0])).map(func(b): return str(b[1]).replace("BINDING OF ", "")))], 5.0)
 	ordeal.begin()
 
 
@@ -2343,13 +2345,45 @@ func _spawn_revenants() -> void:
 		bots.append(wd)
 		hollow.warden = wd
 		giants += 1
+	# Mourne, the Bellkeeper, at a landmark of its own.
+	for l in sites:
+		var c2: Vector2 = l[1]
+		var taken2 := false
+		for b in bots:
+			if is_instance_valid(b) and b is Revenant and Vector2((b as Revenant).arena.x, (b as Revenant).arena.z).distance_to(c2) < 200.0:
+				taken2 = true
+		if taken2:
+			continue
+		var at2 := Vector3.INF
+		for k in 60:
+			var a2 := randf() * TAU
+			var q2 := c2 + Vector2(cos(a2), sin(a2)) * randf_range(8.0, 40.0)
+			var h2 := terrain.height_at(q2.x, q2.y)
+			if h2 < terrain.water_surface_at(q2.x, q2.y) + 0.8 or terrain.slope_at(q2.x, q2.y) > 0.25 or _on_building(q2.x, q2.y):
+				continue
+			var g2 := ground_at(Vector3(q2.x, h2 + 30.0, q2.y))
+			if absf(g2.y - h2) > 0.8:
+				continue
+			at2 = g2
+			break
+		if at2 == Vector3.INF:
+			continue
+		var bk := Bellkeeper.new()
+		bk.setup_bell(at2, self)
+		add_child(bk)
+		bk.global_position = at2 + Vector3.UP * 0.3
+		bk.arm_weapon("dmr")
+		bk.eliminated.connect(_on_bot_eliminated)
+		bots.append(bk)
+		giants += 1
+		break
 	print("[revenants] %d hold the island: %s" % [made + giants, str(bots.filter(func(b): return is_instance_valid(b) and b is Revenant).map(func(b): return "%s @ %s" % [b.display_name(), str(Vector3(b.arena).round())]))])
 
 
 ## A Revenant fell: a bell over the whole island, and its hoard on the ground.
 func _revenant_fell(r: Revenant, killer: String) -> void:
 	sfx.play_ui("writ_done", -1.0)
-	hud.show_big("COLOSSUS FELLED" if r is Colossus else ("WARDEN FELLED" if r is HollowWarden else "REVENANT FELLED"), Color(1.0, 0.82, 0.38), 3.6)
+	hud.show_big("COLOSSUS FELLED" if r is Colossus else ("WARDEN FELLED" if r is HollowWarden else ("THE BELL FALLS SILENT" if r is Bellkeeper else "REVENANT FELLED")), Color(1.0, 0.82, 0.38), 3.6)
 	hud.show_notice("%s  —  SLAIN BY %s" % [r.display_name(), killer if killer != "" else "THE STORM"], 4.0)
 	if net_is_client() or ordeal != null:
 		return
@@ -2469,9 +2503,9 @@ func _update_boss_bar() -> void:
 		hud.show_big("%s RAGES" % best.bot_name, HUD.DANGER, 2.4)
 		hud.show_notice("THE PACK ANSWERS ITS CALL", 2.6)
 		sfx.play_ui("writ_fail", -4.0)
-	hud.set_boss({"name": best.bot_name, "title": best.title, "hp": clampf(best.hp / 100.0, 0.0, 1.0), "raged": raged, "big": best is HollowWarden})
+	hud.set_boss({"name": best.bot_name, "title": best.title, "hp": clampf(best.hp / 100.0, 0.0, 1.0), "raged": raged, "big": best is HollowWarden or best is Bellkeeper})
 	if music != null:
-		music.set_boss(best is HollowWarden and best_d < 60.0)
+		music.set_boss((best is HollowWarden or best is Bellkeeper) and best_d < 60.0)
 
 
 func _drop_bot_loot(b: Bot) -> void:
@@ -3953,6 +3987,10 @@ func _run_shot() -> void:
 				var far := 3.0 if rv[ri] is Colossus else 1.0
 				spot = Vector3(rp.x + 3.2 * far, 0.0, rp.z + 2.0 * far)
 				ang = atan2(3.2, 2.0)
+				if rv[ri] is Bellkeeper and OS.get_cmdline_user_args().has("--tollfx"):
+					Colossus.show_fx(self, {"k": "toll", "p": rp, "s": 12.0, "m": 44.0})
+					far = 3.0
+					spot = Vector3(rp.x + 3.2 * far, 0.0, rp.z + 2.0 * far)
 				if rv[ri] is Colossus and OS.get_cmdline_user_args().has("--slamfx"):
 					Colossus.show_fx(self, {"k": "slam", "p": rp, "r": Colossus.SLAM_R, "w": 30.0})
 				(rv[ri] as Bot).set_physics_process(false)
@@ -5169,7 +5207,7 @@ func _net_send_setup() -> void:
 		var b = bots[bi]
 		bot_names.append(b.bot_name)
 		if is_instance_valid(b) and b is Revenant:
-			revs.append([bi, (b as Revenant).title, (b as Revenant).arena, b is Colossus, "warden" if b is HollowWarden else ""])
+			revs.append([bi, (b as Revenant).title, (b as Revenant).arena, b is Colossus, "warden" if b is HollowWarden else ("bell" if b is Bellkeeper else "")])
 	var list: Array = []
 	for id in net.roster:
 		list.append([id, net.roster[id]])
@@ -5243,7 +5281,11 @@ func net_start_match(setup: Dictionary) -> void:
 	for i in names.size():
 		var b: Bot = null
 		if rev_at.has(i):
-			if (rev_at[i] as Array).size() > 4 and str(rev_at[i][4]) == "warden":
+			if (rev_at[i] as Array).size() > 4 and str(rev_at[i][4]) == "bell":
+				var bk := Bellkeeper.new()
+				bk.setup_bell(rev_at[i][2], self)
+				b = bk
+			elif (rev_at[i] as Array).size() > 4 and str(rev_at[i][4]) == "warden":
 				var hw := HollowWarden.new()
 				hw.setup_warden(rev_at[i][2], self)
 				b = hw
@@ -6607,6 +6649,71 @@ func _run_chests_test() -> void:
 	get_tree().quit()
 
 
+## The Bellkeeper's toll: a ring catches you on the ground and passes under
+## you in the air.
+func _run_bell_test() -> void:
+	_start_match()
+	for i in 30:
+		await get_tree().physics_frame
+	_land_player_now()
+	var bks: Array = bots.filter(func(b): return is_instance_valid(b) and b is Bellkeeper)
+	_check("the bellkeeper holds a landmark", bks.size() == 1)
+	if bks.is_empty():
+		get_tree().quit()
+		return
+	var bk: Bellkeeper = bks[0]
+	print("[bell] %s at %s" % [bk.display_name(), str(bk.arena.round())])
+	player.vest_level = 3
+	player.armor = 100.0
+	player.helmet_level = 3
+	player.helmet_hp = 100.0
+	player.spawn_protect = 0.0
+	var spot := _dry_spot_near(bk.global_position, 12.0)
+	var results: Array = []
+	for attempt in 2:
+		var airborne := attempt == 1
+		player.global_position = spot
+		player.velocity = Vector3.ZERO
+		player.hp = 100.0
+		bk.enemy = player
+		bk._peal_t = 999.0
+		bk._toll_t = 0.0
+		var h0 := bk.toll_hits
+		var saw_ring := false
+		for i in 60 * 6:
+			await get_tree().physics_frame
+			bk.enemy = player
+			bk._peal_t = 999.0
+			player.hp = 100.0
+			player.armor = 100.0
+			player.helmet_hp = 100.0
+			if not bk._rings_out.is_empty():
+				saw_ring = true
+			if airborne:
+				# Hold the player in the air (as if jumping every ring).
+				player.global_position = spot + Vector3.UP * 2.5
+				player.velocity = Vector3.ZERO
+			elif i % 2 == 0:
+				player.global_position = Vector3(spot.x, player.global_position.y, spot.z)
+			if saw_ring and bk._rings_out.is_empty() and bk._tolls_left == 0 and bk._toll_in < 0.0:
+				break
+		results.append([saw_ring, bk.toll_hits - h0])
+		print("[bell] %s: ring seen %s, rings that struck %d" % ["in the air" if airborne else "on the ground", str(saw_ring), bk.toll_hits - h0])
+		player.spawn_protect = 0.0
+	_check("its toll sends rings out", bool(results[0][0]) and bool(results[1][0]))
+	_check("a ring strikes you on the ground", int(results[0][1]) >= 1)
+	_check("a ring passes under you in the air", int(results[1][1]) == 0)
+	var e0 := writs.my_embers
+	var g := 0
+	while bk.alive and g < 400:
+		g += 1
+		bk.take_damage(60.0, bk.global_position + Vector3.UP * 1.7, true, player)
+	await get_tree().physics_frame
+	_check("the bell falls silent and pays", not bk.alive and writs.my_embers >= e0 + 1600)
+	print("[bell] done")
+	get_tree().quit()
+
+
 ## Runs the Ordeal: all six bouts, a Gift from each altar, the win; then a
 ## second run that falls.
 func _run_ordeal_test() -> void:
@@ -6647,8 +6754,12 @@ func _run_ordeal_test() -> void:
 		for i in 5:
 			await get_tree().physics_frame
 		print("[ordeal] after the kill: state %s, bout %d, foes alive %s, phase %s" % [ordeal.state, ordeal.bout, str(ordeal.foes.map(func(f): return is_instance_valid(f) and f.alive)), phase])
+		var left := Writs.GIFTS.size() - Ordeal.NO_GIFTS.size() - b
+		if b < Ordeal.BOUTS.size() - 1 and left <= 0:
+			_check("bout %d won: no gifts left, straight on" % (b + 1), ordeal.state == "rest" and ordeal.bout == b + 1)
+			continue
 		if b < Ordeal.BOUTS.size() - 1:
-			_check("bout %d won: three altars" % (b + 1), ordeal.state == "choose" and ordeal._altars.size() == mini(3, Writs.GIFTS.size() - Ordeal.NO_GIFTS.size() - b))
+			_check("bout %d won: three altars" % (b + 1), ordeal.state == "choose" and ordeal._altars.size() == mini(3, left))
 			if ordeal.state != "choose":
 				continue
 			var ap: Vector3 = ordeal._altars[0].pos
@@ -7053,7 +7164,7 @@ func _run_revenant_test() -> void:
 	_land_player_now()
 	player.spawn_protect = 99999.0
 	player.give_weapon("rifle")
-	var revs: Array = bots.filter(func(b): return is_instance_valid(b) and b is Revenant and not (b is Colossus) and not (b is HollowWarden))
+	var revs: Array = bots.filter(func(b): return is_instance_valid(b) and b is Revenant and not (b is Colossus) and not (b is HollowWarden) and not (b is Bellkeeper))
 	_check("three revenants hold the island", revs.size() == REVENANT_COUNT)
 	_check("revenants are not counted among the living", alive == total_players)
 	if revs.is_empty():

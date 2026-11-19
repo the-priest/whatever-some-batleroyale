@@ -17,6 +17,7 @@ const BOUTS := [
 	["THE FIRST BOUT", ["revenant"]],
 	["THE KEEPER", ["warden"]],
 	["THE GIANT", ["colossus"]],
+	["THE TOLLING", ["bell"]],
 	["THE TWIN OATHS", ["revenant", "revenant"]],
 	["THE SECOND GIANT", ["colossus"]],
 	["THE ASHEN CHOIR", ["warden", "colossus"]],
@@ -106,7 +107,7 @@ static func record_line() -> String:
 
 static func _record_head() -> String:
 	if best_bout <= 0:
-		return "SIX BOUTS  ·  NO REST  ·  ONE GIFT AFTER EACH"
+		return "%d BOUTS  ·  NO REST  ·  ONE GIFT AFTER EACH" % BOUTS.size()
 	if best_bout >= BOUTS.size() and best_time > 0.0:
 		return "ENDURED  ·  BEST TIME %s%s" % [_clock(best_time), ("  ·  MOST BOUND %d" % best_bound) if best_bound > 0 else ""]
 	return "BEST: BOUT %d OF %d" % [best_bout, BOUTS.size()]
@@ -382,6 +383,10 @@ func _spawn(kind: String, at: Vector3) -> Revenant:
 			var cg := Colossus.new()
 			cg.setup_colossus(str(gn[0]), str(gn[1]), centre, game)
 			f = cg
+		"bell":
+			var bk := Bellkeeper.new()
+			bk.setup_bell(centre, game)
+			f = bk
 		"warden":
 			var wd := HollowWarden.new()
 			wd.setup_warden(centre, game)
@@ -393,6 +398,8 @@ func _spawn(kind: String, at: Vector3) -> Revenant:
 	f.global_position = at + Vector3.UP * 0.4
 	if f is Colossus:
 		f.arm_weapon("lmg")
+	elif f is Bellkeeper:
+		f.arm_weapon("dmr")
 	elif f is HollowWarden:
 		f.arm_weapon("dmr")
 		(f as HollowWarden).wake()
