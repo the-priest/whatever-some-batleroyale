@@ -29,6 +29,8 @@ const BINDINGS := [
 	["want", "BINDING OF WANT", "No Gifts from the altars"],
 	["arms", "BINDING OF ARMS", "A sidearm and nothing more"],
 ]
+## The hidden bout, for those who have endured the Ordeal before.
+const SECRET := ["THE UNKINDLED", ["unkindled"]]
 ## Gifts no use in the ring.
 const NO_GIFTS := ["storm", "hawk"]
 
@@ -46,12 +48,17 @@ var _root: Node3D
 var _used_rev: Array = []
 var _used_giant: Array = []
 var _floor_lo := 0.0
+var secret_open := false
+## Seven endured this run (the hidden bout may follow).
+var endured_run := false
 var _hud_t := 0.0
 
 static var best_bout := 0
 static var best_time := 0.0
 ## The most bindings an Ordeal has been endured under.
 static var best_bound := 0
+## The Unkindled has been slain (ever).
+static var unkindled_slain := false
 static var bound: Dictionary = {}
 static var _loaded := false
 ## Headless checks run the Ordeal without touching the player's records.
@@ -68,6 +75,7 @@ static func load_record() -> void:
 	best_bout = int(cfg.get_value("ordeal", "best_bout", 0))
 	best_time = float(cfg.get_value("ordeal", "best_time", 0.0))
 	best_bound = int(cfg.get_value("ordeal", "best_bound", 0))
+	unkindled_slain = bool(cfg.get_value("ordeal", "unkindled", false))
 	for b in BINDINGS:
 		if bool(cfg.get_value("ordeal_bind", b[0], false)):
 			bound[b[0]] = true
@@ -81,6 +89,7 @@ static func save_record() -> void:
 	cfg.set_value("ordeal", "best_bout", best_bout)
 	cfg.set_value("ordeal", "best_time", best_time)
 	cfg.set_value("ordeal", "best_bound", best_bound)
+	cfg.set_value("ordeal", "unkindled", unkindled_slain)
 	cfg.save(PATH)
 
 
@@ -108,6 +117,8 @@ static func record_line() -> String:
 static func _record_head() -> String:
 	if best_bout <= 0:
 		return "%d BOUTS  ·  NO REST  ·  ONE GIFT AFTER EACH" % BOUTS.size()
+	if unkindled_slain:
+		return "THE UNKINDLED SLAIN  ·  BEST TIME %s%s" % [_clock(best_time), ("  ·  MOST BOUND %d" % best_bound) if best_bound > 0 else ""]
 	if best_bout >= BOUTS.size() and best_time > 0.0:
 		return "ENDURED  ·  BEST TIME %s%s" % [_clock(best_time), ("  ·  MOST BOUND %d" % best_bound) if best_bound > 0 else ""]
 	return "BEST: BOUT %d OF %d" % [best_bout, BOUTS.size()]
@@ -322,6 +333,8 @@ func _build() -> void:
 
 func cleanup() -> void:
 	_clear_altars()
+	if game != null and game.world != null and in_secret():
+		_set_dark(-1.0)
 	if game != null and game.world != null:
 		game.world.restore_trees()
 	if _root != null and is_instance_valid(_root):
@@ -332,25 +345,42 @@ func cleanup() -> void:
 func begin() -> void:
 	bout = -1
 	time = 0.0
+	# Those who have endured it once find something more waiting at its end.
+	secret_open = best_time > 0.0
 	_next_bout()
+
+
+## The bout `i`: one of the seven, or the hidden one after them.
+func bout_def(i: int) -> Array:
+	return BOUTS[i] if i < BOUTS.size() else SECRET
+
+
+func in_secret() -> bool:
+	return bout >= BOUTS.size()
 
 
 func _next_bout() -> void:
 	bout += 1
-	if bout >= BOUTS.size():
+	if bout > BOUTS.size() or (bout == BOUTS.size() and not secret_open):
 		_endured()
 		return
 	state = "rest"
 	_rest_t = REST
-	var b: Array = BOUTS[bout]
-	game.hud.show_big("BOUT %d  ·  %s" % [bout + 1, str(b[0])], Color(1.0, 0.7, 0.4), 3.0)
+	var b: Array = bout_def(bout)
+	if in_secret():
+		_rest_t = REST + 2.0
+		game.hud.show_big("THE STONES DO NOT OPEN", Color(0.7, 0.8, 1.0), 3.0)
+		game.hud.show_notice("SOMETHING KNELT HERE BEFORE THE ORDEAL BEGAN  —  %s" % str(b[0]), 4.5)
+		_set_dark(0.55)
+	else:
+		game.hud.show_big("BOUT %d  ·  %s" % [bout + 1, str(b[0])], Color(1.0, 0.7, 0.4), 3.0)
 	game.sfx.play_ui("event_horn", -4.0)
 
 
 func _spawn_bout() -> void:
 	state = "fight"
 	foes.clear()
-	var kinds: Array = BOUTS[bout][1]
+	var kinds: Array = bout_def(bout)[1]
 	for i in kinds.size():
 		var a := TAU * float(i) / float(kinds.size()) + randf() * TAU
 		var at: Vector3 = game.ground_at(centre + Vector3(cos(a), 0.0, sin(a)) * (R * 0.55) + Vector3.UP * 30.0)
@@ -387,6 +417,10 @@ func _spawn(kind: String, at: Vector3) -> Revenant:
 			var bk := Bellkeeper.new()
 			bk.setup_bell(centre, game)
 			f = bk
+		"unkindled":
+			var uk := Unkindled.new()
+			uk.setup_unkindled(centre, game)
+			f = uk
 		"warden":
 			var wd := HollowWarden.new()
 			wd.setup_warden(centre, game)
@@ -398,6 +432,8 @@ func _spawn(kind: String, at: Vector3) -> Revenant:
 	f.global_position = at + Vector3.UP * 0.4
 	if f is Colossus:
 		f.arm_weapon("lmg")
+	elif f is Unkindled:
+		f.arm_weapon("axmc")
 	elif f is Bellkeeper:
 		f.arm_weapon("dmr")
 	elif f is HollowWarden:
@@ -423,7 +459,10 @@ func _physics_process(delta: float) -> void:
 	_hud_t -= delta
 	if _hud_t <= 0.0 and game.hud.lbl_alive != null:
 		_hud_t = 0.25
-		game.hud.lbl_alive.text = "BOUT %d / %d   ·   %s" % [clampi(bout + 1, 1, BOUTS.size()), BOUTS.size(), _clock(time)]
+		if in_secret():
+			game.hud.lbl_alive.text = "THE LAST BOUT   ·   %s" % _clock(time)
+		else:
+			game.hud.lbl_alive.text = "BOUT %d / %d   ·   %s" % [clampi(bout + 1, 1, BOUTS.size()), BOUTS.size(), _clock(time)]
 	# The ring holds you.
 	var off := p.global_position - centre
 	off.y = 0.0
@@ -457,11 +496,22 @@ func _bout_won() -> void:
 		if w != "":
 			p.add_ammo_cal(Weapons.caliber(w), int(Weapons.AMMO_BOX.get(Weapons.caliber(w), 30)) * 2)
 	p.inventory_changed.emit()
-	if bout + 1 > best_bout:
+	if bout + 1 > best_bout and not in_secret():
 		best_bout = bout + 1
 		save_record()
-	if bout + 1 >= BOUTS.size():
+	if in_secret():
+		unkindled_slain = true
 		_endured()
+		return
+	if bout + 1 >= BOUTS.size():
+		_record_endured()
+		if not secret_open:
+			_endured()
+			return
+		# The seven are endured; the record is kept. Then the ring darkens.
+		game.sfx.play_ui("writ_done", -3.0)
+		game.hud.show_big("SEVEN BOUTS ENDURED", Color(1.0, 0.86, 0.45), 2.4)
+		_next_bout()
 		return
 	game.sfx.play_ui("writ_done", -3.0)
 	game.hud.show_big("BOUT %d WON" % (bout + 1), Color(1.0, 0.86, 0.45), 2.4)
@@ -581,6 +631,7 @@ func on_player_fell() -> void:
 		return
 	state = "fallen"
 	_clear_altars()
+	_set_dark(-1.0)
 	if bout > best_bout:
 		best_bout = bout
 		save_record()
@@ -589,16 +640,51 @@ func on_player_fell() -> void:
 ## Text for the end screen.
 func end_line() -> String:
 	var bt := ("   ·   %d BOUND" % bound.size()) if bound.size() > 0 else ""
+	if state == "done" and in_secret():
+		return "THE UNKINDLED IS SLAIN  ·  %s%s" % [_clock(time), bt]
+	if in_secret():
+		return "ALL %d BOUTS ENDURED  ·  FELL TO THE UNKINDLED%s" % [BOUTS.size(), bt]
 	if state == "done":
 		return "ALL %d BOUTS  ·  %s   ·   BEST %s%s" % [BOUTS.size(), _clock(time), _clock(best_time), bt]
 	return "FELL IN BOUT %d OF %d  ·  %s   ·   BEST: BOUT %d%s" % [bout + 1, BOUTS.size(), str(BOUTS[clampi(bout, 0, BOUTS.size() - 1)][0]), best_bout, bt]
 
 
-func _endured() -> void:
-	state = "done"
+## The seven are behind you: the time and the bindings are recorded.
+func _record_endured() -> void:
+	if endured_run:
+		return
+	endured_run = true
 	best_bout = BOUTS.size()
 	if best_time <= 0.0 or time < best_time:
 		best_time = time
 	best_bound = maxi(best_bound, bound.size())
 	save_record()
+
+
+func _endured() -> void:
+	state = "done"
+	_record_endured()
+	save_record()
+	_set_dark(-1.0)
 	game.ordeal_endured()
+
+
+## The ring darkens for the hidden bout (-1: as it was).
+func _set_dark(k: float) -> void:
+	if game.hollow != null:
+		game.hollow.force_k = k
+		if k < 0.0:
+			game.hollow._k = 0.0
+	game.world.set_hollow(maxf(k, 0.0))
+
+
+## The Unkindled calls echoes of the Revenants into the ring.
+func call_echoes(n: int) -> void:
+	for i in n:
+		var a := randf() * TAU
+		var at: Vector3 = game.ground_at(centre + Vector3(cos(a), 0.0, sin(a)) * (R * 0.7) + Vector3.UP * 30.0)
+		var f := _spawn("revenant", at)
+		if f != null:
+			f.set_meta("echo", true)
+			foes.append(f)
+			game.spawn_smoke(at + Vector3.UP, 2.0)

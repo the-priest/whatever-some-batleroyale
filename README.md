@@ -179,6 +179,13 @@ embers and it pushes you back and burns you. Fall and the Ordeal is over. The bo
 the top of the screen; the furthest bout you have reached and your fastest full Ordeal are kept and
 shown under the menu button. SPACE on the end screen starts another.
 
+**The last bout.** Endure the Ordeal once and it is never quite over again: win the seventh bout
+and the stones do not open. The ring darkens, and **the Unkindled** rises, a tall black knight
+crowned with a cold iron bell, the toughest thing on the island. It fights in three parts: first the
+toll and the peal; below two thirds the ash nova and the ashen step; below one third it burns,
+everything comes faster, and it calls two echoes of the Revenants into the ring. Your seven-bout time
+is recorded before it rises. Slay it and the end screen says so; the menu remembers.
+
 **Bindings** (in the OATHS screen) make it harder, for those who have endured it: the **Binding of
 Flesh** (no armour, no helmet), **of Breath** (no health back between bouts), **of Want** (no Gifts:
 the altars never rise) and **of Arms** (a sidearm and nothing more). They hold until you break them,
@@ -456,7 +463,8 @@ fires rays through every window and door opening on the map, `--fantasy` climbs 
 the mushroom caps, and `--drive` tests the jeep.
 
 Souls-like systems: `--writs`, `--revenant`, `--colossus`, `--vault`, `--gods`, `--events`,
-`--renown`, `--codex`, `--chests`, `--bell` (the toll strikes you on the ground and passes under you in the air), `--ordeal` (all seven bouts, the altars, the win, the ring's edge
+`--renown`, `--codex`, `--chests`, `--unkindled` (an Ordeal already endured, all seven bouts, then the hidden one through its three
+parts), `--bell` (the toll strikes you on the ground and passes under you in the air), `--ordeal` (all seven bouts, the altars, the win, the ring's edge
 and a fall) and `--hollow` (walks into the Ashen Hollow, lights its braziers,
 wakes and fells the Warden and takes the Heart).
 

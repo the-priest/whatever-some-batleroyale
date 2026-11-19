@@ -382,6 +382,8 @@ func _ready() -> void:
 		_run_ordeal_test()
 	elif OS.get_cmdline_user_args().has("--bell"):
 		_run_bell_test()
+	elif OS.get_cmdline_user_args().has("--unkindled"):
+		_run_unkindled_test()
 	elif OS.get_cmdline_user_args().has("--colossus"):
 		_run_colossus_test()
 	elif OS.get_cmdline_user_args().has("--revenant"):
@@ -890,7 +892,8 @@ func _begin_ordeal() -> void:
 ## The last bout is won.
 func ordeal_endured() -> void:
 	_win()
-	hud.set_end_text("ORDEAL ENDURED", ordeal.end_line() if ordeal != null else "", Color(1.0, 0.82, 0.4))
+	var slew := ordeal != null and ordeal.in_secret()
+	hud.set_end_text("THE FIRE IS YOURS" if slew else "ORDEAL ENDURED", ordeal.end_line() if ordeal != null else "", Color(0.75, 0.85, 1.0) if slew else Color(1.0, 0.82, 0.4))
 
 
 func _after_match_setup() -> void:
@@ -2383,7 +2386,7 @@ func _spawn_revenants() -> void:
 ## A Revenant fell: a bell over the whole island, and its hoard on the ground.
 func _revenant_fell(r: Revenant, killer: String) -> void:
 	sfx.play_ui("writ_done", -1.0)
-	hud.show_big("COLOSSUS FELLED" if r is Colossus else ("WARDEN FELLED" if r is HollowWarden else ("THE BELL FALLS SILENT" if r is Bellkeeper else "REVENANT FELLED")), Color(1.0, 0.82, 0.38), 3.6)
+	hud.show_big("COLOSSUS FELLED" if r is Colossus else ("WARDEN FELLED" if r is HollowWarden else ("THE UNKINDLED FALLS" if r is Unkindled else ("THE BELL FALLS SILENT" if r is Bellkeeper else "REVENANT FELLED"))), Color(1.0, 0.82, 0.38), 3.6)
 	hud.show_notice("%s  —  SLAIN BY %s" % [r.display_name(), killer if killer != "" else "THE STORM"], 4.0)
 	if net_is_client() or ordeal != null:
 		return
@@ -3710,6 +3713,13 @@ func _run_shot() -> void:
 		od.setup(self)
 		cam_pos = od.centre + Vector3(0, 7.0, Ordeal.R * 0.95)
 		cam_look = od.centre + Vector3(0, 2.0, 0)
+		if OS.get_cmdline_user_args().has("--uk"):
+			var ukf := od._spawn("unkindled", od.centre)
+			ukf.set_physics_process(false)
+			ukf.rotation.y = 0.0
+			od._set_dark(0.55)
+			cam_pos = od.centre + Vector3(1.5, 2.6, 7.5)
+			cam_look = od.centre + Vector3(0, 2.2, 0)
 		if OS.get_cmdline_user_args().has("--altars"):
 			player.global_position = od.centre + Vector3(0, 1, 6)
 			od._raise_altars(["titan", "blink", "second"])
@@ -6649,6 +6659,84 @@ func _run_chests_test() -> void:
 	get_tree().quit()
 
 
+## The hidden bout: an Ordeal already endured once, all seven bouts, then
+## the Unkindled through its three parts.
+func _run_unkindled_test() -> void:
+	Ordeal.no_save = true
+	Ordeal.load_record()
+	Ordeal.best_time = 999.0
+	ordeal_mode = true
+	_start_match()
+	for i in 20:
+		await get_tree().physics_frame
+	_check("the hidden bout is open to one who has endured", ordeal != null and ordeal.secret_open)
+	player.spawn_protect = 99999.0
+	for b in Ordeal.BOUTS.size():
+		var w := 0
+		while ordeal.state != "fight" and w < 60 * 12:
+			w += 1
+			if ordeal.state == "choose" and not ordeal._altars.is_empty():
+				player.global_position = (ordeal._altars[0].pos as Vector3) + Vector3(0.6, 0.3, 0.0)
+				player.velocity = Vector3.ZERO
+				await get_tree().physics_frame
+				ordeal.interact(player.global_position)
+			await get_tree().physics_frame
+		for f in ordeal.foes:
+			var g := 0
+			while is_instance_valid(f) and f.alive and g < 400:
+				g += 1
+				f.take_damage(80.0, f.global_position + Vector3.UP * 1.7, true, player)
+		for i in 5:
+			await get_tree().physics_frame
+	_check("seven endured: the ring darkens instead of opening", ordeal.in_secret() and phase == "playing" and ordeal.state == "rest")
+	_check("the seven are recorded already", ordeal.endured_run)
+	var w2 := 0
+	while ordeal.state != "fight" and w2 < 60 * 12:
+		w2 += 1
+		await get_tree().physics_frame
+	var uk: Unkindled = null
+	for f in ordeal.foes:
+		if f is Unkindled:
+			uk = f
+	print("[unkindled] %s" % (uk.display_name() if uk != null else "none"))
+	_check("the unkindled rises", uk != null and uk.alive and uk.part == 1)
+	_check("the ring is dark", hollow == null or hollow._k > 0.4)
+	if uk == null:
+		get_tree().quit()
+		return
+	uk.hp = 60.0
+	for i in 3:
+		await get_tree().physics_frame
+	_check("its second part", uk.part == 2)
+	player.global_position = _dry_spot_near(uk.global_position, 5.0)
+	var nova := false
+	for i in 60 * 15:
+		await get_tree().physics_frame
+		uk.enemy = player
+		if uk._nova_in >= 0.0:
+			nova = true
+			break
+	_check("it calls the ash nova in its second part", nova)
+	var n0 := ordeal.foes.size()
+	uk.hp = 30.0
+	for i in 3:
+		await get_tree().physics_frame
+	print("[unkindled] part %d, foes %d -> %d" % [uk.part, n0, ordeal.foes.size()])
+	_check("its third part calls two echoes", uk.part == 3 and ordeal.foes.size() == n0 + 2)
+	for f in ordeal.foes:
+		var g2 := 0
+		while is_instance_valid(f) and f.alive and g2 < 600:
+			g2 += 1
+			f.take_damage(80.0, f.global_position + Vector3.UP * 1.7, true, player)
+	for i in 5:
+		await get_tree().physics_frame
+	print("[unkindled] end: %s  /  %s" % [hud.end_title.text, hud.end_sub.text])
+	_check("the fire is yours", phase == "end" and hud.end_title.text == "THE FIRE IS YOURS" and Ordeal.unkindled_slain)
+	_check("the light comes back", hollow == null or hollow.force_k < 0.0)
+	print("[unkindled] done")
+	get_tree().quit()
+
+
 ## The Bellkeeper's toll: a ring catches you on the ground and passes under
 ## you in the air.
 func _run_bell_test() -> void:
@@ -6742,9 +6830,12 @@ func _run_ordeal_test() -> void:
 		print("[ordeal] bout %d: %s" % [b + 1, str(live.map(func(f): return f.display_name()))])
 		_check("bout %d brings its %d foe(s)" % [b + 1, want], live.size() == want and live.all(func(f): return f.global_position.distance_to(ordeal.centre) < Ordeal.R))
 		if b == 0:
+			var hunted := false
 			for i in 60 * 3:
 				await get_tree().physics_frame
-			_check("the foe hunts you", live[0].enemy == player)
+				if live[0].enemy == player:
+					hunted = true
+			_check("the foe hunts you", hunted)
 			_check("no sudden victory in the ring", phase == "playing")
 		for f in live:
 			var g := 0
