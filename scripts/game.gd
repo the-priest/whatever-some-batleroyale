@@ -388,6 +388,8 @@ func _ready() -> void:
 		_run_wyrm_test()
 	elif OS.get_cmdline_user_args().has("--flask"):
 		_run_flask_test()
+	elif OS.get_cmdline_user_args().has("--carrion"):
+		_run_carrion_test()
 	elif OS.get_cmdline_user_args().has("--unkindled"):
 		_run_unkindled_test()
 	elif OS.get_cmdline_user_args().has("--colossus"):
@@ -2359,7 +2361,7 @@ func _spawn_revenants() -> void:
 		giants += 1
 	# Mourne, the Bellkeeper, and Skarn, the Wyrm Beneath, at landmarks of
 	# their own.
-	for kind in ["bell", "wyrm"]:
+	for kind in ["bell", "wyrm", "carrion"]:
 		var at2 := _lone_boss_ground(sites)
 		if at2 == Vector3.INF:
 			continue
@@ -2368,12 +2370,16 @@ func _spawn_revenants() -> void:
 			var bk := Bellkeeper.new()
 			bk.setup_bell(at2, self)
 			lb = bk
+		elif kind == "carrion":
+			var cr := Carrion.new()
+			cr.setup_carrion(at2, self)
+			lb = cr
 		else:
 			var wy := Wyrm.new()
 			wy.setup_wyrm(at2, self)
 			lb = wy
 		add_child(lb)
-		lb.global_position = at2 + (Vector3.DOWN * Wyrm.DEPTH if kind == "wyrm" else Vector3.UP * 0.3)
+		lb.global_position = at2 + (Vector3.DOWN * Wyrm.DEPTH if kind == "wyrm" else (Vector3.UP * Carrion.ALT if kind == "carrion" else Vector3.UP * 0.3))
 		lb.arm_weapon("dmr")
 		lb.eliminated.connect(_on_bot_eliminated)
 		bots.append(lb)
@@ -2407,7 +2413,7 @@ func _lone_boss_ground(sites: Array) -> Vector3:
 ## A Revenant fell: a bell over the whole island, and its hoard on the ground.
 func _revenant_fell(r: Revenant, killer: String) -> void:
 	sfx.play_ui("writ_done", -1.0)
-	hud.show_big("COLOSSUS FELLED" if r is Colossus else ("WARDEN FELLED" if r is HollowWarden else ("THE UNKINDLED FALLS" if r is Unkindled else ("THE BELL FALLS SILENT" if r is Bellkeeper else ("THE WYRM IS SLAIN" if r is Wyrm else "REVENANT FELLED")))), Color(1.0, 0.82, 0.38), 3.6)
+	hud.show_big("COLOSSUS FELLED" if r is Colossus else ("WARDEN FELLED" if r is HollowWarden else ("THE UNKINDLED FALLS" if r is Unkindled else ("THE BELL FALLS SILENT" if r is Bellkeeper else ("THE WYRM IS SLAIN" if r is Wyrm else ("THE CARRION QUEEN FALLS" if r is Carrion else "REVENANT FELLED"))))), Color(1.0, 0.82, 0.38), 3.6)
 	hud.show_notice("%s  —  SLAIN BY %s" % [r.display_name(), killer if killer != "" else "THE STORM"], 4.0)
 	if net_is_client() or ordeal != null:
 		return
@@ -2527,9 +2533,9 @@ func _update_boss_bar() -> void:
 		hud.show_big("%s RAGES" % best.bot_name, HUD.DANGER, 2.4)
 		hud.show_notice("THE PACK ANSWERS ITS CALL", 2.6)
 		sfx.play_ui("writ_fail", -4.0)
-	hud.set_boss({"name": best.bot_name, "title": best.title, "hp": clampf(best.hp / 100.0, 0.0, 1.0), "raged": raged, "big": best is HollowWarden or best is Bellkeeper or best is Wyrm})
+	hud.set_boss({"name": best.bot_name, "title": best.title, "hp": clampf(best.hp / 100.0, 0.0, 1.0), "raged": raged, "big": best is HollowWarden or best is Bellkeeper or best is Wyrm or best is Carrion})
 	if music != null:
-		music.set_boss((best is HollowWarden or best is Bellkeeper or best is Wyrm) and best_d < 60.0)
+		music.set_boss((best is HollowWarden or best is Bellkeeper or best is Wyrm or best is Carrion) and best_d < 60.0)
 
 
 func _drop_bot_loot(b: Bot) -> void:
@@ -4014,12 +4020,16 @@ func _run_shot() -> void:
 			var rv: Array = bots.filter(func(b): return is_instance_valid(b) and b is Revenant)
 			var ri := int(a.substr(6))
 			if ri < rv.size():
+				if rv[ri] is Carrion:
+					var cr0: Carrion = rv[ri]
+					cr0.global_position = ground_at(cr0.arena + Vector3.UP * 20.0) + Vector3.UP * 0.1
+					cr0.phase = "perch"
 				if rv[ri] is Wyrm:
 					var wy0: Wyrm = rv[ri]
 					wy0.global_position = ground_at(wy0.arena + Vector3.UP * 20.0)
 					wy0.phase = "up"
 				var rp: Vector3 = (rv[ri] as Node3D).global_position
-				var far := 3.0 if rv[ri] is Colossus or rv[ri] is Wyrm else 1.0
+				var far := 3.0 if rv[ri] is Colossus or rv[ri] is Wyrm or rv[ri] is Carrion else 1.0
 				spot = Vector3(rp.x + 3.2 * far, 0.0, rp.z + 2.0 * far)
 				ang = atan2(3.2, 2.0)
 				if rv[ri] is Bellkeeper and OS.get_cmdline_user_args().has("--tollfx"):
@@ -5242,7 +5252,7 @@ func _net_send_setup() -> void:
 		var b = bots[bi]
 		bot_names.append(b.bot_name)
 		if is_instance_valid(b) and b is Revenant:
-			revs.append([bi, (b as Revenant).title, (b as Revenant).arena, b is Colossus, "warden" if b is HollowWarden else ("bell" if b is Bellkeeper else ("wyrm" if b is Wyrm else ""))])
+			revs.append([bi, (b as Revenant).title, (b as Revenant).arena, b is Colossus, "warden" if b is HollowWarden else ("bell" if b is Bellkeeper else ("wyrm" if b is Wyrm else ("carrion" if b is Carrion else "")))])
 	var list: Array = []
 	for id in net.roster:
 		list.append([id, net.roster[id]])
@@ -5316,7 +5326,11 @@ func net_start_match(setup: Dictionary) -> void:
 	for i in names.size():
 		var b: Bot = null
 		if rev_at.has(i):
-			if (rev_at[i] as Array).size() > 4 and str(rev_at[i][4]) == "wyrm":
+			if (rev_at[i] as Array).size() > 4 and str(rev_at[i][4]) == "carrion":
+				var cr := Carrion.new()
+				cr.setup_carrion(rev_at[i][2], self)
+				b = cr
+			elif (rev_at[i] as Array).size() > 4 and str(rev_at[i][4]) == "wyrm":
 				var wy := Wyrm.new()
 				wy.setup_wyrm(rev_at[i][2], self)
 				b = wy
@@ -6767,10 +6781,65 @@ func _test_fell(f: Node) -> void:
 	if f is Wyrm:
 		(f as Wyrm).phase = "up"
 		(f as Wyrm)._t = 99.0
+	if f is Carrion:
+		(f as Carrion).phase = "perch"
+		(f as Carrion)._t = 99.0
 	var g := 0
 	while is_instance_valid(f) and f.alive and g < 600:
 		g += 1
 		f.take_damage(80.0, f.global_position + Vector3.UP * 1.7, true, player)
+
+
+## Vespera: aloft and hard to hurt, the strip, the dive, the perch.
+func _run_carrion_test() -> void:
+	_start_match()
+	for i in 30:
+		await get_tree().physics_frame
+	_land_player_now()
+	var cs: Array = bots.filter(func(b): return is_instance_valid(b) and b is Carrion)
+	_check("the carrion queen holds a landmark", cs.size() == 1)
+	if cs.is_empty():
+		get_tree().quit()
+		return
+	var cr: Carrion = cs[0]
+	print("[carrion] %s at %s" % [cr.display_name(), str(cr.arena.round())])
+	player.vest_level = 3
+	player.armor = 100.0
+	player.helmet_level = 3
+	player.helmet_hp = 100.0
+	var spot := _dry_spot_near(cr.arena, 8.0)
+	player.global_position = spot
+	var phases := {}
+	var high := false
+	var halved := false
+	var d0 := cr.dive_hits
+	for i in 60 * 20:
+		await get_tree().physics_frame
+		player.global_position = Vector3(spot.x, player.global_position.y, spot.z)
+		player.hp = 100.0
+		cr.enemy = player
+		phases[cr.phase] = true
+		if cr.phase == "soar" and cr.global_position.y > terrain.height_at(cr.global_position.x, cr.global_position.z) + 8.0:
+			high = true
+			if not halved:
+				var h0 := cr.hp
+				var hp_ground := 0.0
+				cr.take_damage(20.0, cr.global_position, false, player)
+				halved = h0 - cr.hp > 0.0 and h0 - cr.hp < 20.0 * Revenant.DAMAGE_TAKEN * 0.9
+				print("[carrion] 20 aloft: hp %.1f -> %.1f" % [h0, cr.hp])
+		if cr.dive_hits > d0 and phases.has("perch"):
+			break
+	print("[carrion] phases %s, dives that struck you %d" % [str(phases.keys()), cr.dive_hits - d0])
+	_check("she circles high above", high)
+	_check("on the wing she is hard to hurt", halved)
+	_check("she marks the ground, then dives along it", phases.has("mark") and phases.has("dive") and cr.dive_hits > d0)
+	_check("she perches after the dive", phases.has("perch"))
+	var em := writs.my_embers
+	_test_fell(cr)
+	await get_tree().physics_frame
+	_check("the carrion queen falls and pays", not cr.alive and writs.my_embers >= em + 1600)
+	print("[carrion] done")
+	get_tree().quit()
 
 
 ## The Ember Flask: a swallow heals, the charges run out, a shrine refills it.
@@ -7426,7 +7495,7 @@ func _run_revenant_test() -> void:
 	_land_player_now()
 	player.spawn_protect = 99999.0
 	player.give_weapon("rifle")
-	var revs: Array = bots.filter(func(b): return is_instance_valid(b) and b is Revenant and not (b is Colossus) and not (b is HollowWarden) and not (b is Bellkeeper) and not (b is Wyrm))
+	var revs: Array = bots.filter(func(b): return is_instance_valid(b) and b is Revenant and not (b is Colossus) and not (b is HollowWarden) and not (b is Bellkeeper) and not (b is Wyrm) and not (b is Carrion))
 	_check("three revenants hold the island", revs.size() == REVENANT_COUNT)
 	_check("revenants are not counted among the living", alive == total_players)
 	if revs.is_empty():

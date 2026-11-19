@@ -144,6 +144,15 @@ Everyone drops with an **Ember Flask** of two swallows (**T**, rebindable). A sw
 to drink and closes 50 health of wounds. Kneel at any Wayshrine (opening its shop) and the flask is
 rekindled to the brim. In the Ordeal you carry three, and each bout won puts one back.
 
+## Vespera, the Carrion Queen
+
+A great black bird of the old battlefields, crowned with bone, at a landmark of her own. Aloft she
+circles high over you, hard to hurt (bullets do half), letting fall volleys of fire. Then a **red
+strip** opens across the ground through where you stand, and she **dives along it** at terrible
+speed, striking everything near her path (step off the strip, or roll). At its end she **perches**,
+wings spread, for a few seconds: punish her then. Raging, she dives twice, the second strip crossing
+the first. 1,600 Embers, a Sigil and a Gift. She is the sixth bout of the Ordeal.
+
 ## Skarn, the Wyrm Beneath
 
 A great worm that swims through the ground under a landmark of its own. While it is under, nothing
@@ -184,16 +193,17 @@ every brazier and the Heart; everyone sees the same flames.
 
 **THE ORDEAL** on the main menu is a solo boss rush. You start in a ring of standing stones on a level
 stone floor, cleared of trees, with a rifle, a marksman rifle, level 2 armour, two medkits and
-bandages. No soldiers, no storm, no loot from the fallen. Eight bouts, one after another:
+bandages. No soldiers, no storm, no loot from the fallen. Nine bouts, one after another:
 
 1. **The First Bout**: a Revenant.
 2. **The Keeper**: the Hollow Warden.
 3. **The Giant**: a Colossus.
 4. **The Tolling**: the Bellkeeper.
 5. **The Wyrm Beneath**: Skarn.
-6. **The Twin Oaths**: two Revenants at once.
-7. **The Second Giant**: another Colossus, with a different signature attack.
-8. **The Ashen Choir**: the Warden and a Colossus together.
+6. **The Carrion Queen**: Vespera.
+7. **The Twin Oaths**: two Revenants at once.
+8. **The Second Giant**: another Colossus, with a different signature attack.
+9. **The Ashen Choir**: the Warden and a Colossus together.
 
 Your health carries from bout to bout; winning one gives back 30 and refills your ammo. Then three
 altars rise, each holding a Gift, and you take one of the three for the rest of the Ordeal (choose
@@ -207,7 +217,7 @@ shown under the menu button. SPACE on the end screen starts another.
 and the stones do not open. The ring darkens, and **the Unkindled** rises, a tall black knight
 crowned with a cold iron bell, the toughest thing on the island. It fights in three parts: first the
 toll and the peal; below two thirds the ash nova and the ashen step; below one third it burns,
-everything comes faster, and it calls two echoes of the Revenants into the ring. Your time for the eight
+everything comes faster, and it calls two echoes of the Revenants into the ring. Your time for the nine
 is recorded before it rises. Slay it and the end screen says so; the menu remembers.
 
 **Bindings** (in the OATHS screen) make it harder, for those who have endured it: the **Binding of
@@ -488,8 +498,8 @@ the mushroom caps, and `--drive` tests the jeep.
 
 Souls-like systems: `--writs`, `--revenant`, `--colossus`, `--vault`, `--gods`, `--events`,
 `--renown`, `--codex`, `--chests`, `--wyrm` (under, the ring, the eruption, exposed, the roll through it), `--flask` (a swallow, an
-empty flask, a shrine's refill), `--dodge` (the roll's speed, its moment untouchable, its cooldown), `--unkindled` (an Ordeal already endured, all eight bouts, then the hidden one through its three
-parts), `--bell` (the toll strikes you on the ground and passes under you in the air), `--ordeal` (all eight bouts, the altars, the win, the ring's edge
+empty flask, a shrine's refill), `--dodge` (the roll's speed, its moment untouchable, its cooldown), `--unkindled` (an Ordeal already endured, all nine bouts, then the hidden one through its three
+parts), `--bell` (the toll strikes you on the ground and passes under you in the air), `--carrion` (aloft, the strip, the dive, the perch), `--ordeal` (all nine bouts, the altars, the win, the ring's edge
 and a fall) and `--hollow` (walks into the Ashen Hollow, lights its braziers,
 wakes and fells the Warden and takes the Heart).
 

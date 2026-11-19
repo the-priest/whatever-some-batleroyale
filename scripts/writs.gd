@@ -1043,8 +1043,8 @@ func on_bot_eliminated(victim: Bot) -> void:
 		if ember_blessed.has(killer_o):
 			n = int(float(n) * 1.5)
 		if victim is Revenant:
-			n += 2500 if victim is Colossus else (1600 if victim is HollowWarden or victim is Bellkeeper or victim is Wyrm else 1200)
-			why = "COLOSSUS FELLED" if victim is Colossus else ("WARDEN FELLED" if victim is HollowWarden else ("BELLKEEPER FELLED" if victim is Bellkeeper else ("WYRM SLAIN" if victim is Wyrm else "REVENANT FELLED")))
+			n += 2500 if victim is Colossus else (1600 if victim is HollowWarden or victim is Bellkeeper or victim is Wyrm or victim is Carrion else 1200)
+			why = "COLOSSUS FELLED" if victim is Colossus else ("WARDEN FELLED" if victim is HollowWarden else ("BELLKEEPER FELLED" if victim is Bellkeeper else ("WYRM SLAIN" if victim is Wyrm else ("CARRION QUEEN SLAIN" if victim is Carrion else "REVENANT FELLED"))))
 			if game.ordeal == null:
 				give_sigil(killer_o, 1, "THE %s'S SIGIL IS YOURS  —  IT OPENS A SEALED VAULT" % ("COLOSSUS" if victim is Colossus else "REVENANT"))
 		award(killer_o, n, why)

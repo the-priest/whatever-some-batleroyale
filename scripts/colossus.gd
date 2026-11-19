@@ -490,5 +490,29 @@ static func show_fx(game: Node, fx: Dictionary) -> void:
 			tw.tween_property(ring, "scale", Vector3(mx, 1.0, mx), dur)
 			tw.parallel().tween_property(m, "albedo_color:a", 0.25, dur)
 			tw.tween_callback(ring.queue_free)
+		"line":
+			# A red strip across the ground: where something is about to come.
+			var a: Vector3 = fx["a"]
+			var b: Vector3 = fx["b"]
+			var mid := (a + b) * 0.5
+			var ln := MeshInstance3D.new()
+			var bm := BoxMesh.new()
+			bm.size = Vector3(float(fx.get("w", 2.5)) * 2.0, 0.04, a.distance_to(b))
+			ln.mesh = bm
+			var m := StandardMaterial3D.new()
+			m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			m.albedo_color = Color(1.0, 0.12, 0.08, 0.18)
+			m.no_depth_test = false
+			ln.material_override = m
+			ln.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			game.add_child(ln)
+			ln.global_position = mid + Vector3.DOWN * 1.3
+			ln.look_at(Vector3(b.x, ln.global_position.y, b.z), Vector3.UP)
+			ln.global_position = Vector3(mid.x, game.ground_at(mid + Vector3.UP * 5.0).y + 0.12, mid.z)
+			var tw := ln.create_tween()
+			tw.tween_property(m, "albedo_color:a", 0.55, float(fx.get("t", 1.0)))
+			tw.tween_interval(0.5)
+			tw.tween_callback(ln.queue_free)
 		"roar":
 			game.spawn_smoke((fx["p"] as Vector3) + Vector3.UP * 0.5, 2.0)

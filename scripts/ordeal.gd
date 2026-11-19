@@ -19,6 +19,7 @@ const BOUTS := [
 	["THE GIANT", ["colossus"]],
 	["THE TOLLING", ["bell"]],
 	["THE WYRM BENEATH", ["wyrm"]],
+	["THE CARRION QUEEN", ["carrion"]],
 	["THE TWIN OATHS", ["revenant", "revenant"]],
 	["THE SECOND GIANT", ["colossus"]],
 	["THE ASHEN CHOIR", ["warden", "colossus"]],
@@ -418,6 +419,10 @@ func _spawn(kind: String, at: Vector3) -> Revenant:
 			var bk := Bellkeeper.new()
 			bk.setup_bell(centre, game)
 			f = bk
+		"carrion":
+			var cr := Carrion.new()
+			cr.setup_carrion(centre, game)
+			f = cr
 		"wyrm":
 			var wy := Wyrm.new()
 			wy.setup_wyrm(centre, game)
