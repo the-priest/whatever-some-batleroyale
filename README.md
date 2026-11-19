@@ -168,6 +168,11 @@ embers and it pushes you back and burns you. Fall and the Ordeal is over. The bo
 the top of the screen; the furthest bout you have reached and your fastest full Ordeal are kept and
 shown under the menu button. SPACE on the end screen starts another.
 
+**Bindings** (in the OATHS screen) make it harder, for those who have endured it: the **Binding of
+Flesh** (no armour, no helmet), **of Breath** (no health back between bouts), **of Want** (no Gifts:
+the altars never rise) and **of Arms** (a sidearm and nothing more). They hold until you break them,
+and the most bindings you have endured the Ordeal under is kept with your record.
+
 ## Vaults and Sigils
 
 Five sealed **vaults** stand near the landmarks and old ruins: stone crypts with an iron door and a

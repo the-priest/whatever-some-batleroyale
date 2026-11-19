@@ -852,25 +852,36 @@ func _begin_ordeal() -> void:
 	player.velocity = Vector3.ZERO
 	var to := ordeal.centre - start
 	player.yaw = atan2(-to.x, -to.z)
+	var arms := Ordeal.is_bound("arms")
+	var le := loadout_enabled
+	if arms:
+		loadout_enabled = false
 	on_player_landed()
-	if not loadout_enabled:
+	loadout_enabled = le
+	if arms:
+		player.give_weapon("pistol")
+	elif not loadout_enabled:
 		player.give_weapon("rifle")
 		player.give_weapon("dmr")
 	for w in player.loadout:
 		if w != "":
 			for k in 3:
 				player.add_ammo_cal(Weapons.caliber(w), int(Weapons.AMMO_BOX.get(Weapons.caliber(w), 30)))
-	player.vest_level = 2
-	player.armor = 100.0
-	player.helmet_level = 2
-	player.helmet_hp = 100.0
+	if not Ordeal.is_bound("flesh"):
+		player.vest_level = 2
+		player.armor = 100.0
+		player.helmet_level = 2
+		player.helmet_hp = 100.0
 	player.meds = 2
 	player.bandages = 5
 	player.refresh_viewmodel()
 	player.inventory_changed.emit()
 	player._emit_health()
 	hud.set_plane_path(Vector3.ZERO, Vector3.ZERO)
-	hud.show_notice("SIX BOUTS. HEALTH CARRIES OVER. A GIFT AFTER EACH. THE RING HOLDS YOU.", 5.0)
+	if Ordeal.bound.is_empty():
+		hud.show_notice("SIX BOUTS. HEALTH CARRIES OVER. A GIFT AFTER EACH. THE RING HOLDS YOU.", 5.0)
+	else:
+		hud.show_notice("SIX BOUTS, BOUND BY %s." % ", ".join(Ordeal.BINDINGS.filter(func(b): return Ordeal.bound.has(b[0])).map(func(b): return str(b[1]).replace("BINDING OF ", ""))), 5.0)
 	ordeal.begin()
 
 
@@ -3767,6 +3778,8 @@ func _run_shot() -> void:
 	if OS.get_cmdline_user_args().has("--menu"):
 		if OS.get_cmdline_user_args().has("--loadout"):
 			hud._open_loadout()
+		if OS.get_cmdline_user_args().has("--oaths"):
+			hud._open_oaths()
 		if OS.get_cmdline_user_args().has("--lobby"):
 			_net_host()
 			if OS.get_cmdline_user_args().has("--fake"):
@@ -6670,6 +6683,33 @@ func _run_ordeal_test() -> void:
 		await get_tree().physics_frame
 	_check("falling ends it", phase == "end" and hud.end_title.text == "THE ORDEAL" and ordeal.state == "fallen")
 	print("[ordeal] end line: %s" % hud.end_sub.text)
+	# Bound by all four.
+	var keep := Ordeal.bound.duplicate()
+	for bd in Ordeal.BINDINGS:
+		Ordeal.bound[bd[0]] = true
+	_start_match()
+	for i in 20:
+		await get_tree().physics_frame
+	print("[ordeal] bound: guns %s, vest %d, helmet %d" % [str(player.loadout), player.vest_level, player.helmet_level])
+	_check("bound by flesh: no armour", player.vest_level == 0 and player.helmet_level == 0)
+	_check("bound by arms: a sidearm only", player.loadout.filter(func(w): return w != "").size() == 1 and player.loadout.has("pistol"))
+	player.spawn_protect = 99999.0
+	var w2 := 0
+	while ordeal.state != "fight" and w2 < 60 * 10:
+		w2 += 1
+		await get_tree().physics_frame
+	player.hp = 60.0
+	for f in ordeal.foes:
+		var g2 := 0
+		while f.alive and g2 < 400:
+			g2 += 1
+			f.take_damage(80.0, f.global_position + Vector3.UP * 1.7, true, player)
+	for i in 5:
+		await get_tree().physics_frame
+	_check("bound by breath: no health back", player.hp <= 60.0)
+	_check("bound by want: no altars, straight on", ordeal.state == "rest" and ordeal._altars.is_empty() and ordeal.bout == 1)
+	_check("the bindings show on the end line", ordeal.end_line().contains("4 BOUND"))
+	Ordeal.bound = keep
 	print("[ordeal] done")
 	get_tree().quit()
 

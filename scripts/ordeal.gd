@@ -21,6 +21,13 @@ const BOUTS := [
 	["THE SECOND GIANT", ["colossus"]],
 	["THE ASHEN CHOIR", ["warden", "colossus"]],
 ]
+## Bindings: handicaps sworn before an Ordeal. [id, name, what it does]
+const BINDINGS := [
+	["flesh", "BINDING OF FLESH", "No armour, no helmet"],
+	["breath", "BINDING OF BREATH", "No health back between bouts"],
+	["want", "BINDING OF WANT", "No Gifts from the altars"],
+	["arms", "BINDING OF ARMS", "A sidearm and nothing more"],
+]
 ## Gifts no use in the ring.
 const NO_GIFTS := ["storm", "hawk"]
 
@@ -42,6 +49,9 @@ var _hud_t := 0.0
 
 static var best_bout := 0
 static var best_time := 0.0
+## The most bindings an Ordeal has been endured under.
+static var best_bound := 0
+static var bound: Dictionary = {}
 static var _loaded := false
 ## Headless checks run the Ordeal without touching the player's records.
 static var no_save := false
@@ -56,6 +66,10 @@ static func load_record() -> void:
 		return
 	best_bout = int(cfg.get_value("ordeal", "best_bout", 0))
 	best_time = float(cfg.get_value("ordeal", "best_time", 0.0))
+	best_bound = int(cfg.get_value("ordeal", "best_bound", 0))
+	for b in BINDINGS:
+		if bool(cfg.get_value("ordeal_bind", b[0], false)):
+			bound[b[0]] = true
 
 
 static func save_record() -> void:
@@ -65,15 +79,36 @@ static func save_record() -> void:
 	cfg.load(PATH)
 	cfg.set_value("ordeal", "best_bout", best_bout)
 	cfg.set_value("ordeal", "best_time", best_time)
+	cfg.set_value("ordeal", "best_bound", best_bound)
 	cfg.save(PATH)
+
+
+## The bindings are kept whatever the tests do (they are the player's choice).
+static func save_bindings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(PATH)
+	for b in BINDINGS:
+		cfg.set_value("ordeal_bind", b[0], bound.has(b[0]))
+	cfg.save(PATH)
+
+
+static func is_bound(id: String) -> bool:
+	return bound.has(id)
 
 
 static func record_line() -> String:
 	load_record()
+	var tail := ""
+	if bound.size() > 0:
+		tail = "   ·   %d BINDING%s SWORN" % [bound.size(), "" if bound.size() == 1 else "S"]
+	return _record_head() + tail
+
+
+static func _record_head() -> String:
 	if best_bout <= 0:
 		return "SIX BOUTS  ·  NO REST  ·  ONE GIFT AFTER EACH"
 	if best_bout >= BOUTS.size() and best_time > 0.0:
-		return "ENDURED  ·  BEST TIME %s" % _clock(best_time)
+		return "ENDURED  ·  BEST TIME %s%s" % [_clock(best_time), ("  ·  MOST BOUND %d" % best_bound) if best_bound > 0 else ""]
 	return "BEST: BOUT %d OF %d" % [best_bout, BOUTS.size()]
 
 
@@ -407,8 +442,9 @@ func _physics_process(delta: float) -> void:
 
 func _bout_won() -> void:
 	var p: Player = game.player
-	p.hp = minf(p.max_hp(), p.hp + BREATH)
-	p._emit_health()
+	if not is_bound("breath"):
+		p.hp = minf(p.max_hp(), p.hp + BREATH)
+		p._emit_health()
 	for i in p.loadout.size():
 		var w: String = str(p.loadout[i])
 		if w != "":
@@ -427,11 +463,13 @@ func _bout_won() -> void:
 		_next_bout()
 		return
 	state = "choose"
-	game.hud.show_notice("THREE ALTARS RISE  —  TAKE ONE GIFT  (+%d HEALTH, AMMO REFILLED)" % int(BREATH), 4.0)
+	game.hud.show_notice("THREE ALTARS RISE  —  TAKE ONE GIFT  (%s, AMMO REFILLED)" % ("BOUND: NO BREATH" if is_bound("breath") else "+%d HEALTH" % int(BREATH)), 4.0)
 	_raise_altars(offer)
 
 
 func _offer() -> Array:
+	if is_bound("want"):
+		return []
 	var have: Dictionary = game.player.gifts
 	var pool: Array = Writs.GIFTS.keys().filter(func(k): return not have.has(k) and not NO_GIFTS.has(k))
 	pool.shuffle()
@@ -543,9 +581,10 @@ func on_player_fell() -> void:
 
 ## Text for the end screen.
 func end_line() -> String:
+	var bt := ("   ·   %d BOUND" % bound.size()) if bound.size() > 0 else ""
 	if state == "done":
-		return "ALL %d BOUTS  ·  %s   ·   BEST %s" % [BOUTS.size(), _clock(time), _clock(best_time)]
-	return "FELL IN BOUT %d OF %d  ·  %s   ·   BEST: BOUT %d" % [bout + 1, BOUTS.size(), str(BOUTS[clampi(bout, 0, BOUTS.size() - 1)][0]), best_bout]
+		return "ALL %d BOUTS  ·  %s   ·   BEST %s%s" % [BOUTS.size(), _clock(time), _clock(best_time), bt]
+	return "FELL IN BOUT %d OF %d  ·  %s   ·   BEST: BOUT %d%s" % [bout + 1, BOUTS.size(), str(BOUTS[clampi(bout, 0, BOUTS.size() - 1)][0]), best_bout, bt]
 
 
 func _endured() -> void:
@@ -553,5 +592,6 @@ func _endured() -> void:
 	best_bout = BOUTS.size()
 	if best_time <= 0.0 or time < best_time:
 		best_time = time
+	best_bound = maxi(best_bound, bound.size())
 	save_record()
 	game.ordeal_endured()

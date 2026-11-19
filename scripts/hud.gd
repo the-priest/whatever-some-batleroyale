@@ -887,6 +887,9 @@ func _open_oaths() -> void:
 	_oaths_panel.visible = true
 
 
+var _bind_buttons: Dictionary = {}
+
+
 func _build_oaths() -> void:
 	_oaths_panel = ColorRect.new()
 	(_oaths_panel as ColorRect).color = Color(0.01, 0.012, 0.016, 0.82)
@@ -898,13 +901,13 @@ func _build_oaths() -> void:
 	box.set_anchors_preset(Control.PRESET_CENTER)
 	box.offset_left = -360
 	box.offset_right = 360
-	box.offset_top = -280
-	box.offset_bottom = 280
+	box.offset_top = -345
+	box.offset_bottom = 345
 	_oaths_panel.add_child(box)
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", 10)
 	box.add_child(vb)
-	vb.add_child(_lv("SWEAR AN OATH", 26, WHITE))
+	vb.add_child(_lv("SWEAR AN OATH", 22, WHITE))
 	var sub := _lv("Each oath you swear makes a solo match harder, and pays a quarter more Renown. They hold until you break them.", 13, MUTED, false)
 	sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	sub.custom_minimum_size = Vector2(660, 0)
@@ -913,7 +916,7 @@ func _build_oaths() -> void:
 	for o in Renown.OATHS:
 		var b := _button("", false)
 		b.toggle_mode = true
-		b.custom_minimum_size = Vector2(660, 50)
+		b.custom_minimum_size = Vector2(660, 36)
 		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		var id: String = o[0]
 		b.toggled.connect(func(on: bool):
@@ -927,10 +930,31 @@ func _build_oaths() -> void:
 			refresh_rank())
 		vb.add_child(b)
 		_oath_buttons[id] = b
-	_oath_mult = _lv("", 16, Color(1.0, 0.76, 0.42))
+	_oath_mult = _lv("", 14, Color(1.0, 0.76, 0.42))
 	vb.add_child(_oath_mult)
+	vb.add_child(_spacer(4))
+	vb.add_child(_lv("BINDINGS OF THE ORDEAL", 18, Color(1.0, 0.72, 0.42)))
+	Ordeal.load_record()
+	for bd in Ordeal.BINDINGS:
+		var bb := _button("", false)
+		bb.toggle_mode = true
+		bb.custom_minimum_size = Vector2(660, 36)
+		bb.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		var bid: String = bd[0]
+		bb.toggled.connect(func(on: bool):
+			sfx_click()
+			if on:
+				Ordeal.bound[bid] = true
+			else:
+				Ordeal.bound.erase(bid)
+			Ordeal.save_bindings()
+			_sync_oaths()
+			if menu_ordeal_rec != null:
+				menu_ordeal_rec.text = Ordeal.record_line())
+		vb.add_child(bb)
+		_bind_buttons[bid] = bb
 	var done := _button("DONE", true)
-	done.custom_minimum_size = Vector2(660, 52)
+	done.custom_minimum_size = Vector2(660, 44)
 	done.pressed.connect(func(): sfx_click(); _oaths_panel.visible = false)
 	vb.add_child(done)
 
@@ -944,6 +968,13 @@ func _sync_oaths() -> void:
 		b.set_pressed_no_signal(on)
 		b.text = "  %s   %s  —  %s" % ["■" if on else "□", str(o[1]), str(o[2]).to_upper()]
 	_oath_mult.text = "RENOWN  ×%.2f   ·   SOLO MATCHES ONLY" % Renown.oath_mult()
+	for bd in Ordeal.BINDINGS:
+		var bb: Button = _bind_buttons.get(bd[0])
+		if bb == null:
+			continue
+		var bon := Ordeal.bound.has(bd[0])
+		bb.set_pressed_no_signal(bon)
+		bb.text = "  %s   %s  —  %s" % ["■" if bon else "□", str(bd[1]), str(bd[2]).to_upper()]
 
 
 # ------------------------------------------------------------------ codex --
