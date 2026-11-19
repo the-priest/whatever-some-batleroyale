@@ -29,6 +29,7 @@ const DROP_DMG := 16.0
 
 ## "soar", "mark", "dive", "perch", "rise"
 var phase := "soar"
+var _idle_t := 0.0
 var _t := 3.0
 var _ang := 0.0
 var _from := Vector3.ZERO
@@ -180,6 +181,11 @@ func _physics_process(delta: float) -> void:
 		return
 	velocity = Vector3.ZERO
 	collision_layer = 1
+	# Nobody near: look about twice a second and otherwise rest.
+	_idle_t -= delta
+	if enemy == null and phase == "soar" and _idle_t > 0.0:
+		return
+	_idle_t = 0.5
 	var tgt := _hunt()
 	_t -= delta
 	match phase:

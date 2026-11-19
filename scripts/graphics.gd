@@ -49,7 +49,7 @@ static func apply(q: int, env: Environment, sun: DirectionalLight3D, fill: Direc
 		sq = 3
 	if sun != null:
 		sun.shadow_enabled = o_sh != 1
-		sun.directional_shadow_max_distance = [90.0, 140.0, 200.0, 260.0][sq]
+		sun.directional_shadow_max_distance = [90.0, 135.0, 180.0, 220.0][sq]
 		sun.shadow_blur = [0.6, 1.0, 1.2, 1.4][sq]
 		# LOW and MEDIUM draw the shadow casters twice (two cascades), not
 		# four times: the biggest single saving on a slow machine.

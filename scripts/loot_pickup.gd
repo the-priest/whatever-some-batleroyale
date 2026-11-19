@@ -159,8 +159,10 @@ func _ready() -> void:
 	for g in spin.find_children("*", "GeometryInstance3D", true, false):
 		var gi := g as GeometryInstance3D
 		gi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		gi.visibility_range_end = 100.0
-		gi.visibility_range_end_margin = 10.0
+		# A gun on the ground is a few pixels past 55 m; the light shaft
+		# shows where loot lies from far off.
+		gi.visibility_range_end = 55.0
+		gi.visibility_range_end_margin = 6.0
 	beacon.visibility_range_end = 400.0
 
 

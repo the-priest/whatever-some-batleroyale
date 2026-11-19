@@ -713,6 +713,7 @@ func _start_match() -> void:
 		lobby.close()
 		humans.clear()
 	sfx.play_ui("ui_click", -6.0)
+	Engine.time_scale = 1.0
 	hud.hide_menu()
 	hud.hide_end()
 	hud.clear_killfeed()
@@ -873,6 +874,7 @@ func _begin_ordeal() -> void:
 	ordeal.echo = echo_kind
 	add_child(ordeal)
 	ordeal.setup(self)
+	fade_far_lights(world)
 	anticheat.grace(3.0)
 	_player_jump(true)
 	var start: Vector3 = ground_at(ordeal.centre + Vector3(0, 30, Ordeal.R * 0.6))
@@ -929,6 +931,27 @@ func ordeal_endured() -> void:
 	hud.set_end_text("THE FIRE IS YOURS" if slew else "ORDEAL ENDURED", ordeal.end_line() if ordeal != null else "", Color(0.75, 0.85, 1.0) if slew else Color(1.0, 0.82, 0.4))
 
 
+## Every small light on the island fades out with distance: a lamp or a
+## boss's glow 150 m away lights nothing you can see, but the GPU would still
+## shade it.
+func fade_far_lights(root: Node = null) -> void:
+	for n in (root if root != null else self).find_children("*", "Light3D", true, false):
+		if n is DirectionalLight3D:
+			continue
+		var l := n as Light3D
+		if l.distance_fade_enabled:
+			continue
+		var rng := 10.0
+		if l is OmniLight3D:
+			rng = (l as OmniLight3D).omni_range
+		elif l is SpotLight3D:
+			rng = (l as SpotLight3D).spot_range
+		l.distance_fade_enabled = true
+		l.distance_fade_begin = clampf(rng * 6.0, 45.0, 160.0)
+		l.distance_fade_length = 15.0
+		l.distance_fade_shadow = l.distance_fade_begin * 0.5
+
+
 func _after_match_setup() -> void:
 	if events != null:
 		events.reset()
@@ -937,6 +960,7 @@ func _after_match_setup() -> void:
 	if hollow != null:
 		hollow.reset()
 	match_tally = {"writs": 0, "revenants": 0, "vaults": 0, "blessings": 0}
+	fade_far_lights()
 	_tip_t = 3.0
 	_tip_i = randi() % PLANE_TIPS.size()
 	_renown_paid = false
@@ -1751,9 +1775,17 @@ func _nearest_loot(pos: Vector3, max_d: float) -> LootPickup:
 	return best
 
 
+var _prompt_skip := false
+
+
 func _update_prompt() -> void:
 	if player == null:
 		hud.set_prompt("")
+		return
+	# Every other frame is plenty for a line of text (it looks at every
+	# chest, shrine, brazier and board near you).
+	_prompt_skip = not _prompt_skip
+	if _prompt_skip and player.mode == Player.Mode.GROUND:
 		return
 	if player.mode == Player.Mode.PLANE:
 		hud.set_prompt("%s  —  JUMP FROM THE PLANE" % Keybinds.key("jump"))
@@ -2421,6 +2453,67 @@ func _spawn_revenants() -> void:
 	print("[revenants] %d hold the island: %s" % [made + giants, str(bots.filter(func(b): return is_instance_valid(b) and b is Revenant).map(func(b): return "%s @ %s" % [b.display_name(), str(Vector3(b.arena).round())]))])
 
 
+## A boss falls: embers stream up out of it, a flash of gold, and (alone,
+## by your hand, close) the world holds its breath for a moment.
+func _felled_fx(r: Revenant) -> void:
+	var at := r.global_position + Vector3.UP * (r.head_offset * 0.6)
+	var em := GPUParticles3D.new()
+	em.amount = 180
+	em.lifetime = 2.6
+	em.one_shot = true
+	em.explosiveness = 0.85
+	em.visibility_aabb = AABB(Vector3(-12, -4, -12), Vector3(24, 30, 24))
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	pm.emission_sphere_radius = 1.2 * (2.5 if r is Colossus else 1.0)
+	pm.direction = Vector3.UP
+	pm.spread = 35.0
+	pm.initial_velocity_min = 2.5
+	pm.initial_velocity_max = 7.0
+	pm.gravity = Vector3(0, 1.2, 0)
+	pm.damping_min = 0.8
+	pm.damping_max = 1.6
+	pm.scale_min = 0.6
+	pm.scale_max = 1.5
+	var grad := Gradient.new()
+	grad.set_color(0, Color(1.0, 0.85, 0.45, 1.0))
+	grad.set_color(1, Color(1.0, 0.35, 0.1, 0.0))
+	var gt := GradientTexture1D.new()
+	gt.gradient = grad
+	pm.color_ramp = gt
+	em.process_material = pm
+	var qm := QuadMesh.new()
+	qm.size = Vector2(0.09, 0.09)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	mat.vertex_color_use_as_albedo = true
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	qm.material = mat
+	em.draw_pass_1 = qm
+	em.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(em)
+	em.global_position = at
+	em.emitting = true
+	var fl := OmniLight3D.new()
+	fl.light_color = Color(1.0, 0.8, 0.45)
+	fl.light_energy = 9.0
+	fl.omni_range = 18.0
+	fl.shadow_enabled = false
+	add_child(fl)
+	fl.global_position = at + Vector3.UP
+	var tw := fl.create_tween()
+	tw.tween_property(fl, "light_energy", 0.0, 1.4).set_ease(Tween.EASE_OUT)
+	tw.tween_callback(fl.queue_free)
+	get_tree().create_timer(4.0).timeout.connect(em.queue_free)
+	shake(14.0)
+	# The breath held: solo, your kill, close enough to see it.
+	if not net_on() and r.last_killer_node == player and player != null and player.global_position.distance_to(r.global_position) < 90.0 and not OS.get_cmdline_user_args().has("--fixed-fps"):
+		Engine.time_scale = 0.3
+		get_tree().create_timer(0.55, true, false, true).timeout.connect(func(): Engine.time_scale = 1.0)
+
+
 ## Open ground by a landmark no other boss holds (Vector3.INF if none).
 func _lone_boss_ground(sites: Array) -> Vector3:
 	for l in sites:
@@ -2449,6 +2542,7 @@ func _revenant_fell(r: Revenant, killer: String) -> void:
 	sfx.play_ui("writ_done", -1.0)
 	hud.show_big("COLOSSUS FELLED" if r is Colossus else ("WARDEN FELLED" if r is HollowWarden else ("THE UNKINDLED FALLS" if r is Unkindled else ("THE BELL FALLS SILENT" if r is Bellkeeper else ("THE WYRM IS SLAIN" if r is Wyrm else ("THE CARRION QUEEN FALLS" if r is Carrion else ("THE LANTERN GOES OUT" if r is LanternWitch else "REVENANT FELLED")))))), Color(1.0, 0.82, 0.38), 3.6)
 	hud.show_notice("%s  —  SLAIN BY %s" % [r.display_name(), killer if killer != "" else "THE STORM"], 4.0)
+	_felled_fx(r)
 	if net_is_client() or ordeal != null:
 		return
 	var base := ground_at(r.global_position + Vector3.UP)

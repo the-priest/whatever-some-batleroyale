@@ -240,8 +240,14 @@ func _build_model(paint: Color) -> void:
 	MeshMerge.merge(body, [wheel_s])
 	for wn in _wheel_nodes:
 		MeshMerge.merge(wn.get_child(0) as Node3D, [])
+	# Drawn out to 400 m (a jeep is a speck beyond); only the body casts a
+	# shadow, the wheels and the little parts do not.
 	for mi in find_children("*", "MeshInstance3D", true, false):
-		(mi as MeshInstance3D).visibility_range_end = 900.0
+		var gm := mi as MeshInstance3D
+		gm.visibility_range_end = 400.0
+		gm.visibility_range_end_margin = 20.0
+		if gm.get_parent() != body:
+			gm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 
 

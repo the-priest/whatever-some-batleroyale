@@ -29,6 +29,7 @@ const HEIGHT := 6.0
 
 ## "under", "tell", "rise", "up", "sink"
 var phase := "under"
+var _idle_t := 0.0
 var _t := 1.5
 var _at := Vector3.ZERO
 var _spits := 0
@@ -178,6 +179,12 @@ func _physics_process(delta: float) -> void:
 		return
 	# Its own way of moving; none of a soldier's.
 	velocity = Vector3.ZERO
+	# Nobody near: look about twice a second and otherwise rest (no scans
+	# of every soldier, no rays, every frame, for a boss no one is fighting).
+	_idle_t -= delta
+	if enemy == null and phase == "under" and _idle_t > 0.0:
+		return
+	_idle_t = 0.5
 	var tgt := _hunt()
 	if not raged and hp <= 50.0:
 		_rage()
