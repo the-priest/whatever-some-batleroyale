@@ -144,6 +144,23 @@ Everyone drops with an **Ember Flask** of two swallows (**T**, rebindable). A sw
 to drink and closes 50 health of wounds. Kneel at any Wayshrine (opening its shop) and the flask is
 rekindled to the brim. In the Ordeal you carry three, and each bout won puts one back.
 
+## The Veil Sisters
+
+**Ellan and Moira**, two pale duellists in grey veils who never fight apart, hold a landmark together.
+In their **crossfire** both throw a line of fire at you at once, from two sides (stand where the lines
+cross and you take both). Then smoke rises at both their feet and, a breath later, they have **swapped
+places**: whoever you were chasing is now behind you. Fell one and the other **grieves**: she rages,
+faster and deadlier, and throws her crossfire alone, twice as often. The eighth bout of the Ordeal.
+
+## The Iron Sentinel
+
+A walking engine of the old war in black iron plate, at a landmark (or old ruins) of its own. Its
+plate turns bullets: closed, it takes almost nothing. Every so often it **vents**: it stops, steam pours
+from the glowing vents on its back, and for those few seconds it takes full harm ("ITS VENTS ARE OPEN
+— STRIKE NOW"). Between vents it shells you with **marked mortar barrages**, and if you come close a
+red ring opens at its feet before a **stomp** that throws you. Raging, the vents stay open for less
+time. The ninth bout of the Ordeal.
+
 ## Isolde, the Lantern Witch
 
 A tall pale figure who floats a hand's breadth over the ground, holding a lantern high. Her **sweep**
@@ -202,7 +219,7 @@ every brazier and the Heart; everyone sees the same flames.
 
 **THE ORDEAL** on the main menu is a solo boss rush. You start in a ring of standing stones on a level
 stone floor, cleared of trees, with a rifle, a marksman rifle, level 2 armour, two medkits and
-bandages. No soldiers, no storm, no loot from the fallen. Ten bouts, one after another:
+bandages. No soldiers, no storm, no loot from the fallen. Twelve bouts, one after another:
 
 1. **The First Bout**: a Revenant.
 2. **The Keeper**: the Hollow Warden.
@@ -211,9 +228,11 @@ bandages. No soldiers, no storm, no loot from the fallen. Ten bouts, one after a
 5. **The Wyrm Beneath**: Skarn.
 6. **The Carrion Queen**: Vespera.
 7. **The Lantern Witch**: Isolde.
-8. **The Twin Oaths**: two Revenants at once.
-9. **The Second Giant**: another Colossus, with a different signature attack.
-10. **The Ashen Choir**: the Warden and a Colossus together.
+8. **The Veil Sisters**: Ellan and Moira.
+9. **The Iron Sentinel**.
+10. **The Twin Oaths**: two Revenants at once.
+11. **The Second Giant**: another Colossus, with a different signature attack.
+12. **The Ashen Choir**: the Warden and a Colossus together.
 
 Your health carries from bout to bout; winning one gives back 30 and refills your ammo. Then three
 altars rise, each holding a Gift, and you take one of the three for the rest of the Ordeal (choose
@@ -227,7 +246,7 @@ shown under the menu button. SPACE on the end screen starts another.
 and the stones do not open. The ring darkens, and **the Unkindled** rises, a tall black knight
 crowned with a cold iron bell, the toughest thing on the island. It fights in three parts: first the
 toll and the peal; below two thirds the ash nova and the ashen step; below one third it burns,
-everything comes faster, and it calls two echoes of the Revenants into the ring. Your time for the ten
+everything comes faster, and it calls two echoes of the Revenants into the ring. Your time for the twelve
 is recorded before it rises. Slay it and the end screen says so; the menu remembers.
 
 **The Hall of Echoes** (main menu): every kind of boss you have slain with your own hand, on the
@@ -250,6 +269,8 @@ hold; they go with you into every match, LAN included, and into the Ordeal.
 | Wyrm Scale | the Wyrm | 2 | One more swallow in the Ember Flask |
 | Carrion Feather | the Carrion Queen | 1 | You jump higher |
 | Witch's Lantern | the Lantern Witch | 1 | You drink from the flask twice as fast |
+| Veil Thread | the Veil Sisters | 1 | Your roll carries you further |
+| Iron Plate | the Iron Sentinel | 2 | Your armour wears down half as fast |
 | Unkindled Crown | the Unkindled | 3 | Your bullets hit a tenth harder |
 
 **Bindings** (in the OATHS screen) make it harder, for those who have endured it: the **Binding of
@@ -530,10 +551,10 @@ the mushroom caps, and `--drive` tests the jeep.
 
 Souls-like systems: `--writs`, `--revenant`, `--colossus`, `--vault`, `--gods`, `--events`,
 `--renown`, `--codex`, `--chests`, `--wyrm` (under, the ring, the eruption, exposed, the roll through it), `--flask` (a swallow, an
-empty flask, a shrine's refill), `--dodge` (the roll's speed, its moment untouchable, its cooldown), `--unkindled` (an Ordeal already endured, all ten bouts, then the hidden one through its three
+empty flask, a shrine's refill), `--dodge` (the roll's speed, its moment untouchable, its cooldown), `--unkindled` (an Ordeal already endured, all twelve bouts, then the hidden one through its three
 parts), `--bell` (the toll strikes you on the ground and passes under you in the air), `--carrion` (aloft, the strip, the dive, the perch), `--witch` (low beam jumped, high beam
 crouched under, and both standing), `--echo` (a slain boss leaves its echo; fought again alone, its
-time kept), `--talisman` (won from bosses, five notches, each one's effect), `--ordeal` (all ten bouts, the altars, the win, the ring's edge
+time kept), `--talisman` (won from bosses, five notches, each one's effect), `--sisters` (crossfire, the swap, the grief), `--sentinel` (plate, vents, stomp), `--ordeal` (all twelve bouts, the altars, the win, the ring's edge
 and a fall) and `--hollow` (walks into the Ashen Hollow, lights its braziers,
 wakes and fells the Warden and takes the Heart).
 

@@ -21,6 +21,8 @@ const BOUTS := [
 	["THE WYRM BENEATH", ["wyrm"]],
 	["THE CARRION QUEEN", ["carrion"]],
 	["THE LANTERN WITCH", ["witch"]],
+	["THE VEIL SISTERS", ["sister", "sister"]],
+	["THE IRON SENTINEL", ["sentinel"]],
 	["THE TWIN OATHS", ["revenant", "revenant"]],
 	["THE SECOND GIANT", ["colossus"]],
 	["THE ASHEN CHOIR", ["warden", "colossus"]],
@@ -38,6 +40,7 @@ const ECHOES := [
 	["revenant", "A REVENANT"], ["warden", "THE HOLLOW WARDEN"], ["colossus", "A COLOSSUS"],
 	["bell", "MOURNE, THE BELLKEEPER"], ["wyrm", "SKARN, THE WYRM BENEATH"],
 	["carrion", "VESPERA, THE CARRION QUEEN"], ["witch", "ISOLDE, THE LANTERN WITCH"],
+	["sisters", "THE VEIL SISTERS"], ["sentinel", "THE IRON SENTINEL"],
 	["unkindled", "THE UNKINDLED"],
 ]
 ## The hidden bout, for those who have endured the Ordeal before.
@@ -59,6 +62,7 @@ var _root: Node3D
 var _used_rev: Array = []
 var _used_giant: Array = []
 var _floor_lo := 0.0
+var _sisters := 0
 var secret_open := false
 ## The Hall of Echoes: one boss of this kind, alone ("" = the Ordeal).
 var echo := ""
@@ -138,6 +142,10 @@ static func kind_of(b: Node) -> String:
 		return "carrion"
 	if b is LanternWitch:
 		return "witch"
+	if b is VeilSister:
+		return "sisters"
+	if b is IronSentinel:
+		return "sentinel"
 	return "revenant"
 
 
@@ -415,7 +423,7 @@ func n_bouts() -> int:
 ## The bout `i`: one of the seven, or the hidden one after them.
 func bout_def(i: int) -> Array:
 	if echo != "":
-		return [echo_name(echo), [echo]]
+		return [echo_name(echo), ["sister", "sister"] if echo == "sisters" else [echo]]
 	return BOUTS[i] if i < BOUTS.size() else SECRET
 
 
@@ -452,6 +460,11 @@ func _spawn_bout() -> void:
 		if f != null:
 			foes.append(f)
 			game.spawn_smoke(at + Vector3.UP, 2.0)
+	# Sisters fight together.
+	var sis: Array = foes.filter(func(f): return f is VeilSister)
+	if sis.size() >= 2:
+		VeilSister.link(sis[0], sis[1])
+	_sisters = 0
 	var names: Array = foes.map(func(f): return str(f.bot_name))
 	game.hud.show_notice("  ·  ".join(names), 3.0)
 
@@ -481,6 +494,15 @@ func _spawn(kind: String, at: Vector3) -> Revenant:
 			var bk := Bellkeeper.new()
 			bk.setup_bell(centre, game)
 			f = bk
+		"sister":
+			var vs := VeilSister.new()
+			vs.setup_sister("ELLAN" if _sisters == 0 else "MOIRA", centre, game, _sisters == 0)
+			_sisters += 1
+			f = vs
+		"sentinel":
+			var sn := IronSentinel.new()
+			sn.setup_sentinel(centre, game)
+			f = sn
 		"witch":
 			var lw := LanternWitch.new()
 			lw.setup_witch(centre, game)
@@ -512,6 +534,10 @@ func _spawn(kind: String, at: Vector3) -> Revenant:
 		f.arm_weapon("axmc")
 	elif f is Bellkeeper or f is LanternWitch:
 		f.arm_weapon("dmr")
+	elif f is IronSentinel:
+		f.arm_weapon("lmg")
+	elif f is VeilSister:
+		f.arm_weapon("rifle")
 	elif f is HollowWarden:
 		f.arm_weapon("dmr")
 		(f as HollowWarden).wake()

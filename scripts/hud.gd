@@ -909,8 +909,8 @@ func _open_talismans() -> void:
 		box.set_anchors_preset(Control.PRESET_CENTER)
 		box.offset_left = -380
 		box.offset_right = 380
-		box.offset_top = -270
-		box.offset_bottom = 270
+		box.offset_top = -330
+		box.offset_bottom = 330
 		_tal_panel.add_child(box)
 		var vb := VBoxContainer.new()
 		vb.add_theme_constant_override("separation", 7)
@@ -941,7 +941,7 @@ func _sync_talismans() -> void:
 	for t in Talismans.LIST:
 		var id: String = t[0]
 		var b := _button("", false)
-		b.custom_minimum_size = Vector2(700, 40)
+		b.custom_minimum_size = Vector2(700, 38)
 		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		var cost := "◆".repeat(int(t[3]))
 		if Talismans.owned(id):
@@ -979,8 +979,8 @@ func _open_echoes() -> void:
 		box.set_anchors_preset(Control.PRESET_CENTER)
 		box.offset_left = -360
 		box.offset_right = 360
-		box.offset_top = -300
-		box.offset_bottom = 300
+		box.offset_top = -330
+		box.offset_bottom = 330
 		_echoes_panel.add_child(box)
 		var vb := VBoxContainer.new()
 		vb.add_theme_constant_override("separation", 8)
@@ -1006,7 +1006,7 @@ func _open_echoes() -> void:
 		var known := Ordeal.slain.has(kind)
 		var best := float(Ordeal.slain.get(kind, 0.0))
 		var b := _button("", false)
-		b.custom_minimum_size = Vector2(660, 42)
+		b.custom_minimum_size = Vector2(660, 38)
 		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		if known:
 			b.text = "  %s   %s" % [str(e[1]), ("·   BEST %d:%02d" % [int(best) / 60, int(best) % 60]) if best > 0.0 else "·   NOT YET FOUGHT HERE"]

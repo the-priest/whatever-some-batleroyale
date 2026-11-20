@@ -396,6 +396,10 @@ func _ready() -> void:
 		_run_carrion_test()
 	elif OS.get_cmdline_user_args().has("--witch"):
 		_run_witch_test()
+	elif OS.get_cmdline_user_args().has("--sisters"):
+		_run_sisters_test()
+	elif OS.get_cmdline_user_args().has("--sentinel"):
+		_run_sentinel_test()
 	elif OS.get_cmdline_user_args().has("--echo"):
 		_run_echo_test()
 	elif OS.get_cmdline_user_args().has("--talisman"):
@@ -2423,7 +2427,7 @@ func _spawn_revenants() -> void:
 		giants += 1
 	# Mourne, the Bellkeeper, and Skarn, the Wyrm Beneath, at landmarks of
 	# their own.
-	for kind in ["bell", "wyrm", "carrion", "witch"]:
+	for kind in ["bell", "wyrm", "carrion", "witch", "sisters", "sentinel"]:
 		var at2 := _lone_boss_ground(sites)
 		if at2 == Vector3.INF:
 			continue
@@ -2440,6 +2444,26 @@ func _spawn_revenants() -> void:
 			var lw := LanternWitch.new()
 			lw.setup_witch(at2, self)
 			lb = lw
+		elif kind == "sentinel":
+			var sn := IronSentinel.new()
+			sn.setup_sentinel(at2, self)
+			lb = sn
+		elif kind == "sisters":
+			# Two of them, side by side.
+			var s1 := VeilSister.new()
+			s1.setup_sister("ELLAN", at2, self, true)
+			var s2 := VeilSister.new()
+			s2.setup_sister("MOIRA", at2, self, false)
+			VeilSister.link(s1, s2)
+			for k in 2:
+				var sv: VeilSister = s1 if k == 0 else s2
+				add_child(sv)
+				sv.global_position = ground_at(at2 + Vector3(-3.0 + 6.0 * k, 20.0, 0.0)) + Vector3.UP * 0.3
+				sv.arm_weapon("rifle" if k == 0 else "dmr")
+				sv.eliminated.connect(_on_bot_eliminated)
+				bots.append(sv)
+			giants += 2
+			continue
 		else:
 			var wy := Wyrm.new()
 			wy.setup_wyrm(at2, self)
@@ -2514,9 +2538,14 @@ func _felled_fx(r: Revenant) -> void:
 		get_tree().create_timer(0.55, true, false, true).timeout.connect(func(): Engine.time_scale = 1.0)
 
 
-## Open ground by a landmark no other boss holds (Vector3.INF if none).
+## Open ground by a landmark no other boss holds, else by old ruins
+## (Vector3.INF if none).
 func _lone_boss_ground(sites: Array) -> Vector3:
-	for l in sites:
+	var all: Array = sites.duplicate()
+	for p in world.villages.poi_pads:
+		if str(p.type) == "ruin":
+			all.append(["RUINS", p.center])
+	for l in all:
 		var c2: Vector2 = l[1]
 		var taken2 := false
 		for b in bots:
@@ -2540,7 +2569,7 @@ func _lone_boss_ground(sites: Array) -> Vector3:
 ## A Revenant fell: a bell over the whole island, and its hoard on the ground.
 func _revenant_fell(r: Revenant, killer: String) -> void:
 	sfx.play_ui("writ_done", -1.0)
-	hud.show_big("COLOSSUS FELLED" if r is Colossus else ("WARDEN FELLED" if r is HollowWarden else ("THE UNKINDLED FALLS" if r is Unkindled else ("THE BELL FALLS SILENT" if r is Bellkeeper else ("THE WYRM IS SLAIN" if r is Wyrm else ("THE CARRION QUEEN FALLS" if r is Carrion else ("THE LANTERN GOES OUT" if r is LanternWitch else "REVENANT FELLED")))))), Color(1.0, 0.82, 0.38), 3.6)
+	hud.show_big("COLOSSUS FELLED" if r is Colossus else ("WARDEN FELLED" if r is HollowWarden else ("THE UNKINDLED FALLS" if r is Unkindled else ("THE BELL FALLS SILENT" if r is Bellkeeper else ("THE WYRM IS SLAIN" if r is Wyrm else ("THE CARRION QUEEN FALLS" if r is Carrion else ("THE LANTERN GOES OUT" if r is LanternWitch else ("A SISTER FALLS" if r is VeilSister else ("THE SENTINEL IS STILLED" if r is IronSentinel else "REVENANT FELLED")))))))), Color(1.0, 0.82, 0.38), 3.6)
 	hud.show_notice("%s  —  SLAIN BY %s" % [r.display_name(), killer if killer != "" else "THE STORM"], 4.0)
 	_felled_fx(r)
 	if net_is_client() or ordeal != null:
@@ -2661,9 +2690,9 @@ func _update_boss_bar() -> void:
 		hud.show_big("%s RAGES" % best.bot_name, HUD.DANGER, 2.4)
 		hud.show_notice("THE PACK ANSWERS ITS CALL", 2.6)
 		sfx.play_ui("writ_fail", -4.0)
-	hud.set_boss({"name": best.bot_name, "title": best.title, "hp": clampf(best.hp / 100.0, 0.0, 1.0), "raged": raged, "big": best is HollowWarden or best is Bellkeeper or best is Wyrm or best is Carrion or best is LanternWitch})
+	hud.set_boss({"name": best.bot_name, "title": best.title, "hp": clampf(best.hp / 100.0, 0.0, 1.0), "raged": raged, "big": best is HollowWarden or best is Bellkeeper or best is Wyrm or best is Carrion or best is LanternWitch or best is VeilSister or best is IronSentinel})
 	if music != null:
-		music.set_boss((best is HollowWarden or best is Bellkeeper or best is Wyrm or best is Carrion or best is LanternWitch) and best_d < 60.0)
+		music.set_boss((best is HollowWarden or best is Bellkeeper or best is Wyrm or best is Carrion or best is LanternWitch or best is VeilSister or best is IronSentinel) and best_d < 60.0)
 
 
 func _drop_bot_loot(b: Bot) -> void:
@@ -5397,7 +5426,7 @@ func _net_send_setup() -> void:
 		var b = bots[bi]
 		bot_names.append(b.bot_name)
 		if is_instance_valid(b) and b is Revenant:
-			revs.append([bi, (b as Revenant).title, (b as Revenant).arena, b is Colossus, "warden" if b is HollowWarden else ("bell" if b is Bellkeeper else ("wyrm" if b is Wyrm else ("carrion" if b is Carrion else ("witch" if b is LanternWitch else ""))))])
+			revs.append([bi, (b as Revenant).title, (b as Revenant).arena, b is Colossus, "warden" if b is HollowWarden else ("bell" if b is Bellkeeper else ("wyrm" if b is Wyrm else ("carrion" if b is Carrion else ("witch" if b is LanternWitch else ("sister" if b is VeilSister else ("sentinel" if b is IronSentinel else ""))))))])
 	var list: Array = []
 	for id in net.roster:
 		list.append([id, net.roster[id]])
@@ -5471,7 +5500,15 @@ func net_start_match(setup: Dictionary) -> void:
 	for i in names.size():
 		var b: Bot = null
 		if rev_at.has(i):
-			if (rev_at[i] as Array).size() > 4 and str(rev_at[i][4]) == "witch":
+			if (rev_at[i] as Array).size() > 4 and str(rev_at[i][4]) == "sister":
+				var vs := VeilSister.new()
+				vs.setup_sister(str(names[i]), rev_at[i][2], self, false)
+				b = vs
+			elif (rev_at[i] as Array).size() > 4 and str(rev_at[i][4]) == "sentinel":
+				var sn := IronSentinel.new()
+				sn.setup_sentinel(rev_at[i][2], self)
+				b = sn
+			elif (rev_at[i] as Array).size() > 4 and str(rev_at[i][4]) == "witch":
 				var lw := LanternWitch.new()
 				lw.setup_witch(rev_at[i][2], self)
 				b = lw
@@ -6933,6 +6970,9 @@ func _test_fell(f: Node) -> void:
 	if f is Carrion:
 		(f as Carrion).phase = "perch"
 		(f as Carrion)._t = 99.0
+	if f is IronSentinel:
+		(f as IronSentinel)._open_vents()
+		(f as IronSentinel)._vent_t = 99.0
 	var g := 0
 	while is_instance_valid(f) and f.alive and g < 600:
 		g += 1
@@ -7030,6 +7070,118 @@ func _run_echo_test() -> void:
 	echo_kind = ""
 	ordeal_mode = false
 	print("[echo] done")
+	get_tree().quit()
+
+
+## The Veil Sisters: two, linked; crossfire, the swap, the grief.
+func _run_sisters_test() -> void:
+	_start_match()
+	for i in 30:
+		await get_tree().physics_frame
+	_land_player_now()
+	var ss: Array = bots.filter(func(b): return is_instance_valid(b) and b is VeilSister)
+	_check("two sisters hold a landmark", ss.size() == 2)
+	if ss.size() < 2:
+		get_tree().quit()
+		return
+	var a: VeilSister = ss[0]
+	var b: VeilSister = ss[1]
+	print("[sisters] %s and %s at %s" % [a.display_name(), b.display_name(), str(a.arena.round())])
+	_check("they are linked, one the elder", a.sister == b and b.sister == a and a.elder != b.elder)
+	var el: VeilSister = a if a.elder else b
+	var yo: VeilSister = b if a.elder else a
+	player.spawn_protect = 99999.0
+	player.global_position = _dry_spot_near(el.global_position, 14.0)
+	var orbs0 := get_children().filter(func(n): return n is BossOrb).size()
+	el.enemy = player
+	yo.enemy = player
+	el._cross_t = 0.0
+	el._swap_t = 999.0
+	var most := 0
+	for i in 20:
+		await get_tree().physics_frame
+		most = maxi(most, get_children().filter(func(n): return n is BossOrb).size() - orbs0)
+	print("[sisters] crossfire: %d balls of fire in the air" % most)
+	_check("crossfire: both throw at once", most >= 6)
+	var pa := el.global_position
+	var pb := yo.global_position
+	el._cross_t = 999.0
+	el._swap_t = 0.0
+	var started := false
+	var swapped := false
+	for i in 90:
+		await get_tree().physics_frame
+		el.enemy = player
+		if el._swap_in >= 0.0:
+			started = true
+			pa = el.global_position
+			pb = yo.global_position
+		elif started:
+			swapped = el.global_position.distance_to(pb) < 1.0 and yo.global_position.distance_to(pa) < 1.0
+			break
+	print("[sisters] swap: elder %d m from where the younger stood" % int(el.global_position.distance_to(pb)))
+	_check("the swap: they trade places", swapped)
+	_test_fell(yo)
+	for i in 5:
+		await get_tree().physics_frame
+	_check("one falls: the other grieves and rages", not yo.alive and el.grieving and el.raged)
+	var em := writs.my_embers
+	_test_fell(el)
+	await get_tree().physics_frame
+	_check("both fallen, and it pays", not el.alive and writs.my_embers >= em + 1600)
+	print("[sisters] done")
+	get_tree().quit()
+
+
+## The Iron Sentinel: plate that turns bullets, vents that do not, the stomp.
+func _run_sentinel_test() -> void:
+	_start_match()
+	for i in 30:
+		await get_tree().physics_frame
+	_land_player_now()
+	var ss: Array = bots.filter(func(b): return is_instance_valid(b) and b is IronSentinel)
+	_check("the iron sentinel holds a landmark", ss.size() == 1)
+	if ss.is_empty():
+		get_tree().quit()
+		return
+	var sn: IronSentinel = ss[0]
+	print("[sentinel] %s at %s" % [sn.display_name(), str(sn.arena.round())])
+	var h0 := sn.hp
+	sn.take_damage(40.0, sn.global_position + Vector3.UP, false, player)
+	var closed_dmg := h0 - sn.hp
+	sn._open_vents()
+	var h1 := sn.hp
+	sn.take_damage(40.0, sn.global_position + Vector3.UP, false, player)
+	var open_dmg := h1 - sn.hp
+	print("[sentinel] 40 damage: %.2f with its plate closed, %.2f venting" % [closed_dmg, open_dmg])
+	_check("its plate turns bullets", closed_dmg < 1.5)
+	_check("venting, it takes real harm", open_dmg > closed_dmg * 5.0)
+	sn._close_vents()
+	sn.hp = 100.0
+	player.vest_level = 3
+	player.armor = 100.0
+	player.spawn_protect = 0.0
+	var spot := _dry_spot_near(sn.global_position, 3.5)
+	sn._stomp_t = 0.0
+	sn._vent_t = 999.0
+	var hurt := false
+	for i in 60 * 6:
+		await get_tree().physics_frame
+		player.global_position = Vector3(spot.x, player.global_position.y, spot.z)
+		sn.enemy = player
+		var hb := player.hp
+		await get_tree().physics_frame
+		if player.hp < hb - 10.0:
+			hurt = true
+			break
+		player.hp = 100.0
+	_check("the stomp throws you when you are close", hurt)
+	player.spawn_protect = 99999.0
+	var em := writs.my_embers
+	_test_fell(sn)
+	await get_tree().physics_frame
+	_check("the sentinel is stilled and pays", not sn.alive and writs.my_embers >= em + 1600)
+	print("[sentinel] done")
 	get_tree().quit()
 
 
@@ -7800,7 +7952,7 @@ func _run_revenant_test() -> void:
 	_land_player_now()
 	player.spawn_protect = 99999.0
 	player.give_weapon("rifle")
-	var revs: Array = bots.filter(func(b): return is_instance_valid(b) and b is Revenant and not (b is Colossus) and not (b is HollowWarden) and not (b is Bellkeeper) and not (b is Wyrm) and not (b is Carrion) and not (b is LanternWitch))
+	var revs: Array = bots.filter(func(b): return is_instance_valid(b) and b is Revenant and not (b is Colossus) and not (b is HollowWarden) and not (b is Bellkeeper) and not (b is Wyrm) and not (b is Carrion) and not (b is LanternWitch) and not (b is VeilSister) and not (b is IronSentinel))
 	_check("three revenants hold the island", revs.size() == REVENANT_COUNT)
 	_check("revenants are not counted among the living", alive == total_players)
 	if revs.is_empty():

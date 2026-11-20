@@ -522,6 +522,26 @@ static func show_fx(game: Node, fx: Dictionary) -> void:
 			tw.tween_callback(func(): m.albedo_color = Color(col.r, col.g, col.b, 0.95))
 			tw.tween_property(pivot, "rotation:y", -(a + sp * dur), dur)
 			tw.tween_callback(pivot.queue_free)
+		"steam":
+			# An engine venting: steam pouring up, a hot orange glow, and a
+			# word to anyone close that now is the time.
+			var at: Vector3 = fx["p"]
+			var t := float(fx.get("t", 4.0))
+			var gl := OmniLight3D.new()
+			gl.light_color = Color(1.0, 0.5, 0.18)
+			gl.light_energy = 3.5
+			gl.omni_range = 8.0
+			gl.shadow_enabled = false
+			game.add_child(gl)
+			gl.global_position = at
+			var tw := gl.create_tween()
+			tw.tween_interval(t)
+			tw.tween_callback(gl.queue_free)
+			for k in int(t / 0.6):
+				var tm := game.get_tree().create_timer(0.6 * float(k))
+				tm.timeout.connect(func(): if is_instance_valid(game): game.spawn_smoke(at + Vector3.UP * 0.4, 0.9))
+			if game.player != null and game.player.alive and game.player.global_position.distance_to(at) < 70.0:
+				game.hud.show_notice("ITS VENTS ARE OPEN  —  STRIKE NOW", t)
 		"line":
 			# A red strip across the ground: where something is about to come.
 			var a: Vector3 = fx["a"]

@@ -848,8 +848,9 @@ func _ground(delta: float) -> void:
 	if dodge_t > 0.0:
 		dodge_t -= delta
 		var k := clampf(dodge_t / DODGE_TIME, 0.0, 1.0)
-		velocity.x = _dodge_dir.x * DODGE_SPEED * (0.45 + 0.55 * k)
-		velocity.z = _dodge_dir.z * DODGE_SPEED * (0.45 + 0.55 * k)
+		var far := 1.3 if Talismans.wears("thread") else 1.0
+		velocity.x = _dodge_dir.x * DODGE_SPEED * far * (0.45 + 0.55 * k)
+		velocity.z = _dodge_dir.z * DODGE_SPEED * far * (0.45 + 0.55 * k)
 	else:
 		velocity.x = move_toward(velocity.x, target.x, accel * delta)
 		velocity.z = move_toward(velocity.z, target.z, accel * delta)
@@ -2232,7 +2233,7 @@ func take_damage(amount: float, from_pos: Vector3 = Vector3.ZERO, headshot: bool
 				inventory_changed.emit()
 		elif not headshot and vest_level > 0:
 			dmg *= 1.0 - ABSORB[vest_level]
-			armor -= amount * 0.45
+			armor -= amount * 0.45 * (0.5 if Talismans.wears("plate") else 1.0)
 			if armor <= 0.0:
 				vest_level = 0
 				armor = 0.0

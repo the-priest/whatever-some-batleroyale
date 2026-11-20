@@ -13,6 +13,8 @@ const LIST := [
 	["scale", "WYRM SCALE", "wyrm", 2, "One more swallow in the Ember Flask"],
 	["feather", "CARRION FEATHER", "carrion", 1, "You jump higher"],
 	["lantern", "WITCH'S LANTERN", "witch", 1, "You drink from the flask twice as fast"],
+	["thread", "VEIL THREAD", "sisters", 1, "Your roll carries you further"],
+	["plate", "IRON PLATE", "sentinel", 2, "Your armour wears down half as fast"],
 	["crown", "UNKINDLED CROWN", "unkindled", 3, "Your bullets hit a tenth harder"],
 ]
 const NOTCHES := 5
