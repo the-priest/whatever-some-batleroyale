@@ -211,7 +211,7 @@ var in_water := false
 func _ready() -> void:
 	add_to_group("player")
 	collision_layer = 2
-	collision_mask = 1 | 4
+	collision_mask = 1 | 4 | Reaches.VEIL_LAYER
 	floor_max_angle = deg_to_rad(50.0)
 
 	var col := CollisionShape3D.new()
@@ -877,6 +877,9 @@ func _ground(delta: float) -> void:
 	if is_on_floor():
 		_air_jumps = 1
 		_air_dashes = 1
+	# The Ash Stride carries you through a veil of ash (mid-roll or mid-dash).
+	var through := moves.has("dash") and (dodge_t > 0.0 or _air_dash_t > 0.0)
+	collision_mask = (1 | 4) if through else (1 | 4 | Reaches.VEIL_LAYER)
 	if dodge_t <= 0.0 and _air_dash_t <= 0.0 and _ajp("dodge"):
 		if is_on_floor() or _coyote > 0.0:
 			_start_dodge(wish, basis_yaw)

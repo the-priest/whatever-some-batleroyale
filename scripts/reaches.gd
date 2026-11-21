@@ -13,6 +13,12 @@ extends Node3D
 ## double jump cannot, fails the audit (see audit()).
 
 const COUNT := 14
+## Rings of standing stones walled with veils of ash: only a dash with the
+## Ash Stride passes a veil. Taller than any jump can clear.
+const VEILS := 6
+const VEIL_LAYER := 16
+const VEIL_H := 6.5
+const VEIL_R := 3.4
 ## Top of the column above the highest ground beside it.
 const RISE := 3.45
 const RADIUS := 1.25
@@ -67,6 +73,26 @@ func build(p_game: Node, seed_value: int) -> void:
 		if stand > base.y + 1.5:
 			continue
 		_place(base, stand)
+	tries = 0
+	var veiled := 0
+	while veiled < VEILS and tries < 2000:
+		tries += 1
+		var p2 := terrain.random_land_point(_rng, Terrain.WATER_LEVEL + 3.0, 0.15)
+		if game.world.villages.house_at(p2, 25.0).size() > 0:
+			continue
+		var clash2 := false
+		for s in shelves:
+			if Vector2((s.pos as Vector3).x, (s.pos as Vector3).z).distance_to(p2) < 220.0:
+				clash2 = true
+				break
+		for v in game.world.villages.village_pads:
+			if (v.center as Vector2).distance_to(p2) < float(v.radius) + 30.0:
+				clash2 = true
+				break
+		if clash2:
+			continue
+		_place_veil(Vector3(p2.x, terrain.height_at(p2.x, p2.y), p2.y))
+		veiled += 1
 
 
 ## The highest surface a player could stand on within a few metres of the
@@ -182,6 +208,130 @@ func _place(base: Vector3, stand: float) -> void:
 	shelves.append({"pos": Vector3(base.x, top, base.z), "stand": stand, "top": top, "body": body, "cache": cache, "taken": false})
 
 
+func _place_veil(c: Vector3) -> void:
+	var root := Node3D.new()
+	root.name = "AshVeil"
+	add_child(root)
+	root.global_position = c
+	var stone := StandardMaterial3D.new()
+	stone.albedo_color = Color(0.16, 0.15, 0.15)
+	stone.roughness = 0.9
+	var veil_m := StandardMaterial3D.new()
+	veil_m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	veil_m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	veil_m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	veil_m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	veil_m.albedo_color = Color(0.55, 0.65, 0.9, 0.35)
+	var n := 6
+	var walls := StaticBody3D.new()
+	walls.collision_layer = 1
+	walls.collision_mask = 0
+	root.add_child(walls)
+	var veils := StaticBody3D.new()
+	veils.name = "Veils"
+	veils.collision_layer = VEIL_LAYER
+	veils.collision_mask = 0
+	root.add_child(veils)
+	var chord := 2.0 * VEIL_R * sin(PI / float(n))
+	for k in n:
+		var a := TAU * float(k) / float(n)
+		# A standing stone at each corner.
+		var sp := Vector3(cos(a) * VEIL_R, VEIL_H * 0.5 - 0.5, sin(a) * VEIL_R)
+		var sb := BoxShape3D.new()
+		sb.size = Vector3(1.0, VEIL_H + 1.0, 1.0)
+		var scs := CollisionShape3D.new()
+		scs.shape = sb
+		scs.position = sp
+		scs.rotation.y = -a
+		walls.add_child(scs)
+		var smi := MeshInstance3D.new()
+		var sbm := BoxMesh.new()
+		sbm.size = sb.size
+		smi.mesh = sbm
+		smi.material_override = stone
+		smi.position = sp
+		smi.rotation.y = -a
+		root.add_child(smi)
+		# A veil between it and the next.
+		var a2 := a + PI / float(n)
+		var mid := Vector3(cos(a2) * VEIL_R * cos(PI / float(n)), VEIL_H * 0.5, sin(a2) * VEIL_R * cos(PI / float(n)))
+		var vb := BoxShape3D.new()
+		vb.size = Vector3(chord, VEIL_H, 0.2)
+		var vcs := CollisionShape3D.new()
+		vcs.shape = vb
+		vcs.position = mid
+		vcs.rotation.y = -a2 + PI * 0.5
+		veils.add_child(vcs)
+		var vmi := MeshInstance3D.new()
+		var qm := QuadMesh.new()
+		qm.size = Vector2(chord, VEIL_H)
+		vmi.mesh = qm
+		vmi.material_override = veil_m
+		vmi.position = mid
+		vmi.rotation.y = -a2 + PI * 0.5
+		vmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		root.add_child(vmi)
+	# The cache inside: as on a ledge, on the ground.
+	var holder := StaticBody3D.new()
+	holder.collision_layer = 0
+	root.add_child(holder)
+	var cache := _cache_node(holder, shelves.size())
+	cache.position.y = 0.0
+	shelves.append({"pos": c, "stand": c.y, "top": c.y, "body": holder, "cache": cache, "taken": false, "veil": true, "veils": veils})
+
+
+## An ember cache (brazier, light and the trigger) on a body.
+func _cache_node(body: Node3D, idx: int) -> Node3D:
+	var vein := StandardMaterial3D.new()
+	vein.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	vein.albedo_color = Color(0.7, 0.8, 1.0)
+	vein.emission_enabled = true
+	vein.emission = Color(0.55, 0.7, 1.0)
+	vein.emission_energy_multiplier = 3.0
+	var cache := Node3D.new()
+	body.add_child(cache)
+	var bowl := MeshInstance3D.new()
+	var bm := CylinderMesh.new()
+	bm.top_radius = 0.35
+	bm.bottom_radius = 0.2
+	bm.height = 0.3
+	bowl.mesh = bm
+	var iron := StandardMaterial3D.new()
+	iron.albedo_color = Color(0.2, 0.18, 0.16)
+	iron.metallic = 0.6
+	bowl.material_override = iron
+	bowl.position.y = 0.15
+	cache.add_child(bowl)
+	var coal := MeshInstance3D.new()
+	var sm := SphereMesh.new()
+	sm.radius = 0.26
+	sm.height = 0.3
+	coal.mesh = sm
+	coal.material_override = vein
+	coal.position.y = 0.32
+	cache.add_child(coal)
+	var light := OmniLight3D.new()
+	light.light_color = Color(0.6, 0.75, 1.0)
+	light.light_energy = 2.0
+	light.omni_range = 7.0
+	light.position.y = 0.8
+	light.distance_fade_enabled = true
+	light.distance_fade_begin = 120.0
+	cache.add_child(light)
+	var area := Area3D.new()
+	area.collision_layer = 0
+	area.collision_mask = 2
+	var ash := SphereShape3D.new()
+	ash.radius = 1.4
+	var acs := CollisionShape3D.new()
+	acs.shape = ash
+	area.add_child(acs)
+	area.position.y = 0.9
+	cache.add_child(area)
+	area.body_entered.connect(func(b: Node3D): _take(idx, b))
+	return cache
+
+
 func _take(i: int, who: Node3D) -> void:
 	if i >= shelves.size() or who != game.player:
 		return
@@ -204,15 +354,17 @@ func _take(i: int, who: Node3D) -> void:
 	game.sfx.play_ui("writ_done", -2.0)
 
 
-## Near a ledge you cannot reach yet: say what it needs.
-func hint_for(p: Vector3, has_double: bool) -> String:
-	if has_double:
-		return ""
+## Near a ledge or veil you cannot pass yet: say what it needs.
+func hint_for(p: Vector3, has_double: bool, has_dash := true) -> String:
 	for s in shelves:
 		if bool(s.taken):
 			continue
 		var c: Vector3 = s.pos
-		if Vector2(c.x - p.x, c.z - p.z).length() < 6.0:
+		var d := Vector2(c.x - p.x, c.z - p.z).length()
+		if bool(s.get("veil", false)):
+			if not has_dash and d < VEIL_R + 4.0:
+				return "A VEIL OF ASH  —  ONLY THE ASH STRIDE PASSES THROUGH (FROM THE CARRION QUEEN)"
+		elif not has_double and d < 6.0:
 			return "A LEDGE TOO HIGH TO REACH  —  YOU NEED A SECOND JUMP (EMBER WINGS, FROM THE BELLKEEPER)"
 	return ""
 
@@ -224,9 +376,33 @@ func audit() -> Array:
 	var s1 := single_reach(true)
 	var s2 := double_reach(false)
 	for s in shelves:
+		if bool(s.get("veil", false)):
+			continue
 		var c: Vector3 = s.pos
 		var stand := _highest_beside(Vector3(c.x, c.y - RISE, c.z), (s.top as float) + 6.0, s.body as CollisionObject3D)
 		var need := (s.top as float) - stand
 		var ok := need > s1 + 0.08 and need < s2 - 0.05
 		out.append([c, need, s1, s2, ok])
+	return out
+
+
+## The veiled rings: closed all round, walls taller than two jumps and the
+## ledge-grab. [[position, wall height, closed, ok], ...]
+func audit_veils() -> Array:
+	var out: Array = []
+	var space: PhysicsDirectSpaceState3D = game.get_world_3d().direct_space_state
+	for s in shelves:
+		if not bool(s.get("veil", false)):
+			continue
+		var c: Vector3 = s.pos
+		var closed := true
+		for k in 36:
+			var a := TAU * float(k) / 36.0
+			var from := c + Vector3(cos(a), 0, sin(a)) * (VEIL_R + 3.0) + Vector3.UP * 1.0
+			var q := PhysicsRayQueryParameters3D.create(from, c + Vector3.UP * 1.0, 1 | VEIL_LAYER)
+			var hit := space.intersect_ray(q)
+			if hit.is_empty() or (hit.position as Vector3).distance_to(c + Vector3.UP) < VEIL_R * 0.5:
+				closed = false
+		var ok := closed and VEIL_H > double_reach(true) + 1.0
+		out.append([c, VEIL_H, closed, ok])
 	return out

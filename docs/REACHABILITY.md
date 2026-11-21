@@ -29,9 +29,23 @@ Each must be out of reach of one jump (with the feather) and in reach of two (wi
 | 13 | -185, -167 | 3.45 m | no (max 3.16) | yes (max 3.70) | SEALED UNTIL EMBER WINGS |
 | 14 | -782, -91 | 3.45 m | no (max 3.16) | yes (max 3.70) | SEALED UNTIL EMBER WINGS |
 
+## Veils of ash (seed 7)
+
+Rings of standing stones walled with veils: closed all round, 6.5 m tall (two jumps and the ledge-grab reach 4.28 m with the feather). Only a roll or air dash with the Ash Stride passes a veil.
+
+| # | Where (x, z) | Closed all round | Verdict |
+|---|---|---|---|
+| 1 | -238, 252 | yes | SEALED UNTIL ASH STRIDE |
+| 2 | -9, 391 | yes | SEALED UNTIL ASH STRIDE |
+| 3 | 242, -446 | yes | SEALED UNTIL ASH STRIDE |
+| 4 | -508, -176 | yes | SEALED UNTIL ASH STRIDE |
+| 5 | -519, -521 | yes | SEALED UNTIL ASH STRIDE |
+| 6 | 121, 188 | yes | SEALED UNTIL ASH STRIDE |
+
 ## Everything else
 
 - The open isle, towns, landmarks, Wayshrines and every boss arena: reachable on foot from the start.
 - Sky ledges: sealed until Ember Wings (Souls: from the Bellkeeper, or after the third keeper). Battle Royale, the Ordeal and the Echoes give the full kit at once.
+- Veiled rings: sealed until the Ash Stride (Souls: from the Carrion Queen, or after the fifth keeper).
 - Vaults: sealed until you carry their sigils (from the writs and the bosses).
 - The Ashen Hollow's Warden: sealed until its braziers are lit.

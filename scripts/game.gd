@@ -90,6 +90,7 @@ var writs: Writs = null
 var guide: Guide = null
 ## The sky ledges (double-jump caches).
 var reaches: Reaches = null
+var _reach_hint := ""
 ## The torn pages of the island's story (see codex.gd).
 var codex: Codex = null
 ## Treasure chests, and the Mimics among them (see chests.gd).
@@ -1182,6 +1183,11 @@ func _souls_tick(delta: float) -> void:
 		hud.quest = {"pos": best.arena, "name": best.display_name()}
 	else:
 		hud.quest = {}
+	if reaches != null:
+		var rh := reaches.hint_for(player.global_position, player.moves.has("double"), player.moves.has("dash"))
+		if rh != "" and rh != _reach_hint:
+			hud.show_notice(rh, 4.5)
+		_reach_hint = rh
 	if hud.lbl_alive != null:
 		hud.lbl_alive.text = "KEEPERS  %d / %d" % [souls_slain, souls_total]
 		hud.lbl_kills.text = "DEATHS  %d" % souls_deaths
@@ -8166,6 +8172,44 @@ func _run_reach_test() -> void:
 		top3 = maxf(top3, player.global_position.y)
 	_check("without Ember Wings there is no second jump", top3 - y2 < (top1 - y0) * 1.2)
 	player.moves = {"double": true, "dash": true}
+	# A veil: walked into, it stops you; rolled into with the Ash Stride, it lets you through.
+	var vs: Dictionary = {}
+	for sh in reaches.shelves:
+		if bool(sh.get("veil", false)):
+			vs = sh
+			break
+	if not vs.is_empty():
+		var vc: Vector3 = vs.pos
+		# Straight at the middle of a veil (the stones stand at the corners).
+		var va := PI / 6.0
+		var outside := ground_at(vc + Vector3(cos(va), 0, sin(va)) * (Reaches.VEIL_R + 2.5) + Vector3.UP * 30.0) + Vector3.UP * 0.1
+		player.global_position = outside
+		player.velocity = Vector3.ZERO
+		player.yaw = atan2(-(vc.x - outside.x), -(vc.z - outside.z))
+		player.moves = {}
+		Input.action_press("move_forward")
+		for i in 90:
+			await get_tree().physics_frame
+		Input.action_release("move_forward")
+		var walked_in := Vector2(player.global_position.x - vc.x, player.global_position.z - vc.z).length() < Reaches.VEIL_R - 0.5
+		player.global_position = outside
+		player.velocity = Vector3.ZERO
+		player.moves = {"double": true, "dash": true}
+		for i in 10:
+			await get_tree().physics_frame
+		Input.action_press("move_forward")
+		for i in 6:
+			await get_tree().physics_frame
+		Input.action_press("dodge")
+		await get_tree().physics_frame
+		Input.action_release("dodge")
+		for i in 40:
+			await get_tree().physics_frame
+		Input.action_release("move_forward")
+		var dashed_in := Vector2(player.global_position.x - vc.x, player.global_position.z - vc.z).length() < Reaches.VEIL_R - 0.3
+		print("[reach] veil: walked in %s, rolled in with the Ash Stride %s" % [str(walked_in), str(dashed_in)])
+		_check("a veil of ash stops you on foot", not walked_in)
+		_check("the Ash Stride rolls you through it", dashed_in)
 	# The ledges.
 	var rows := reaches.audit()
 	var bad := 0
@@ -8193,11 +8237,27 @@ func _run_reach_test() -> void:
 		if not ok:
 			bad += 1
 		lines.append("| %d | %d, %d | %.2f m | no (max %.2f) | yes (max %.2f) | %s |" % [i + 1, int(c.x), int(c.z), float(r[1]), float(r[2]), float(r[3]), "SEALED UNTIL EMBER WINGS" if ok else "**FAILS**"])
+	var vrows := reaches.audit_veils()
+	lines.append("")
+	lines.append("## Veils of ash (seed %d)" % seed_value)
+	lines.append("")
+	lines.append("Rings of standing stones walled with veils: closed all round, %.1f m tall (two jumps and the ledge-grab reach %.2f m with the feather). Only a roll or air dash with the Ash Stride passes a veil." % [Reaches.VEIL_H, Reaches.double_reach(true)])
+	lines.append("")
+	lines.append("| # | Where (x, z) | Closed all round | Verdict |")
+	lines.append("|---|---|---|---|")
+	for i in vrows.size():
+		var vr: Array = vrows[i]
+		var vc: Vector3 = vr[0]
+		if not bool(vr[3]):
+			bad += 1
+		lines.append("| %d | %d, %d | %s | %s |" % [i + 1, int(vc.x), int(vc.z), "yes" if bool(vr[2]) else "NO", "SEALED UNTIL ASH STRIDE" if bool(vr[3]) else "**FAILS**"])
+	_check("the isle has veiled rings", vrows.size() >= 4)
 	lines.append("")
 	lines.append("## Everything else")
 	lines.append("")
 	lines.append("- The open isle, towns, landmarks, Wayshrines and every boss arena: reachable on foot from the start.")
 	lines.append("- Sky ledges: sealed until Ember Wings (Souls: from the Bellkeeper, or after the third keeper). Battle Royale, the Ordeal and the Echoes give the full kit at once.")
+	lines.append("- Veiled rings: sealed until the Ash Stride (Souls: from the Carrion Queen, or after the fifth keeper).")
 	lines.append("- Vaults: sealed until you carry their sigils (from the writs and the bosses).")
 	lines.append("- The Ashen Hollow's Warden: sealed until its braziers are lit.")
 	print("[reach] %d ledges, %d fail" % [rows.size(), bad])
