@@ -113,6 +113,34 @@ Every character, every class, gets the same movement kit on top of the dodge rol
   with both, and what is sealed behind sigils. A gate that can be reached without its move
   fails the audit.
 
+## Phase 3c — Controller support
+
+Play the whole game on a gamepad (Xbox, PlayStation, Switch Pro, Steam Deck), with no mouse:
+
+| Action | Pad |
+|---|---|
+| Move / look | left stick / right stick (with aim assist slow-down over enemies, off in LAN) |
+| Attack / alternate (guard, focus, flame, aim) | RT / LT |
+| Jump (double jump) | A / Cross |
+| Dodge roll, air dash | B / Circle |
+| Crouch, slide | right stick click |
+| Sprint | left stick click |
+| Class ability | RB / R1 |
+| Flask | LB / L1 |
+| Interact, pick up | X / Square |
+| Reload | X / Square (hold) |
+| Swap weapon (class weapon ↔ guns) | Y / Triangle |
+| Grenade | D-pad up |
+| Heal | D-pad down |
+| Map | Back / Select |
+| Pause | Start |
+
+- Every menu works with the D-pad and A/B; focus is always visible and the description panel
+  follows it.
+- Prompts change to pad glyphs the moment a pad is used, and back to keys on the keyboard.
+- Settings: stick sensitivity, invert Y, deadzone, aim assist strength, vibration on/off
+  (rumble on hits, parries and heavy blows).
+
 ## Phase 4 — Battle Royale with classes
 
 - Bots pick classes too: Knights rush and swing, Hunters keep their distance and loose arrows,
@@ -147,6 +175,6 @@ Every character, every class, gets the same movement kit on top of the dodge rol
 
 ### Order of work
 
-1 → 2 → 3 → 3b are the foundation (who you are, where you go, what everything does, how you
+1 → 2 → 3 → 3b → 3c are the foundation (who you are, where you go, what everything does, how you
 move and what the isle hides). 4–6 deepen
 combat. 7 runs after every phase as well as at the end.

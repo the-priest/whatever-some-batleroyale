@@ -430,6 +430,8 @@ func _ready() -> void:
 		_run_souls_test()
 	elif OS.get_cmdline_user_args().has("--hitbox"):
 		_run_hitbox_test()
+	elif OS.get_cmdline_user_args().has("--classes"):
+		_run_classes_test()
 	elif OS.get_cmdline_user_args().has("--sentinel"):
 		_run_sentinel_test()
 	elif OS.get_cmdline_user_args().has("--echo"):
@@ -663,6 +665,7 @@ func _give_loadout() -> void:
 		player.add_ammo_cal(Weapons.caliber(loadout_secondary), int(Weapons.AMMO_BOX.get(Weapons.caliber(loadout_secondary), 30)))
 	if loadout_optic != "" and prim_slot >= 0 and Weapons.scope_fits(loadout_primary, loadout_optic):
 		player.attachments[prim_slot]["scope"] = loadout_optic
+	player.draw_kit(true)
 	if prim_slot >= 0:
 		player.select_slot(prim_slot)
 	player.refresh_viewmodel()
@@ -946,12 +949,16 @@ func _begin_ordeal() -> void:
 	if arms:
 		player.give_weapon("pistol")
 	elif not loadout_enabled:
-		player.give_weapon("rifle")
-		player.give_weapon("dmr")
+		if Classes.has_kit(player.pclass):
+			player.give_weapon("pistol")
+		else:
+			player.give_weapon("rifle")
+			player.give_weapon("dmr")
 	for w in player.loadout:
 		if w != "":
 			for k in 3:
 				player.add_ammo_cal(Weapons.caliber(w), int(Weapons.AMMO_BOX.get(Weapons.caliber(w), 30)))
+	player.draw_kit(true)
 	if not Ordeal.is_bound("flesh"):
 		player.vest_level = 2
 		player.armor = 100.0
@@ -1010,12 +1017,15 @@ func _begin_souls() -> void:
 	player.yaw = yaw0
 	on_player_landed()
 	if not loadout_enabled:
-		player.give_weapon("rifle")
+		# Your class weapon is the build; a sidearm for what it cannot reach.
+		if not Classes.has_kit(player.pclass):
+			player.give_weapon("rifle")
 		player.give_weapon("pistol")
 	for w in player.loadout:
 		if w != "":
 			for k in 3:
 				player.add_ammo_cal(Weapons.caliber(w), int(Weapons.AMMO_BOX.get(Weapons.caliber(w), 30)))
+	player.draw_kit(true)
 	player.vest_level = 1
 	player.armor = 100.0
 	player.bandages = 3
@@ -7964,6 +7974,205 @@ func _run_dodge_test() -> void:
 	player.take_damage(10.0, Vector3.ZERO, false, null)
 	_check("the storm is not dodged", player.hp < hp2)
 	print("[dodge] done")
+	get_tree().quit()
+
+
+## A soldier held still at a point, for the class checks.
+func _dummy_at(at: Vector3) -> Bot:
+	for b in bots:
+		if is_instance_valid(b) and b.alive and not (b is Revenant) and b.state == Bot.State.GROUND and not b.friendly:
+			var bb := b as Bot
+			bb.set_physics_process(false)
+			bb.global_position = at
+			bb.hp = 100.0
+			bb.vest_level = 0
+			bb.helmet_level = 0
+			bb.stagger_t = 0.0
+			return bb
+	return null
+
+
+func _face_point(t: Vector3) -> void:
+	var to := t - (player.global_position + Vector3.UP * 1.6)
+	player.yaw = atan2(-to.x, -to.z)
+	player.pitch = atan2(to.y, Vector2(to.x, to.z).length())
+
+
+## The four classes: each weapon strikes, each alternate and ability works.
+func _run_classes_test() -> void:
+	Classes.no_save = true
+	_start_match()
+	for i in 30:
+		await get_tree().physics_frame
+	_land_player_now()
+	for i in 30:
+		await get_tree().physics_frame
+	player.spawn_protect = 0.0
+	for b in bots:
+		if is_instance_valid(b) and b.state != Bot.State.GROUND and not (b is Revenant):
+			b.state = Bot.State.GROUND
+			b.global_position = ground_at(Vector3(b.global_position.x, 300, b.global_position.z)) + Vector3.UP
+	var here := player.global_position
+	var fwd := Vector3(0, 0, -1)
+	# --- The Knight.
+	player.set_class("knight")
+	_check("the knight has the greatsword out", player.kit_out and player.kit.cls == "knight")
+	_check("the knight has 125 health", is_equal_approx(player.max_hp(), 125.0))
+	var d := _dummy_at(ground_at(here + fwd * 2.2 + Vector3.UP * 20.0))
+	if d == null:
+		_check("a soldier to practise on", false)
+		get_tree().quit()
+		return
+	player.yaw = 0.0
+	player.pitch = 0.0
+	_face_point(d.global_position + Vector3.UP * 1.0)
+	for i in 5:
+		await get_tree().physics_frame
+	var hp0 := d.hp
+	for k in 3:
+		Input.action_press("fire")
+		await get_tree().physics_frame
+		Input.action_release("fire")
+		for i in 18:
+			await get_tree().physics_frame
+	for i in 90:
+		await get_tree().physics_frame
+	print("[classes] knight combo: soldier hp %.0f -> %.0f, staggered %.2f" % [hp0, d.hp, d.stagger_t])
+	_check("the sword combo cuts a soldier in front", d.hp < hp0 - 50.0 or not d.alive)
+	# Guard and parry.
+	Input.action_press("aim")
+	for i in 3:
+		await get_tree().physics_frame
+	var hp1 := player.hp
+	player.take_damage(30.0, player.global_position + player.camera.global_basis * Vector3(0, 0, -3), false, d)
+	print("[classes] parry: hp %.0f -> %.0f, parries %d" % [hp1, player.hp, player.parries])
+	_check("a guard raised in time parries the blow", player.hp == hp1 and player.parries == 1)
+	for i in 30:
+		await get_tree().physics_frame
+	var hp2 := player.hp
+	player.take_damage(30.0, player.global_position + player.camera.global_basis * Vector3(0, 0, -3), false, d)
+	print("[classes] guard: hp %.0f -> %.0f" % [hp2, player.hp])
+	_check("a held guard turns most of a blow", player.hp < hp2 and player.hp > hp2 - 10.0)
+	var hp3 := player.hp
+	player.take_damage(30.0, player.global_position + player.camera.global_basis * Vector3(0, 0, 3), false, d)
+	_check("the guard does not cover your back", player.hp < hp3 - 15.0)
+	Input.action_release("aim")
+	player.hp = player.max_hp()
+	# Shield Charge.
+	var d2 := _dummy_at(ground_at(player.global_position + player.camera.global_basis * Vector3(0, 0, -5) + Vector3.UP * 20.0))
+	if d2 != null:
+		d2.hp = 100.0
+		_face_point(d2.global_position + Vector3.UP)
+		for i in 3:
+			await get_tree().physics_frame
+		Input.action_press("skill")
+		await get_tree().physics_frame
+		Input.action_release("skill")
+		for i in 30:
+			await get_tree().physics_frame
+		print("[classes] shield charge: soldier hp %.0f, cooldown %.1f" % [d2.hp, player.kit.ability_cd])
+		_check("the shield charge bashes what is ahead", d2.hp < 100.0 and player.kit.ability_cd > 0.0)
+	# A boss: the sword hits it on its body.
+	var boss: Revenant = null
+	for b in bots:
+		if is_instance_valid(b) and b is Colossus and b.alive:
+			boss = b
+			break
+	if boss != null:
+		boss.set_physics_process(false)
+		player.global_position = ground_at(boss.global_position + Vector3(0, 30, 3.4)) + Vector3.UP * 0.1
+		for i in 3:
+			await get_tree().physics_frame
+		_face_point(boss.global_position + Vector3.UP * 2.0)
+		for i in 3:
+			await get_tree().physics_frame
+		var targets: Array = player.kit.melee_targets(3.1, 2.6)
+		var found := false
+		for t in targets:
+			if t[0] == boss:
+				found = true
+		print("[classes] sword reaches the colossus: %s (%d in the arc)" % [str(found), targets.size()])
+		_check("the sword reaches a colossus on its body", found)
+		boss.set_physics_process(true)
+	# --- The Hunter.
+	player.global_position = here
+	player.velocity = Vector3.ZERO
+	for i in 5:
+		await get_tree().physics_frame
+	player.set_class("hunter")
+	# Somewhere 22 m off with a clear line from the eye (no hill between).
+	var spot22 := ground_at(here + fwd * 22.0 + Vector3.UP * 30.0)
+	for k in 16:
+		var a22 := TAU * float(k) / 16.0
+		var c22 := ground_at(here + Vector3(cos(a22), 0, sin(a22)) * 22.0 + Vector3.UP * 30.0)
+		var eye22 := player.global_position + Vector3.UP * 1.6
+		var q22 := PhysicsRayQueryParameters3D.create(eye22, c22 + Vector3.UP * 1.0, 1, [player.get_rid()])
+		if get_world_3d().direct_space_state.intersect_ray(q22).is_empty():
+			spot22 = c22
+			break
+	var d3 := _dummy_at(spot22)
+	if d3 != null:
+		d3.hp = 100.0
+		_face_point(d3.global_position + Vector3.UP * 1.2)
+		for i in 5:
+			await get_tree().physics_frame
+		Input.action_press("fire")
+		for i in 60:
+			await get_tree().physics_frame
+		var full: bool = player.kit.draw >= 1.0
+		var eye := player.camera.global_position
+		var los := get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(eye, d3.global_position + Vector3.UP * 1.0, Ballistics.MASK, [player.get_rid()]))
+		print("[classes] bow line of sight: %s (dist %.1f, height diff %.1f)" % [str(los.get("collider")), eye.distance_to(d3.global_position), d3.global_position.y - player.global_position.y])
+		Input.action_release("fire")
+		for i in 60:
+			await get_tree().physics_frame
+		print("[classes] bow: full draw %s, soldier hp %.0f" % [str(full), d3.hp])
+		_check("the bow draws to full", full)
+		_check("a full-draw arrow strikes a soldier at 22 m", d3.hp < 60.0 or not d3.alive)
+	# --- The Pyromancer.
+	player.set_class("pyro")
+	var d4 := _dummy_at(ground_at(here + fwd * 10.0 + Vector3.UP * 30.0))
+	if d4 != null:
+		d4.hp = 100.0
+		_face_point(d4.global_position + Vector3.UP * 1.0)
+		for i in 5:
+			await get_tree().physics_frame
+		var e0: float = player.kit.ember
+		Input.action_press("fire")
+		await get_tree().physics_frame
+		await get_tree().physics_frame
+		Input.action_release("fire")
+		var e1: float = player.kit.ember
+		for i in 45:
+			await get_tree().physics_frame
+		print("[classes] fireball: ember %.0f -> %.0f, soldier hp %.0f" % [e0, e1, d4.hp])
+		_check("a fireball costs ember", e1 < e0)
+		_check("a fireball burns a soldier at 10 m", d4.hp < 75.0 or not d4.alive)
+		for i in 90:
+			await get_tree().physics_frame
+		_check("ember comes back on its own", player.kit.ember > e1)
+		var p0 := player.global_position
+		player.kit.ability_cd = 0.0
+		Input.action_press("skill")
+		await get_tree().physics_frame
+		Input.action_release("skill")
+		for i in 3:
+			await get_tree().physics_frame
+		_check("the pyromancer blinks", player.global_position.distance_to(p0) > 2.0)
+	# --- The Gunslinger.
+	player.set_class("gunslinger")
+	_check("the gunslinger has no class weapon, only guns", not player.kit_out)
+	player.give_weapon("rifle")
+	player.add_ammo_cal(Weapons.caliber("rifle"), 60)
+	player.mags["rifle"] = 3
+	var m0 := player.current_mag()
+	Input.action_press("skill")
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	Input.action_release("skill")
+	print("[classes] quickdraw: mag %d -> %d of %d (gun %s, reserve %d, cd %.1f)" % [m0, player.current_mag(), player.mag_size(), player.current_id(), player.current_reserve(), player.kit.ability_cd])
+	_check("quickdraw fills the magazine at once", player.current_mag() == player.mag_size())
+	print("[classes] done")
 	get_tree().quit()
 
 

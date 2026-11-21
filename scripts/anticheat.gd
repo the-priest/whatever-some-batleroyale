@@ -236,7 +236,7 @@ func _watch_movement(p: Player, delta: float) -> void:
 
 
 func _watch_state(p: Player) -> void:
-	if p.hp > 100.5 or p.armor > 100.5 or p.boost > 100.5:
+	if p.hp > p.max_hp() + 0.5 or p.armor > 100.5 or p.boost > 100.5:
 		strike(0, 3, "health or armour edited")
 	if p.meds > Player.MAX_MEDS or p.bandages > Player.MAX_BANDAGES or p.energy > Player.MAX_ENERGY or p.grenades > Player.MAX_GRENADES:
 		strike(0, 3, "items over the limit")

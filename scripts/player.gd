@@ -10,6 +10,7 @@ signal damaged(amount: float, from_dir: Vector3)
 signal notice(text: String)
 signal fired(id: String, from: Vector3, to: Vector3, hit: bool)
 signal inventory_changed
+signal ability_used(cls: String)
 
 const MAX_MEDS := 3
 const MAX_BANDAGES := 10
@@ -128,6 +129,17 @@ var _down_hid_view := false
 ## blink, second, aegis, storm, hawk, blood, titan.
 var gifts: Dictionary = {}
 var blink_cd := 0.0
+## Who you are (Classes): the class weapon in your hands while kit_out.
+var pclass := "gunslinger"
+var kit: ClassKit = null
+var kit_out := false
+var _charge_t := 0.0
+var _charge_dir := Vector3.ZERO
+var _charge_hit: Dictionary = {}
+var _quick_t := 0.0
+## Blows turned aside by the guard, and parried outright (for the checks).
+var blocked := 0
+var parries := 0
 const BLINK_CD := 5.0
 const BLINK_DIST := 9.0
 var aegis := 0.0
@@ -143,7 +155,7 @@ func max_hp() -> float:
 	var m := 100.0
 	if game != null and game.has_method("oath") and game.oath("glass"):
 		m = 75.0
-	return m + (25.0 if blessings.has("vigour") else 0.0) + (50.0 if gifts.has("titan") else 0.0) + (30.0 if Talismans.wears("giant") else 0.0)
+	return m + (25.0 if pclass == "knight" else 0.0) + (25.0 if blessings.has("vigour") else 0.0) + (50.0 if gifts.has("titan") else 0.0) + (30.0 if Talismans.wears("giant") else 0.0)
 var _reload_need := 1
 var _reload_was_empty := false
 var _reload_events: Dictionary = {}
@@ -220,6 +232,10 @@ func _ready() -> void:
 	view.add_child(gun_holder)
 	hands = HandsView.new()
 	view.add_child(hands)
+	kit = ClassKit.new()
+	kit.name = "ClassKit"
+	view.add_child(kit)
+	kit.setup(self)
 	# A soft fill only for the first-person arms and gun (layer 2). The
 	# viewmodel often sits in a building's shadow, where the sun leaves it a
 	# black silhouette; this keeps the metal, wood and gloves readable without
@@ -821,7 +837,7 @@ func _ground(delta: float) -> void:
 	if _sprint_on and (input.y >= -0.3 or crouch or aiming):
 		_sprint_on = false
 	sprinting = _ap("sprint") and input.y < -0.3 and not crouch and not aiming and not healing and _sprint_lock <= 0.0 and is_on_floor() and absf(lean) < 0.2
-	var speed := (CROUCH if crouch else (SPRINT if sprinting else WALK)) * (1.08 if blessings.has("swift") else 1.0)
+	var speed := (CROUCH if crouch else (SPRINT * (1.1 if pclass == "hunter" else 1.0) if sprinting else WALK)) * (1.08 if blessings.has("swift") else 1.0)
 	if downed:
 		speed = 1.1
 	if aiming:
@@ -845,7 +861,13 @@ func _ground(delta: float) -> void:
 	var accel := ACCEL if is_on_floor() else AIR_ACCEL
 	if dodge_t <= 0.0 and _ajp("dodge"):
 		_start_dodge(wish, basis_yaw)
-	if dodge_t > 0.0:
+	if _charge_t > 0.0:
+		# The Knight's Shield Charge: straight ahead, bashing through.
+		_charge_t -= delta
+		velocity.x = _charge_dir.x * 22.0
+		velocity.z = _charge_dir.z * 22.0
+		_charge_bash()
+	elif dodge_t > 0.0:
 		dodge_t -= delta
 		var k := clampf(dodge_t / DODGE_TIME, 0.0, 1.0)
 		var far := 1.3 if Talismans.wears("thread") else 1.0
@@ -920,10 +942,20 @@ func _ground(delta: float) -> void:
 		if _step_dist > (2.6 if sprinting else 2.1 if _ap("crouch") else 3.0):
 			_step_dist = 0.0
 			_footstep()
-	if _ajp("reload"):
+	if _ajp("reload") and not kit_out:
 		start_reload()
 	if _ajp("swap_weapon"):
-		cycle_weapon()
+		if Classes.has_kit(pclass):
+			# Class weapon, then each gun, then back.
+			if kit_out:
+				if loadout.size() > 0:
+					draw_kit(false)
+			elif slot + 1 < loadout.size():
+				select_slot(slot + 1)
+			else:
+				draw_kit(true)
+		else:
+			cycle_weapon()
 	if _ajp("fire_mode"):
 		toggle_fire_mode()
 	if _ajp("zero_up"):
@@ -933,9 +965,23 @@ func _ground(delta: float) -> void:
 	_update_lean(delta)
 	_update_breath(delta)
 	if _ajp("slot_1"):
-		select_slot(0)
+		if Classes.has_kit(pclass):
+			draw_kit(true)
+		else:
+			select_slot(0)
 	if _ajp("slot_2"):
-		select_slot(1)
+		if Classes.has_kit(pclass):
+			if kit_out:
+				draw_kit(false)
+			elif loadout.size() > 1:
+				select_slot((slot + 1) % loadout.size())
+		else:
+			select_slot(1)
+	if _ajp("skill") and kit != null and not _map_open():
+		if kit.use_ability():
+			ability_used.emit(pclass)
+		elif kit.ability_cd > 0.0:
+			notice.emit("%s  —  %d s" % [str(Classes.def(pclass).get("ability", "")).get_slice(":", 0), int(ceil(kit.ability_cd))])
 	if _ajp("interact"):
 		_try_pickup()
 	if _ajp("heal"):
@@ -951,6 +997,7 @@ func _ground(delta: float) -> void:
 	if gifts.has("blink") and _ajp("ability"):
 		_blink()
 	_throw_cd = maxf(0.0, _throw_cd - delta)
+	_quick_t = maxf(0.0, _quick_t - delta)
 	_tick_throw(delta)
 	# Hold the grenade key to see where it will land; let go to throw.
 	if _ajp("grenade"):
@@ -980,7 +1027,9 @@ func _ground(delta: float) -> void:
 	_since_shot += delta
 	if _since_shot > 0.32:
 		_spray_n = 0
-	if has_gun() and not swimming and not _map_open():
+	if kit_out:
+		kit.tick(delta, not swimming and not _map_open() and not healing and _throw_t < 0.0)
+	elif has_gun() and not swimming and not _map_open():
 		want_fire = _ap("fire") if is_auto() else _ajp("fire")
 	if _throw_t >= 0.0:
 		want_fire = false
@@ -993,7 +1042,7 @@ func _ground(delta: float) -> void:
 		fire_timer = maxf(fire_timer, 0.12 * sprint_blend)
 	if want_fire and fire_timer <= 0.0 and not reloading and equip_t > 0.75 and bolt_t < 0.0:
 		_try_fire()
-	elif not has_gun() and _ajp("fire"):
+	elif not has_gun() and not kit_out and _ajp("fire"):
 		notice.emit("NO WEAPON  —  PRESS %s TO PICK ONE UP" % Keybinds.key("interact"))
 
 
@@ -1413,6 +1462,20 @@ func _update_hands(delta: float) -> void:
 
 
 func _update_weapon(delta: float) -> void:
+	if kit != null:
+		kit.out = kit_out and mode == Mode.GROUND and alive and vehicle == null
+		kit.view_tick(delta)
+		if kit.out:
+			hands.visible = false
+			gun_holder.visible = false
+			var want := 1.0 if (kit.focus or kit.guard) else 0.0
+			aim_blend = move_toward(aim_blend, want, delta * 5.0)
+			sprint_blend = lerpf(sprint_blend, 1.0 if sprinting else 0.0, clampf(delta * 10.0, 0.0, 1.0))
+			if game != null and game.hud != null:
+				game.hud.set_scope(false)
+				game.hud.set_reddot(false, false)
+			return
+		hands.visible = true
 	_update_hands(delta)
 	if not has_gun() or mode != Mode.GROUND or not alive:
 		gun_holder.visible = false
@@ -1721,6 +1784,8 @@ func _try_fire() -> void:
 	var mag_before := current_mag()
 	mags[id] = current_mag() - 1
 	fire_timer = 60.0 / float(d["rpm"])
+	if _quick_t > 0.0:
+		fire_timer *= 0.65
 	if game != null and game.get("anticheat") != null:
 		game.anticheat.on_shot(id, mag_before, mags[id])
 	# Spread is measured before this shot adds its own bloom.
@@ -1819,7 +1884,7 @@ func start_reload() -> void:
 	reloading = true
 	_reload_was_empty = current_mag() == 0
 	_reload_need = mag_size() - current_mag()
-	_reload_dur = float(d["reload"]) * (1.0 if _reload_was_empty else 0.82) * (0.75 if blessings.has("quick") else 1.0)
+	_reload_dur = float(d["reload"]) * (1.0 if _reload_was_empty else 0.82) * (0.75 if blessings.has("quick") else 1.0) * (0.8 if pclass == "gunslinger" else 1.0)
 	if Weapons.cls(id) == "shotgun":
 		_reload_need = mini(_reload_need, current_reserve())
 		_reload_dur = float(d["reload"]) * clampf(float(_reload_need) / float(d["mag"]), 0.35, 1.0)
@@ -1886,6 +1951,8 @@ func give_weapon(id: String, start_mag: int = -1, start_reserve: int = -1) -> bo
 		loadout.append(id)
 		slot = loadout.size() - 1
 	_validate_attachments(loadout.find(id))
+	# A gun picked up comes into your hands (the class weapon is a key away).
+	kit_out = false
 	mags[id] = mag_size(id) if start_mag < 0 else mini(start_mag, mag_size(id))
 	if start_reserve > 0:
 		add_ammo_cal(Weapons.caliber(id), start_reserve)
@@ -2054,6 +2121,8 @@ func mag_size(id: String = "") -> int:
 
 
 func cur_zoom() -> float:
+	if kit_out:
+		return 1.6 if pclass == "hunter" and kit != null and kit.focus else 1.0
 	if not has_gun():
 		return 1.0
 	var z := float(Weapons.def(current_id()).get("zoom", 1.0))
@@ -2221,6 +2290,28 @@ func take_damage(amount: float, from_pos: Vector3 = Vector3.ZERO, headshot: bool
 		dodged += 1
 		return false
 	var dmg := amount * (0.88 if blessings.has("warding") and source != null else 1.0) * (0.9 if Talismans.wears("iron") and source != null else 1.0)
+	if source != null and kit != null and from_pos != Vector3.ZERO:
+		var g := kit.guard_taken(from_pos)
+		if g <= 0.0:
+			# A parry: the blow glances off, and the one who struck reels.
+			parries += 1
+			_sfx("hit_helmet", 4.0)
+			add_trauma(0.15)
+			if source is Bot and source != self:
+				(source as Bot).stagger(0.5 if source is Revenant else 1.6)
+			notice.emit("PARRY")
+			return false
+		if g < 1.0:
+			blocked += 1
+			_sfx("hit_armor", 0.0)
+		dmg *= g
+	if pclass == "knight" and source != null and from_pos != Vector3.ZERO:
+		var to := from_pos - global_position
+		to.y = 0.0
+		var fw := -camera.global_basis.z
+		fw.y = 0.0
+		if to.length() > 0.05 and to.normalized().dot(fw.normalized()) > 0.3:
+			dmg *= 0.9
 	if source != null:
 		# The storm ignores armour; bullets and blasts do not.
 		if headshot and helmet_level > 0:
@@ -2315,6 +2406,106 @@ func _start_dodge(wish: Vector3, basis_yaw: Basis) -> void:
 			game.anticheat.grace(0.6)
 		if game.sfx != null:
 			game.sfx.play_2d("jump_whoosh", -8.0, 0.12)
+
+
+## Choose who you are: builds the class weapon and puts it in your hands.
+func set_class(c: String) -> void:
+	pclass = c if Classes.DEFS.has(c) else "gunslinger"
+	if kit != null:
+		kit.game = game
+		kit.build(pclass)
+		kit.reset()
+	kit_out = Classes.has_kit(pclass)
+	_emit_weapon()
+	inventory_changed.emit()
+
+
+## Class weapon out (true) or the guns (false).
+func draw_kit(on: bool) -> void:
+	if not Classes.has_kit(pclass):
+		on = false
+	if on == kit_out:
+		return
+	if not on and loadout.is_empty():
+		return
+	kit_out = on
+	reloading = false
+	cancel_heal()
+	fire_timer = 0.25
+	if kit != null:
+		kit.reset_soft()
+	if not on:
+		_rebuild_viewmodel()
+	_emit_weapon()
+	inventory_changed.emit()
+	if game != null and game.has_method("play_sfx_at"):
+		game.play_sfx_at("equip", global_position, -6.0)
+
+
+## One of your class weapon's blows (or arrows, or fire) landed.
+func kit_hit(pos: Vector3, dmg: float, head: bool, killed: bool) -> void:
+	hitmarker.emit(head, killed)
+	shots_hit += 1
+	if game != null and game.has_method("on_player_hit"):
+		game.on_player_hit(pos, dmg, head)
+	if killed and kit != null:
+		kit.on_kill()
+
+
+func start_charge() -> void:
+	var f := -camera.global_basis.z
+	f.y = 0.0
+	if f.length() < 0.1:
+		f = Basis(Vector3.UP, yaw) * Vector3(0, 0, -1)
+	_charge_dir = f.normalized()
+	_charge_t = 0.34
+	_charge_hit.clear()
+	iframes = maxf(iframes, 0.2)
+	add_trauma(0.12)
+	if game != null:
+		if game.get("anticheat") != null:
+			game.anticheat.grace(1.2)
+		game.play_sfx_at("jump_whoosh", global_position, -2.0)
+
+
+func _charge_bash() -> void:
+	if game == null:
+		return
+	for t in KitShot._reach_targets(game, self):
+		var n := t as Node3D
+		if _charge_hit.has(n):
+			continue
+		var to := n.global_position - global_position
+		to.y = 0.0
+		if to.length() < 1.8 + KitShot._reach(n) and to.normalized().dot(_charge_dir) > 0.2:
+			_charge_hit[n] = true
+			var killed = n.call("take_damage", 28.0, n.global_position + Vector3.UP, false, self)
+			if n is Bot:
+				(n as Bot).stagger(0.35 if n is Revenant else 1.3)
+			kit_hit(n.global_position + Vector3.UP, 28.0, false, killed is bool and killed)
+			add_trauma(0.25)
+			_sfx("hit_armor", 3.0)
+			if n is Revenant:
+				# A boss stops a charge dead.
+				_charge_t = 0.0
+
+
+## The Gunslinger's Quickdraw: a full magazine at once, and quick shots.
+func quickdraw() -> void:
+	if not has_gun():
+		return
+	var id := current_id()
+	var take := mini(mag_size() - current_mag(), current_reserve())
+	if take > 0:
+		mags[id] = current_mag() + take
+		ammo[Weapons.caliber(id)] = current_reserve() - take
+	reloading = false
+	reload_timer = 0.0
+	_quick_t = 4.0
+	if game != null and game.get("anticheat") != null:
+		game.anticheat.on_reload()
+	_sfx("equip", 2.0)
+	_emit_ammo()
 
 
 func _blink() -> void:
@@ -2841,6 +3032,13 @@ func reset_for_match() -> void:
 		if is_instance_valid(c["node"]):
 			c["node"].queue_free()
 	_casings.clear()
+	_charge_t = 0.0
+	_quick_t = 0.0
+	blocked = 0
+	parries = 0
+	Classes.load_choice()
+	set_class(Classes.chosen)
+	hp = max_hp()
 	_emit_health()
 	_rebuild_viewmodel()
 	_emit_weapon()

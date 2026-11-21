@@ -223,6 +223,7 @@ func _ready() -> void:
 	_build_crosshair()
 	_build_bars()
 	_build_weapon_panel()
+	_build_kit_panel()
 	_build_minimap()
 	_build_bottom_text()
 	_build_big_map()
@@ -650,6 +651,104 @@ func _build_weapon_panel() -> void:
 	box.add_child(vb)
 	root.add_child(box)
 	_hud_nodes.append(box)
+
+
+var kit_panel_box: PanelContainer
+var lbl_kit_cls: Label
+var lbl_kit_skill: Label
+var kit_bar_bg: ColorRect
+var kit_bar: ColorRect
+var lbl_kit_bar: Label
+
+
+## Your class: its ability (key and cooldown) and its gauge (Ember, draw).
+func _build_kit_panel() -> void:
+	var box := _panel()
+	box.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	box.offset_left = -330
+	box.offset_right = -28
+	box.offset_top = -206
+	box.offset_bottom = -140
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 3)
+	vb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var top := HBoxContainer.new()
+	top.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lbl_kit_cls = _lv("THE KNIGHT", 12, ACCENT)
+	lbl_kit_cls.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	top.add_child(lbl_kit_cls)
+	lbl_kit_skill = _lv("", 12, WHITE)
+	lbl_kit_skill.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	top.add_child(lbl_kit_skill)
+	vb.add_child(top)
+	var bar_row := Control.new()
+	bar_row.custom_minimum_size = Vector2(0, 14)
+	bar_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	kit_bar_bg = ColorRect.new()
+	kit_bar_bg.color = Color(0, 0, 0, 0.45)
+	kit_bar_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	kit_bar_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bar_row.add_child(kit_bar_bg)
+	kit_bar = ColorRect.new()
+	kit_bar.color = ACCENT
+	kit_bar.anchor_bottom = 1.0
+	kit_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bar_row.add_child(kit_bar)
+	lbl_kit_bar = _lv("", 10, WHITE)
+	lbl_kit_bar.set_anchors_preset(Control.PRESET_FULL_RECT)
+	lbl_kit_bar.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl_kit_bar.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	bar_row.add_child(lbl_kit_bar)
+	vb.add_child(bar_row)
+	box.add_child(vb)
+	root.add_child(box)
+	_hud_nodes.append(box)
+	kit_panel_box = box
+
+
+func _sync_kit() -> void:
+	if kit_panel_box == null or not kit_panel_box.visible:
+		return
+	var p = get_parent().get("player")
+	if p == null or (p as Player).kit == null:
+		return
+	var pl := p as Player
+	var k := pl.kit
+	var d := Classes.def(pl.pclass)
+	lbl_kit_cls.text = str(d.name)
+	lbl_kit_cls.add_theme_color_override("font_color", d.color)
+	var sk := str(d.ability).get_slice(":", 0)
+	if k.ability_cd > 0.0:
+		lbl_kit_skill.text = "%s  %d s" % [sk, int(ceil(k.ability_cd))]
+		lbl_kit_skill.add_theme_color_override("font_color", DIM)
+	else:
+		lbl_kit_skill.text = "[%s]  %s" % [Keybinds.key("skill"), sk]
+		lbl_kit_skill.add_theme_color_override("font_color", WHITE)
+	var frac := 0.0
+	var txt := ""
+	var col: Color = d.color
+	match pl.pclass:
+		"pyro":
+			frac = k.ember / ClassKit.EMBER_MAX
+			txt = "EMBER  %d" % int(k.ember)
+		"hunter":
+			frac = k.draw
+			txt = "FULL DRAW" if k.draw >= 1.0 else ("DRAWING" if k.drawing else "HOLD %s TO DRAW" % Keybinds.key("fire"))
+		"knight":
+			frac = 1.0 if k.guard else 0.0
+			txt = ("PARRY!" if k.parried_now() else ("GUARD" if k.guard else "HOLD %s TO GUARD" % Keybinds.key("aim")))
+			col = Color(0.95, 0.85, 0.5) if k.parried_now() else col
+		_:
+			var cd := float(d.get("cd", 10.0))
+			frac = 1.0 - clampf(k.ability_cd / cd, 0.0, 1.0)
+			txt = "QUICKDRAW READY" if k.ability_cd <= 0.0 else "QUICKDRAW"
+	if not pl.kit_out and pl.pclass != "gunslinger":
+		txt = "[%s] DRAW %s" % [Keybinds.key("slot_1"), str(d.weapon)]
+		frac = 0.0
+	kit_bar.anchor_right = clampf(frac, 0.0, 1.0)
+	kit_bar.offset_right = 0.0
+	kit_bar.color = Color(col.r, col.g, col.b, 0.85)
+	lbl_kit_bar.text = txt
 
 
 func _build_minimap() -> void:
@@ -2120,6 +2219,16 @@ func update_health(hp: float, armor: float) -> void:
 func update_weapon(id: String, mag: int, reserve: int) -> void:
 	if lbl_weapon == null:
 		return
+	var pk = get_parent().get("player")
+	if pk != null and (pk as Player).kit_out:
+		var kd := Classes.def((pk as Player).pclass)
+		lbl_weapon.text = str(kd.weapon)
+		lbl_cal.text = str(kd.tag)
+		lbl_weapon.add_theme_color_override("font_color", kd.color)
+		lbl_ammo.text = "∞"
+		lbl_reserve.text = ""
+		lbl_ammo.add_theme_color_override("font_color", WHITE)
+		return
 	if id == "" or not Weapons.DEFS.has(id):
 		lbl_weapon.text = "UNARMED"
 		lbl_cal.text = ""
@@ -2562,6 +2671,7 @@ func _process(delta: float) -> void:
 
 func _process_body(delta: float) -> void:
 	_story_tick(delta)
+	_sync_kit()
 	_tick_fps(delta)
 	if hit_t > 0.0:
 		hit_t = maxf(0.0, hit_t - delta)

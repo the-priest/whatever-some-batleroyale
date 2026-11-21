@@ -38,6 +38,8 @@ var chute_node: Node3D
 var body: SoldierRig
 var speed_anim := "Idle"
 var hit_flash := 0.0
+## Seconds left reeling (a sword's heavy blow, a parried attack).
+var stagger_t := 0.0
 var dead_timer := 0.0
 ## A body lies where it fell this long (by its dropped kit), then sinks away.
 const BODY_STAYS := 45.0
@@ -320,6 +322,15 @@ func _process(_delta: float) -> void:
 func _physics_process_body(delta: float) -> void:
 	if puppet:
 		_puppet_tick(delta)
+		return
+	# Reeling from a heavy blow or a parry: no aim, no step, for a moment.
+	if stagger_t > 0.0 and state == State.GROUND and alive:
+		stagger_t -= delta
+		velocity.x *= 0.8
+		velocity.z *= 0.8
+		if not is_on_floor():
+			velocity.y -= 20.0 * delta
+		move_and_slide()
 		return
 	# Far from the player (and out of sight range) bots think and move every
 	# other tick with a double step: same behaviour, half the cost.
@@ -1964,6 +1975,15 @@ func enemy_visible() -> bool:
 
 
 # ------------------------------------------------------------------ damage --
+## Knocked off balance for t seconds (shorter for bosses, who recover fast).
+func stagger(t: float) -> void:
+	if not alive or puppet:
+		return
+	stagger_t = maxf(stagger_t, t)
+	if body != null:
+		body.flinch(1.6)
+
+
 func take_damage(amount: float, _pos: Vector3 = Vector3.ZERO, headshot: bool = false, source: Node = null) -> bool:
 	if not alive:
 		return false
