@@ -150,6 +150,8 @@ const OPTS := {
 	"damage_numbers": ["DAMAGE NUMBERS", ["OFF", "ON"], 0],
 	"viewmodel": ["GUN POSITION", ["NORMAL", "CENTRED", "LOW"], 0],
 	"guidance": ["GUIDANCE (EMBER WISP)", ["ON", "OFF"], 0],
+	"pad_sens": ["STICK SENSITIVITY", ["LOW", "MEDIUM", "HIGH", "VERY HIGH"], 1],
+	"vibration": ["VIBRATION", ["ON", "OFF"], 0],
 	"hints": ["TUTORIAL HINTS", ["ON", "OFF"], 0],
 }
 const XHAIR_COLS := [Color(0.95, 0.96, 0.97), Color(0.45, 1.0, 0.45), Color(1.0, 0.92, 0.3), Color(0.35, 0.95, 1.0), Color(1.0, 0.45, 0.85), Color(1.0, 0.3, 0.25)]
@@ -1595,6 +1597,8 @@ func _build_pause() -> void:
 	_opt_row(col, "aim_mode")
 	_opt_row(col2, "crouch_mode")
 	_opt_row(col2, "sprint_mode")
+	_opt_row(col, "pad_sens")
+	_opt_row(col2, "vibration")
 	_build_keys(t_keys)
 	col = t_audio[0]
 	lbl_vol = _lv("VOLUME", 12, MUTED)
@@ -2492,9 +2496,19 @@ func set_match_size(n: int) -> void:
 		menu_kicker.text = spaced
 
 
+## Switched between pad and keyboard: refresh the key names, and give a pad
+## something focused on the menu so it can be driven.
+func _on_input_device() -> void:
+	_key_labels()
+	if Keybinds.pad_mode and menu != null and menu.visible and main_menu != null:
+		main_menu.focus_first()
+
+
 func show_menu(seed_text: String) -> void:
 	refresh_rank()
 	menu.visible = true
+	if main_menu != null and not Input.get_connected_joypads().is_empty():
+		main_menu.focus_first.call_deferred()
 	end_panel.visible = false
 	pause_panel.visible = false
 	set_gameplay_visible(false)
@@ -2554,6 +2568,15 @@ func hide_end() -> void:
 
 # ------------------------------------------------------------------- input --
 func _input(event: InputEvent) -> void:
+	# Whichever was touched last, keyboard or pad, is what the prompts show.
+	if event is InputEventJoypadButton or (event is InputEventJoypadMotion and absf((event as InputEventJoypadMotion).axis_value) > 0.5):
+		if not Keybinds.pad_mode:
+			Keybinds.pad_mode = true
+			_on_input_device()
+	elif event is InputEventKey or event is InputEventMouseButton:
+		if Keybinds.pad_mode:
+			Keybinds.pad_mode = false
+			_on_input_device()
 	# The tale: SPACE moves it on, ESC skips it.
 	if story_open() and event is InputEventKey and event.pressed and not event.echo:
 		get_viewport().set_input_as_handled()

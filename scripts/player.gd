@@ -405,6 +405,41 @@ func _unhandled_input(event: InputEvent) -> void:
 		sway = sway.clamp(Vector2(-0.06, -0.06), Vector2(0.06, 0.06))
 
 
+## Right stick: look. A curve that is gentle near the middle for fine aim
+## and quick at the edge for turning; the stick sensitivity is in Settings.
+var pad_sens := 1.0
+
+
+func _pad_look(delta: float) -> void:
+	if _locked() or Input.mouse_mode != Input.MOUSE_MODE_CAPTURED and not Keybinds.pad_mode:
+		return
+	var pads := Input.get_connected_joypads()
+	if pads.is_empty():
+		return
+	var dev: int = pads[0]
+	var v := Vector2(Input.get_joy_axis(dev, JOY_AXIS_RIGHT_X), Input.get_joy_axis(dev, JOY_AXIS_RIGHT_Y))
+	var m := v.length()
+	const DZ := 0.14
+	if m < DZ:
+		return
+	var k := pow((m - DZ) / (1.0 - DZ), 1.8) / m
+	v *= k
+	var speed := 3.4 * pad_sens * (_ads_sens_scale() if aiming else 1.0)
+	yaw -= v.x * speed * delta
+	pitch -= v.y * speed * 0.7 * delta * (-1.0 if invert_y else 1.0)
+	pitch = clampf(pitch, deg_to_rad(-89.0), deg_to_rad(89.0))
+	sway += v * 0.004
+	sway = sway.clamp(Vector2(-0.06, -0.06), Vector2(0.06, 0.06))
+
+
+## A short rumble on the pad (hits taken, parries, heavy blows).
+func rumble(weak: float, strong: float, secs: float) -> void:
+	if not Keybinds.pad_mode or (game != null and game.hud != null and game.hud.opt("vibration") == 1):
+		return
+	for d in Input.get_connected_joypads():
+		Input.start_joy_vibration(d, clampf(weak, 0.0, 1.0), clampf(strong, 0.0, 1.0), secs)
+
+
 func _ads_sens_scale() -> float:
 	if not aiming or not has_gun():
 		return 1.0
@@ -613,6 +648,7 @@ func _process(delta: float) -> void:
 		if self_body != null:
 			self_body.visible = false
 		return
+	_pad_look(delta)
 	_update_camera(delta)
 	var body := global_position
 	if _phys_cur != Vector3.INF:
@@ -2368,6 +2404,7 @@ func take_damage(amount: float, from_pos: Vector3 = Vector3.ZERO, headshot: bool
 			if source is Bot and source != self:
 				(source as Bot).stagger(0.5 if source is Revenant else 1.6)
 			notice.emit("PARRY")
+			rumble(0.8, 0.5, 0.2)
 			return false
 		if g < 1.0:
 			blocked += 1
@@ -2414,6 +2451,7 @@ func take_damage(amount: float, from_pos: Vector3 = Vector3.ZERO, headshot: bool
 			game.on_second_wind()
 	hp -= dmg
 	_damage_flash = 1.0
+	rumble(0.3, clampf(dmg / 60.0, 0.1, 0.9), 0.18)
 	if source != null and source != self:
 		cancel_heal()
 	var dir := (from_pos - global_position).normalized() if from_pos != Vector3.ZERO else Vector3.FORWARD
@@ -2513,6 +2551,7 @@ func draw_kit(on: bool) -> void:
 ## One of your class weapon's blows (or arrows, or fire) landed.
 func kit_hit(pos: Vector3, dmg: float, head: bool, killed: bool) -> void:
 	hitmarker.emit(head, killed)
+	rumble(0.4, 0.15, 0.08)
 	shots_hit += 1
 	if game != null and game.has_method("on_player_hit"):
 		game.on_player_hit(pos, dmg, head)

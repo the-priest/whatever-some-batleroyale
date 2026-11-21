@@ -16,6 +16,83 @@ const BINDABLE := [
 ]
 
 static var _defaults: Dictionary = {}
+## The gamepad layout (Xbox names; PlayStation and Switch pads map the same
+## positions). Kept on every action alongside the keys, whatever is rebound.
+const PAD_BUTTONS := {
+	"jump": JOY_BUTTON_A, "dodge": JOY_BUTTON_B, "interact": JOY_BUTTON_X, "swap_weapon": JOY_BUTTON_Y,
+	"skill": JOY_BUTTON_RIGHT_SHOULDER, "flask": JOY_BUTTON_LEFT_SHOULDER,
+	"crouch": JOY_BUTTON_RIGHT_STICK, "sprint": JOY_BUTTON_LEFT_STICK,
+	"reload": JOY_BUTTON_DPAD_RIGHT, "grenade": JOY_BUTTON_DPAD_UP, "heal": JOY_BUTTON_DPAD_DOWN,
+	"slot_1": JOY_BUTTON_DPAD_LEFT, "map": JOY_BUTTON_BACK, "pause": JOY_BUTTON_START,
+	"ui_accept": JOY_BUTTON_A, "ui_cancel": JOY_BUTTON_B,
+	"ui_up": JOY_BUTTON_DPAD_UP, "ui_down": JOY_BUTTON_DPAD_DOWN, "ui_left": JOY_BUTTON_DPAD_LEFT, "ui_right": JOY_BUTTON_DPAD_RIGHT,
+}
+## Stick and trigger directions: [axis, sign].
+const PAD_AXES := {
+	"move_left": [JOY_AXIS_LEFT_X, -1.0], "move_right": [JOY_AXIS_LEFT_X, 1.0],
+	"move_forward": [JOY_AXIS_LEFT_Y, -1.0], "move_back": [JOY_AXIS_LEFT_Y, 1.0],
+	"fire": [JOY_AXIS_TRIGGER_RIGHT, 1.0], "aim": [JOY_AXIS_TRIGGER_LEFT, 1.0],
+	"ui_up": [JOY_AXIS_LEFT_Y, -1.0], "ui_down": [JOY_AXIS_LEFT_Y, 1.0],
+}
+## The last thing touched was a gamepad: prompts show its buttons.
+static var pad_mode := false
+
+
+static func add_pad_bindings() -> void:
+	for a in PAD_BUTTONS:
+		if not InputMap.has_action(a):
+			continue
+		var have := false
+		for e: InputEvent in InputMap.action_get_events(a):
+			if e is InputEventJoypadButton and (e as InputEventJoypadButton).button_index == PAD_BUTTONS[a]:
+				have = true
+		if not have:
+			var ev := InputEventJoypadButton.new()
+			ev.button_index = PAD_BUTTONS[a]
+			ev.device = -1
+			InputMap.action_add_event(a, ev)
+	for a in PAD_AXES:
+		if not InputMap.has_action(a):
+			continue
+		var spec: Array = PAD_AXES[a]
+		var have2 := false
+		for e: InputEvent in InputMap.action_get_events(a):
+			if e is InputEventJoypadMotion and (e as InputEventJoypadMotion).axis == int(spec[0]) and signf((e as InputEventJoypadMotion).axis_value) == float(spec[1]):
+				have2 = true
+		if not have2:
+			var mv := InputEventJoypadMotion.new()
+			mv.axis = int(spec[0]) as JoyAxis
+			mv.axis_value = float(spec[1])
+			mv.device = -1
+			InputMap.action_add_event(a, mv)
+
+
+static func pad_text(ev: InputEvent) -> String:
+	if ev is InputEventJoypadButton:
+		match (ev as InputEventJoypadButton).button_index:
+			JOY_BUTTON_A: return "(A)"
+			JOY_BUTTON_B: return "(B)"
+			JOY_BUTTON_X: return "(X)"
+			JOY_BUTTON_Y: return "(Y)"
+			JOY_BUTTON_LEFT_SHOULDER: return "LB"
+			JOY_BUTTON_RIGHT_SHOULDER: return "RB"
+			JOY_BUTTON_LEFT_STICK: return "L3"
+			JOY_BUTTON_RIGHT_STICK: return "R3"
+			JOY_BUTTON_DPAD_UP: return "D-PAD UP"
+			JOY_BUTTON_DPAD_DOWN: return "D-PAD DOWN"
+			JOY_BUTTON_DPAD_LEFT: return "D-PAD LEFT"
+			JOY_BUTTON_DPAD_RIGHT: return "D-PAD RIGHT"
+			JOY_BUTTON_BACK: return "VIEW"
+			JOY_BUTTON_START: return "MENU"
+		return "PAD %d" % int((ev as InputEventJoypadButton).button_index)
+	if ev is InputEventJoypadMotion:
+		var m := ev as InputEventJoypadMotion
+		match m.axis:
+			JOY_AXIS_TRIGGER_RIGHT: return "RT"
+			JOY_AXIS_TRIGGER_LEFT: return "LT"
+			JOY_AXIS_LEFT_X, JOY_AXIS_LEFT_Y: return "LEFT STICK"
+			JOY_AXIS_RIGHT_X, JOY_AXIS_RIGHT_Y: return "RIGHT STICK"
+	return ""
 
 
 ## The bindings as the game set them up, before any player changes.
@@ -57,6 +134,7 @@ static func rebind(action: String, ev: InputEvent) -> void:
 	InputMap.action_add_event(action, decode(code))
 	for e in keep:
 		InputMap.action_add_event(action, e)
+	add_pad_bindings()
 
 
 ## "k:<physical keycode>" or "m:<mouse button>"; "" for anything else.
@@ -88,6 +166,14 @@ static func key(action: String) -> String:
 	var evs := InputMap.action_get_events(action)
 	if evs.is_empty():
 		return "—"
+	if pad_mode:
+		for e in evs:
+			var t := pad_text(e)
+			if t != "":
+				return t
+	for e in evs:
+		if e is InputEventKey or e is InputEventMouseButton:
+			return event_text(e)
 	return event_text(evs[0])
 
 
@@ -143,3 +229,4 @@ static func load_from(cfg: ConfigFile) -> void:
 		for c in s.split(","):
 			if c.begins_with("k:") or c.begins_with("m:"):
 				InputMap.action_add_event(b[0], decode(c))
+	add_pad_bindings()

@@ -40,6 +40,8 @@ func _enter_tree() -> void:
 	_mouse("marker", MOUSE_BUTTON_MIDDLE)
 	_mouse("fire", MOUSE_BUTTON_LEFT)
 	_mouse("aim", MOUSE_BUTTON_RIGHT)
+	# The gamepad layout, on every action beside its keys.
+	Keybinds.add_pad_bindings()
 
 
 func _key(action: String, keys: Array) -> void:

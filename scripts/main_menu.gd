@@ -211,6 +211,13 @@ func _nav_button(text: String) -> Button:
 	return b
 
 
+## For a gamepad: focus on the current section in the left rail.
+func focus_first() -> void:
+	var key := _current if _current != "" else "play"
+	if _nav_buttons.has(key):
+		(_nav_buttons[key] as Button).grab_focus()
+
+
 func _mark_nav(key: String) -> void:
 	for k in _nav_buttons:
 		var b: Button = _nav_buttons[k]

@@ -439,6 +439,8 @@ func _ready() -> void:
 		_run_classes_test()
 	elif OS.get_cmdline_user_args().has("--reach"):
 		_run_reach_test()
+	elif OS.get_cmdline_user_args().has("--pad"):
+		_run_pad_test()
 	elif OS.get_cmdline_user_args().has("--guide"):
 		_run_guide_test()
 	elif OS.get_cmdline_user_args().has("--sentinel"):
@@ -8272,6 +8274,49 @@ func _run_reach_test() -> void:
 	get_tree().quit()
 
 
+## The gamepad: its buttons and triggers drive the actions, and the prompts
+## switch to its names once it is touched.
+func _run_pad_test() -> void:
+	await get_tree().process_frame
+	var jb := InputEventJoypadButton.new()
+	jb.button_index = JOY_BUTTON_A
+	jb.pressed = true
+	Input.parse_input_event(jb)
+	await get_tree().process_frame
+	_check("pad A is jump", Input.is_action_pressed("jump"))
+	jb.pressed = false
+	Input.parse_input_event(jb)
+	var rt := InputEventJoypadMotion.new()
+	rt.axis = JOY_AXIS_TRIGGER_RIGHT
+	rt.axis_value = 0.9
+	Input.parse_input_event(rt)
+	await get_tree().process_frame
+	_check("right trigger is attack", Input.is_action_pressed("fire"))
+	rt.axis_value = 0.0
+	Input.parse_input_event(rt)
+	var ls := InputEventJoypadMotion.new()
+	ls.axis = JOY_AXIS_LEFT_Y
+	ls.axis_value = -1.0
+	Input.parse_input_event(ls)
+	await get_tree().process_frame
+	_check("left stick forward moves forward", Input.get_vector("move_left", "move_right", "move_forward", "move_back").y < -0.5)
+	ls.axis_value = 0.0
+	Input.parse_input_event(ls)
+	await get_tree().process_frame
+	print("[pad] prompts: jump '%s', class ability '%s', attack '%s'" % [Keybinds.key("jump"), Keybinds.key("skill"), Keybinds.key("fire")])
+	_check("prompts show the pad's buttons", Keybinds.pad_mode and Keybinds.key("jump") == "(A)" and Keybinds.key("fire") == "RT")
+	var kb := InputEventKey.new()
+	kb.physical_keycode = KEY_W
+	kb.pressed = true
+	Input.parse_input_event(kb)
+	await get_tree().process_frame
+	kb.pressed = false
+	Input.parse_input_event(kb)
+	_check("touching the keyboard brings the keys back", not Keybinds.pad_mode and Keybinds.key("jump") == "SPACE")
+	print("[pad] done")
+	get_tree().quit()
+
+
 ## Souls Mode's guidance: you start far from the keepers, the wisp leads, the
 ## steps advance (walk, roll, strike, rest), then it points at a keeper.
 func _run_guide_test() -> void:
@@ -10625,6 +10670,7 @@ func _apply_options() -> void:
 		player.aim_toggle = o.call("aim_mode") == 1
 		player.crouch_toggle = o.call("crouch_mode") == 1
 		player.sprint_toggle = o.call("sprint_mode") == 1
+		player.pad_sens = [0.6, 1.0, 1.5, 2.1][clampi(o.call("pad_sens"), 0, 3)]
 		player.bob_scale = [1.0, 0.4, 0.0][clampi(o.call("head_bob"), 0, 2)]
 		player.shake_scale = [1.0, 0.45, 0.0][clampi(o.call("shake"), 0, 2)]
 		player.vm_offset = [Vector3.ZERO, Vector3(-0.085, 0.02, 0.0), Vector3(0.0, -0.045, 0.03)][clampi(o.call("viewmodel"), 0, 2)]
