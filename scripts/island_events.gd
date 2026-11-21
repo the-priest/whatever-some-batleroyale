@@ -99,7 +99,7 @@ func _start(kind: String) -> void:
 					data["at"] = q
 					# Soldiers near it want it.
 					for b in game.bots:
-						if is_instance_valid(b) and b.alive and b.armed and not b.is_human and not b.puppet and b.state == Bot.State.GROUND \
+						if is_instance_valid(b) and b.alive and b.armed and not b.is_human and not b.puppet and not (b is Revenant) and b.state == Bot.State.GROUND \
 								and Vector2(b.global_position.x, b.global_position.z).distance_to(q) < 400.0 and randf() < 0.7:
 							b.roam_point = q + Vector2(randf_range(-10, 10), randf_range(-10, 10))
 					break

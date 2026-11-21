@@ -856,7 +856,9 @@ func _pick_mark(at: Vector3) -> Bot:
 	var best: Bot = null
 	var best_s := INF
 	for b in game.bots:
-		if not is_instance_valid(b) or not b.alive or b.is_human or b.puppet or b.state != Bot.State.GROUND or b.has_meta("writ_mark"):
+		# A soldier, never a boss (a Revenant may be warded, leashed, deep in
+		# the earth: no writ for that).
+		if not is_instance_valid(b) or not b.alive or b.is_human or b.puppet or b is Revenant or b.state != Bot.State.GROUND or b.has_meta("writ_mark"):
 			continue
 		var d := Vector2(b.global_position.x - at.x, b.global_position.z - at.z).length()
 		if d < 140.0 or d > 750.0:
@@ -988,7 +990,7 @@ func _host_tick(o: int, dt: float) -> void:
 func _call_soldiers(site: Vector3, n: int) -> void:
 	var near: Array = []
 	for b in game.bots:
-		if is_instance_valid(b) and b.alive and b.armed and not b.is_human and not b.puppet and b.state == Bot.State.GROUND:
+		if is_instance_valid(b) and b.alive and b.armed and not b.is_human and not b.puppet and not (b is Revenant) and b.state == Bot.State.GROUND:
 			var d := Vector2(b.global_position.x - site.x, b.global_position.z - site.z).length()
 			if d < 450.0:
 				near.append([d, b])
@@ -1159,7 +1161,7 @@ func _brand_tick(dt: float) -> void:
 			for b in game.bots:
 				if n >= 10:
 					break
-				if is_instance_valid(b) and b.alive and b.armed and not b.is_human and not b.puppet and b.state == Bot.State.GROUND \
+				if is_instance_valid(b) and b.alive and b.armed and not b.is_human and not b.puppet and not (b is Revenant) and b.state == Bot.State.GROUND \
 						and b.global_position.distance_to(at) < 500.0:
 					b.roam_point = Vector2(at.x, at.z) + Vector2(randf_range(-15, 15), randf_range(-15, 15))
 					b.heard_pos = at
