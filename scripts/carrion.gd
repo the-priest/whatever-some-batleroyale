@@ -76,8 +76,9 @@ func _ready() -> void:
 		_col.position.y = 1.4
 	# All of her: the long body, head to tail, and both wings tip to tip.
 	var body_box := BoxShape3D.new()
-	body_box.size = Vector3(1.9, 1.7, 5.2)
-	add_hit_shape(body_box, Vector3(0, 1.6, -0.2))
+	# Beak tip to tail feathers.
+	body_box.size = Vector3(1.9, 1.9, 7.8)
+	add_hit_shape(body_box, Vector3(0, 1.7, 0.0))
 	_build_body()
 	# Each wing, shoulder to tip and the long feathers behind; the boxes
 	# follow the wings as they beat.

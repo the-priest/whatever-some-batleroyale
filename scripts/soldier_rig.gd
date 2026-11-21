@@ -183,6 +183,59 @@ static func skin_box(root: Node3D) -> AABB:
 	return box
 
 
+## The mesh as drawn this frame, in world space: skinned on the CPU (each
+## vertex carried by its bones' poses and the skin's binds), or simply
+## placed when it has no skin.
+static func posed_faces(mi: MeshInstance3D) -> PackedVector3Array:
+	var out := PackedVector3Array()
+	var mesh := mi.mesh
+	var sk: Skeleton3D = null
+	if mi.skin != null:
+		sk = mi.get_node_or_null(mi.skeleton) as Skeleton3D
+	var binds: Array[Transform3D] = []
+	if sk != null:
+		for i in mi.skin.get_bind_count():
+			var bone := mi.skin.get_bind_bone(i)
+			if bone < 0:
+				bone = sk.find_bone(mi.skin.get_bind_name(i))
+			binds.append(sk.global_transform * sk.get_bone_global_pose(maxi(0, bone)) * mi.skin.get_bind_pose(i))
+	for si in mesh.get_surface_count():
+		var arr: Array = mesh.surface_get_arrays(si)
+		var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+		var world := PackedVector3Array()
+		world.resize(verts.size())
+		var bones = arr[Mesh.ARRAY_BONES]
+		var weights = arr[Mesh.ARRAY_WEIGHTS]
+		var skinned: bool = sk != null and bones != null and weights != null and (bones as PackedInt32Array).size() >= verts.size() * 4
+		var per := 4
+		if skinned and (bones as PackedInt32Array).size() >= verts.size() * 8:
+			per = 8
+		for vi in verts.size():
+			var v := verts[vi]
+			if skinned:
+				var acc := Vector3.ZERO
+				var wsum := 0.0
+				for k in per:
+					var w: float = (weights as PackedFloat32Array)[vi * per + k]
+					if w <= 0.0:
+						continue
+					var bi: int = (bones as PackedInt32Array)[vi * per + k]
+					if bi < binds.size():
+						acc += (binds[bi] * v) * w
+						wsum += w
+				world[vi] = acc / wsum if wsum > 0.0 else mi.global_transform * v
+			else:
+				world[vi] = mi.global_transform * v
+		var idx = arr[Mesh.ARRAY_INDEX]
+		if idx != null and (idx as PackedInt32Array).size() > 0:
+			var ii: PackedInt32Array = idx
+			for t in ii.size():
+				out.append(world[ii[t]])
+		else:
+			out.append_array(world)
+	return out
+
+
 static func _rel_s(n: Node, root: Node) -> Transform3D:
 	var t := Transform3D.IDENTITY
 	var c := n

@@ -139,6 +139,8 @@ func _ready() -> void:
 		_cap.height = 1.98
 		_col.position.y = 0.99
 	_add_aura()
+	if body != null and body.skin_path != "":
+		fit_hitbox.call_deferred()
 	_glow = OmniLight3D.new()
 	_glow.light_color = Color(1.0, 0.25, 0.15)
 	_glow.light_energy = 0.9
@@ -366,6 +368,63 @@ func _add_embers(k: float) -> void:
 	h.material_override = fire
 	h.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	heart.add_child(h)
+
+
+## The hitbox fitted to the character as it stands: the posed model sliced
+## into bands (legs, hips, chest and arms, shoulders and head), a box round
+## each, so wherever you can see the body a hit lands, weapons included.
+var _fit_shapes: Array[CollisionShape3D] = []
+const FIT_BANDS := [0.0, 0.28, 0.5, 0.72, 0.86, 1.0]
+
+
+func fit_hitbox() -> void:
+	# Let the clips put it in its idle pose first.
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if not is_inside_tree() or body == null or body.skin == null:
+		return
+	for c in _fit_shapes:
+		if is_instance_valid(c):
+			c.queue_free()
+	_fit_shapes.clear()
+	var inv := global_transform.affine_inverse()
+	var pts := PackedVector3Array()
+	for n in body.skin.find_children("*", "MeshInstance3D", true, false):
+		var faces := SoldierRig.posed_faces(n as MeshInstance3D)
+		for i in range(0, faces.size(), 3):
+			pts.append(inv * faces[i])
+	if pts.size() < 12:
+		return
+	var lo := INF
+	var hi := -INF
+	for p in pts:
+		lo = minf(lo, p.y)
+		hi = maxf(hi, p.y)
+	var h := hi - lo
+	if h < 0.3:
+		return
+	for bi in FIT_BANDS.size() - 1:
+		var y0 := lo + h * float(FIT_BANDS[bi])
+		var y1 := lo + h * float(FIT_BANDS[bi + 1])
+		var mn := Vector3(INF, y0, INF)
+		var mx := Vector3(-INF, y1, -INF)
+		var any := false
+		for p in pts:
+			if p.y >= y0 and p.y <= y1:
+				mn.x = minf(mn.x, p.x)
+				mn.z = minf(mn.z, p.z)
+				mx.x = maxf(mx.x, p.x)
+				mx.z = maxf(mx.z, p.z)
+				any = true
+		if not any:
+			continue
+		var bx := BoxShape3D.new()
+		# A little room for the clips moving the limbs about.
+		bx.size = Vector3((mx.x - mn.x) * 1.08 + 0.06, y1 - y0, (mx.z - mn.z) * 1.08 + 0.06)
+		var cs := add_hit_shape(bx, Vector3((mn.x + mx.x) * 0.5, (y0 + y1) * 0.5, (mn.z + mx.z) * 0.5))
+		_fit_shapes.append(cs)
+	# The head is the top band of the body as it is built, not a soldier's.
+	head_offset = lo + h * 0.8
 
 
 ## A cloak: wide at the hem, ragged along it.

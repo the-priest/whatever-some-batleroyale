@@ -456,6 +456,8 @@ func _ready() -> void:
 		_run_fauna_test()
 	elif OS.get_cmdline_user_args().has("--classbots"):
 		_run_classbots_test()
+	elif OS.get_cmdline_user_args().has("--hitcover"):
+		_run_hitcover_test()
 	elif OS.get_cmdline_user_args().has("--guide"):
 		_run_guide_test()
 	elif OS.get_cmdline_user_args().has("--sentinel"):
@@ -8432,6 +8434,125 @@ func _run_reach_test() -> void:
 			f.store_string("\n".join(PackedStringArray(lines)) + "\n")
 			f.close()
 	print("[reach] done")
+	get_tree().quit()
+
+
+## How much of each boss's visible body its hitbox covers: the posed model is
+## baked into a temporary collision mesh, and rays from all round (front,
+## back, sides, above) that touch the body must also hit the boss.
+const COVER_LAYER := 1 << 20
+
+
+func _visual_body(b: Node3D) -> StaticBody3D:
+	var sb := StaticBody3D.new()
+	sb.collision_layer = COVER_LAYER
+	sb.collision_mask = 0
+	add_child(sb)
+	sb.global_transform = Transform3D.IDENTITY
+	for n in b.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		if not mi.is_visible_in_tree() or mi.mesh == null:
+			continue
+		# Skip the glow, eyes, runes, the ground it stands in, tiny dressing.
+		if mi.get_aabb().size.length() < 0.05 and mi.skin == null:
+			continue
+		if mi.has_meta("dressing"):
+			continue
+		var faces := _posed_faces(mi)
+		if faces.size() < 3:
+			continue
+		var shape := ConcavePolygonShape3D.new()
+		shape.set_faces(faces)
+		var cs := CollisionShape3D.new()
+		cs.shape = shape
+		sb.add_child(cs)
+	return sb
+
+
+func _posed_faces(mi: MeshInstance3D) -> PackedVector3Array:
+	return SoldierRig.posed_faces(mi)
+
+
+func _cover_of(b: Node3D) -> Array:
+	var vis := _visual_body(b)
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	var space := get_world_3d().direct_space_state
+	# The extent of what can be seen.
+	var lo := Vector3.INF
+	var hi := -Vector3.INF
+	for c in vis.get_children():
+		var cs := c as CollisionShape3D
+		var faces: PackedVector3Array = (cs.shape as ConcavePolygonShape3D).get_faces()
+		for i in range(0, faces.size(), 7):
+			var p := faces[i]
+			lo = lo.min(p)
+			hi = hi.max(p)
+	var hit_vis := 0
+	var hit_both := 0
+	var centre := (lo + hi) * 0.5
+	var r := (hi - lo).length() * 0.5 + 2.0
+	var bx := b.global_basis.x
+	var bz := b.global_basis.z
+	var dirs := [-bz, bz, bx, -bx, (-bz * 0.6 + Vector3.DOWN * 0.8).normalized()]
+	for d: Vector3 in dirs:
+		var u := d.cross(Vector3.UP if absf(d.y) < 0.9 else Vector3.RIGHT).normalized()
+		var v := u.cross(d).normalized()
+		var ext := (hi - lo).length() * 0.55
+		for gi in 22:
+			for gj in 22:
+				var off := u * lerpf(-ext, ext, (float(gi) + 0.5) / 22.0) + v * lerpf(-ext, ext, (float(gj) + 0.5) / 22.0)
+				var a := centre - d * r + off
+				var e := centre + d * r + off
+				var q := PhysicsRayQueryParameters3D.create(a, e, COVER_LAYER)
+				var hv := space.intersect_ray(q)
+				if hv.is_empty():
+					continue
+				hit_vis += 1
+				var q2 := PhysicsRayQueryParameters3D.create(a, e, 4)
+				var hb := space.intersect_ray(q2)
+				if not hb.is_empty() and hb.collider == b:
+					hit_both += 1
+	vis.queue_free()
+	return [hit_both, hit_vis, float(hit_both) / maxf(1.0, float(hit_vis))]
+
+
+func _run_hitcover_test() -> void:
+	_start_match()
+	for i in 30:
+		await get_tree().physics_frame
+	_land_player_now()
+	var od := Ordeal.new()
+	add_child(od)
+	od.setup(self)
+	var lines: Array = []
+	var worst := 1.0
+	for kind in ["revenant", "colossus", "warden", "bell", "witch", "sister", "sentinel", "unkindled", "wyrm", "carrion"]:
+		var at := Vector3(0, 400, 0)
+		var b := od._spawn(kind, at)
+		if b == null:
+			continue
+		b.set_physics_process(false)
+		b.global_position = at
+		b.rotation.y = 0.7
+		if b is Wyrm:
+			(b as Wyrm).phase = "up"
+		elif b is Carrion:
+			(b as Carrion).phase = "perch"
+		for i in 20:
+			await get_tree().process_frame
+		var c: Array = await _cover_of(b)
+		worst = minf(worst, float(c[2]))
+		var line := "%s: %d of %d body rays hit (%.0f%%)" % [b.display_name(), int(c[0]), int(c[1]), float(c[2]) * 100.0]
+		print("[hitcover] " + line)
+		lines.append([kind, b.display_name(), float(c[2])])
+		_check("%s's hitbox covers its body" % kind, float(c[2]) >= 0.9)
+		bots.erase(b)
+		b.queue_free()
+		for i in 3:
+			await get_tree().process_frame
+	print("[hitcover] worst %.0f%%" % (worst * 100.0))
+	print("[hitcover] done")
 	get_tree().quit()
 
 

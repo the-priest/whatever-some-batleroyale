@@ -38,6 +38,9 @@ var _encore := false
 var _segs: Array[Node3D] = []
 var _head: Node3D
 var _jaws: Array[Node3D] = []
+var _seg_shapes: Array[CollisionShape3D] = []
+var _head_shape: CollisionShape3D
+var _maw_shape: CollisionShape3D
 ## Eruptions that struck the local player (for the checks).
 var erupt_hits := 0
 
@@ -73,18 +76,21 @@ func _ready() -> void:
 		_cap.radius = 1.2
 		_cap.height = 3.4
 		_col.position.y = 1.7
-	for k: float in [0.45, 0.65, 0.82, 1.0]:
-		var sp := SphereShape3D.new()
-		sp.radius = lerpf(1.15, 0.9, k)
-		add_hit_shape(sp, Vector3(0, k * (HEIGHT - 1.4) - k * k * 0.6, -k * k * 2.2))
-	var hs := SphereShape3D.new()
-	hs.radius = 0.95
-	add_hit_shape(hs, Vector3(0, (HEIGHT - 1.4) - 0.6 + 0.7, -2.2 - 0.5))
-	# And the open maw thrust out at you, jaws and all.
-	var ms := SphereShape3D.new()
-	ms.radius = 0.9
-	add_hit_shape(ms, Vector3(0, (HEIGHT - 1.4) - 0.6 + 0.6, -3.9))
 	_build_body()
+	# A sphere round every ring of the body (plates and spines included), one
+	# round the head and one round the gaping maw; they follow it as it sways.
+	for i in _segs.size():
+		var k := float(i) / float(maxi(1, _segs.size() - 1))
+		var sp := SphereShape3D.new()
+		sp.radius = lerpf(1.3, 0.85, k) * 1.3
+		_seg_shapes.append(add_hit_shape(sp, _segs[i].position))
+	var hs := SphereShape3D.new()
+	hs.radius = 1.25
+	_head_shape = add_hit_shape(hs, _head.position)
+	var ms := SphereShape3D.new()
+	ms.radius = 1.05
+	_maw_shape = add_hit_shape(ms, _head.position)
+	_follow_shapes()
 
 
 func _build_body() -> void:
@@ -186,6 +192,8 @@ func _build_body() -> void:
 		rk.material_override = dirt
 		rk.position = Vector3(cos(a) * 1.9, 0.15, sin(a) * 1.9)
 		rk.rotation = Vector3(randf_range(-0.2, 0.2), -a, 0.45 + randf_range(-0.15, 0.15))
+		# Broken ground, not the wyrm: not a target.
+		rk.set_meta("dressing", true)
 		add_child(rk)
 	# The head: an armoured skull whose maw splits into four hooked jaws,
 	# rows of teeth spiralling into a throat of green fire.
@@ -329,6 +337,15 @@ func _process(delta: float) -> void:
 			open = 0.1
 	for jw in _jaws:
 		jw.rotation.z = lerpf(jw.rotation.z, -open, clampf(delta * 8.0, 0.0, 1.0))
+	_follow_shapes()
+
+
+func _follow_shapes() -> void:
+	for i in mini(_seg_shapes.size(), _segs.size()):
+		_seg_shapes[i].position = _segs[i].position
+	if _head_shape != null and _head != null:
+		_head_shape.position = _head.position
+		_maw_shape.position = _head.position + _head.basis * Vector3(0, 1.0, 0)
 
 
 func _physics_process(delta: float) -> void:
