@@ -86,6 +86,10 @@ var bots: Array = []
 var airdrops: Array = []
 ## Writ boards, writs and Embers (see writs.gd).
 var writs: Writs = null
+## Souls Mode's ember wisp and objective tracker.
+var guide: Guide = null
+## The sky ledges (double-jump caches).
+var reaches: Reaches = null
 ## The torn pages of the island's story (see codex.gd).
 var codex: Codex = null
 ## Treasure chests, and the Mimics among them (see chests.gd).
@@ -432,6 +436,10 @@ func _ready() -> void:
 		_run_hitbox_test()
 	elif OS.get_cmdline_user_args().has("--classes"):
 		_run_classes_test()
+	elif OS.get_cmdline_user_args().has("--reach"):
+		_run_reach_test()
+	elif OS.get_cmdline_user_args().has("--guide"):
+		_run_guide_test()
 	elif OS.get_cmdline_user_args().has("--sentinel"):
 		_run_sentinel_test()
 	elif OS.get_cmdline_user_args().has("--echo"):
@@ -493,6 +501,10 @@ func _build_world() -> void:
 	writs.name = "Writs"
 	world.add_child(writs)
 	writs.setup(self)
+	reaches = Reaches.new()
+	reaches.name = "Reaches"
+	world.add_child(reaches)
+	reaches.build(self, seed_value)
 	codex = Codex.new()
 	codex.name = "Codex"
 	world.add_child(codex)
@@ -758,6 +770,12 @@ func _start_match_ui() -> void:
 func _start_match() -> void:
 	if not lobby_ready:
 		return
+	if guide != null:
+		guide.stop()
+	if reaches != null:
+		for sh in reaches.shelves:
+			sh.taken = false
+			(sh.cache as Node3D).visible = true
 	# In a LAN game only the host starts matches; clients follow its setup.
 	if net != null and net.active and not net.hosting:
 		return
@@ -995,22 +1013,41 @@ func _begin_souls() -> void:
 	souls_total = bots.filter(func(b): return is_instance_valid(b) and b is Revenant).size()
 	anticheat.grace(3.0)
 	_player_jump(true)
-	# Ashore at the Wayshrine nearest the middle of the isle.
+	# Washed ashore on a beach at the edge of the isle, far from every
+	# keeper; the first Wayshrine is a short walk inland.
 	var spot := ground_at(Vector3(0, 200, 0))
 	var yaw0 := 0.0
+	var first_shrine: Dictionary = {}
 	if writs != null and not writs.shrines.is_empty():
+		var arenas: Array = []
+		for b in bots:
+			if is_instance_valid(b) and b is Revenant:
+				arenas.append((b as Revenant).arena)
 		var best := 0
-		var bd := INF
+		var bs := -INF
+		var best_shore := Vector3.INF
 		for i in writs.shrines.size():
-			var d := Vector2(writs.shrines[i].pos.x, writs.shrines[i].pos.z).length()
-			if d < bd:
-				bd = d
+			var sp: Vector3 = writs.shrines[i].pos
+			var far := INF
+			for a in arenas:
+				far = minf(far, Vector2(sp.x - (a as Vector3).x, sp.z - (a as Vector3).z).length())
+			if arenas.is_empty():
+				far = Vector2(sp.x, sp.z).length()
+			var shore := _shore_from(sp)
+			var score := minf(far, 400.0) - (0.0 if shore != Vector3.INF else 250.0)
+			if score > bs:
+				bs = score
 				best = i
-		var sh: Dictionary = writs.shrines[best]
-		yaw0 = float(sh.yaw) + PI
-		spot = ground_at(sh.pos + Basis(Vector3.UP, float(sh.yaw)) * Vector3(0, 1.0, 1.6)) + Vector3.UP * 0.1
+				best_shore = shore
+		first_shrine = writs.shrines[best]
+		var shp: Vector3 = first_shrine.pos
+		spot = best_shore if best_shore != Vector3.INF else ground_at(shp + Basis(Vector3.UP, float(first_shrine.yaw)) * Vector3(0, 1.0, 18.0)) + Vector3.UP * 0.1
+		var to := shp - spot
+		yaw0 = atan2(-to.x, -to.z)
 	souls_respawn = spot
 	souls_respawn_yaw = yaw0
+	# Souls Mode: the roll and one jump. The keepers give up the rest.
+	player.moves = {}
 	player.global_position = spot
 	player.mode = Player.Mode.GROUND
 	player.landed = true
@@ -1039,7 +1076,13 @@ func _begin_souls() -> void:
 	hud.set_plane_path(Vector3.ZERO, Vector3.ZERO)
 	_spawn_hollows()
 	hud.show_big("THE ISLE OF EMBERS", Color(1.0, 0.72, 0.42), 3.0)
-	hud.show_notice("SLAY THE %d KEEPERS  —  THEY ARE ON YOUR MAP (M); THE RED MARK ON YOUR COMPASS LEADS TO THE NEAREST" % souls_total, 6.0)
+	hud.show_notice("YOU WASH ASHORE  —  FOLLOW THE EMBER WISP", 5.0)
+	if guide == null:
+		guide = Guide.new()
+		guide.name = "Guide"
+		add_child(guide)
+		guide.setup(self)
+	guide.begin(spot, first_shrine)
 
 
 ## Hollow soldiers, armed, in the towns and the woods.
@@ -1056,6 +1099,25 @@ static func soldier_skin(i: int) -> String:
 
 
 const HOLLOW_SKINS := ["SheetGhost.glb", "StitchedBrute.glb", "PumpkinScarecrow.glb", "WerewolfCaptain.glb", "TombMummy.glb", "CleaverButcher.glb"]
+
+
+## Walking from a point out towards the sea: the last dry ground before the
+## water (a few metres up the beach), if the sea is within reach.
+func _shore_from(p: Vector3) -> Vector3:
+	var out := Vector2(p.x, p.z)
+	if out.length() < 1.0:
+		out = Vector2(1, 0)
+	var dir := out.normalized()
+	var last := Vector2.INF
+	for k in range(8, 200, 4):
+		var q := Vector2(p.x, p.z) + dir * float(k)
+		var h := terrain.height_at(q.x, q.y)
+		if h < terrain.water_surface_at(q.x, q.y) + 0.6:
+			if last == Vector2.INF or k < 30:
+				return Vector3.INF
+			return ground_at(Vector3(last.x, 300.0, last.y)) + Vector3.UP * 0.1
+		last = q - dir * 6.0
+	return Vector3.INF
 
 
 func _spawn_hollows() -> void:
@@ -1102,6 +1164,8 @@ func _spawn_hollows() -> void:
 func _souls_tick(delta: float) -> void:
 	if phase == "playing":
 		souls_time += delta
+	if guide != null:
+		guide.tick(delta)
 	_quest_t -= delta
 	if _quest_t > 0.0:
 		return
@@ -1187,6 +1251,8 @@ func souls_rest(at: Vector3, yaw: float) -> void:
 	player.inventory_changed.emit()
 	souls_respawn = ground_at(at + Basis(Vector3.UP, yaw) * Vector3(0, 1.0, 1.6)) + Vector3.UP * 0.1
 	souls_respawn_yaw = yaw + PI
+	if guide != null:
+		guide.on_rest()
 	hud.show_big("YOU REST", Color(1.0, 0.75, 0.42), 1.8)
 	hud.show_notice("WHOLE AGAIN, THE FLASK FULL  —  YOU WILL RISE HERE WHEN YOU FALL", 3.5)
 
@@ -1197,8 +1263,35 @@ func _souls_keeper_fell(r: Revenant) -> void:
 		return
 	souls_slain += 1
 	hud.show_notice("KEEPERS SLAIN  %d / %d" % [souls_slain, souls_total], 4.0)
+	_grant_moves(r)
 	if souls_slain >= souls_total and _souls_final == null:
 		_souls_finale()
+
+
+## A keeper gives up a move (Souls Mode): the Bellkeeper's Ember Wings, the
+## Carrion Queen's Ash Stride. If someone else's keeper falls first, the
+## next keeper you fell gives what is still missing.
+func _grant_moves(r: Revenant) -> void:
+	var give := ""
+	if r is Bellkeeper and not player.moves.has("double"):
+		give = "double"
+	elif r is Carrion and not player.moves.has("dash"):
+		give = "dash"
+	elif souls_slain >= 3 and not player.moves.has("double"):
+		give = "double"
+	elif souls_slain >= 5 and not player.moves.has("dash"):
+		give = "dash"
+	if give == "":
+		return
+	player.moves[give] = true
+	await get_tree().create_timer(2.6).timeout
+	if give == "double":
+		hud.show_big("EMBER WINGS", Color(1.0, 0.8, 0.45), 3.5)
+		hud.show_notice("PRESS %s IN THE AIR TO JUMP AGAIN  —  THE SKY LEDGES ARE IN REACH NOW" % Keybinds.key("jump"), 6.0)
+	else:
+		hud.show_big("ASH STRIDE", Color(0.75, 0.85, 1.0), 3.5)
+		hud.show_notice("PRESS %s IN THE AIR TO DASH  —  YOU CAN CROSS THE VEILS OF ASH NOW" % Keybinds.key("dodge"), 6.0)
+	sfx.play_ui("writ_done", -2.0)
 
 
 ## All thirteen fallen: the last fire on the isle rises.
@@ -7996,6 +8089,172 @@ func _run_dodge_test() -> void:
 	player.take_damage(10.0, Vector3.ZERO, false, null)
 	_check("the storm is not dodged", player.hp < hp2)
 	print("[dodge] done")
+	get_tree().quit()
+
+
+## The movement kit and the sky ledges: double jump, air dash and slide
+## work; every ledge is out of one jump's reach and inside two; writes
+## docs/REACHABILITY.md.
+func _run_reach_test() -> void:
+	_start_match()
+	for i in 30:
+		await get_tree().physics_frame
+	_land_player_now()
+	for i in 60:
+		await get_tree().physics_frame
+	player.spawn_protect = 0.0
+	# Double jump: a second jump from the top of the first goes higher.
+	var y0 := player.global_position.y
+	Input.action_press("jump")
+	await get_tree().physics_frame
+	Input.action_release("jump")
+	var top1 := y0
+	for i in 40:
+		await get_tree().physics_frame
+		top1 = maxf(top1, player.global_position.y)
+	for i in 60:
+		await get_tree().physics_frame
+	var y1 := player.global_position.y
+	Input.action_press("jump")
+	await get_tree().physics_frame
+	Input.action_release("jump")
+	for i in 12:
+		await get_tree().physics_frame
+	Input.action_press("jump")
+	await get_tree().physics_frame
+	Input.action_release("jump")
+	var top2 := y1
+	for i in 50:
+		await get_tree().physics_frame
+		top2 = maxf(top2, player.global_position.y)
+	print("[reach] one jump %.2f m, two jumps %.2f m (air jumps %d)" % [top1 - y0, top2 - y1, player.air_jumps_done])
+	_check("a second jump in the air goes higher", top2 - y1 > (top1 - y0) * 1.5 and player.air_jumps_done == 1)
+	# Air dash.
+	for i in 60:
+		await get_tree().physics_frame
+	var p0 := player.global_position
+	Input.action_press("jump")
+	await get_tree().physics_frame
+	Input.action_release("jump")
+	for i in 10:
+		await get_tree().physics_frame
+	Input.action_press("dodge")
+	await get_tree().physics_frame
+	Input.action_release("dodge")
+	var dash_v := 0.0
+	for i in 6:
+		await get_tree().physics_frame
+		dash_v = maxf(dash_v, Vector2(player.velocity.x, player.velocity.z).length())
+	print("[reach] air dash speed %.1f, dashes %d" % [dash_v, player.air_dashes_done])
+	_check("dodge in the air dashes", dash_v > 14.0 and player.air_dashes_done == 1)
+	# Souls rules: no double jump until earned.
+	for i in 60:
+		await get_tree().physics_frame
+	player.moves = {}
+	var y2 := player.global_position.y
+	Input.action_press("jump")
+	await get_tree().physics_frame
+	Input.action_release("jump")
+	for i in 12:
+		await get_tree().physics_frame
+	Input.action_press("jump")
+	await get_tree().physics_frame
+	Input.action_release("jump")
+	var top3 := y2
+	for i in 50:
+		await get_tree().physics_frame
+		top3 = maxf(top3, player.global_position.y)
+	_check("without Ember Wings there is no second jump", top3 - y2 < (top1 - y0) * 1.2)
+	player.moves = {"double": true, "dash": true}
+	# The ledges.
+	var rows := reaches.audit()
+	var bad := 0
+	var lines: Array = []
+	lines.append("# Reachability")
+	lines.append("")
+	lines.append("Written by the game (`--reach` test), measured against the real movement:")
+	lines.append("")
+	lines.append("| Move | Highest top reachable above where you stand |")
+	lines.append("|---|---|")
+	lines.append("| One jump + ledge-grab | %.2f m (%.2f m with the feather talisman) |" % [Reaches.single_reach(false), Reaches.single_reach(true)])
+	lines.append("| Two jumps (Ember Wings) + ledge-grab | %.2f m (%.2f m with the feather talisman) |" % [Reaches.double_reach(false), Reaches.double_reach(true)])
+	lines.append("| Air dash (Ash Stride) | %.1f m flat in %.2f s, once per jump |" % [Player.AIR_DASH_SPEED * Player.AIR_DASH_TIME, Player.AIR_DASH_TIME])
+	lines.append("")
+	lines.append("## Sky ledges (seed %d)" % seed_value)
+	lines.append("")
+	lines.append("Each must be out of reach of one jump (with the feather) and in reach of two (without it).")
+	lines.append("")
+	lines.append("| # | Where (x, z) | Height above the highest ground beside it | One jump | Two jumps | Verdict |")
+	lines.append("|---|---|---|---|---|---|")
+	for i in rows.size():
+		var r: Array = rows[i]
+		var c: Vector3 = r[0]
+		var ok: bool = r[4]
+		if not ok:
+			bad += 1
+		lines.append("| %d | %d, %d | %.2f m | no (max %.2f) | yes (max %.2f) | %s |" % [i + 1, int(c.x), int(c.z), float(r[1]), float(r[2]), float(r[3]), "SEALED UNTIL EMBER WINGS" if ok else "**FAILS**"])
+	lines.append("")
+	lines.append("## Everything else")
+	lines.append("")
+	lines.append("- The open isle, towns, landmarks, Wayshrines and every boss arena: reachable on foot from the start.")
+	lines.append("- Sky ledges: sealed until Ember Wings (Souls: from the Bellkeeper, or after the third keeper). Battle Royale, the Ordeal and the Echoes give the full kit at once.")
+	lines.append("- Vaults: sealed until you carry their sigils (from the writs and the bosses).")
+	lines.append("- The Ashen Hollow's Warden: sealed until its braziers are lit.")
+	print("[reach] %d ledges, %d fail" % [rows.size(), bad])
+	_check("the isle has sky ledges", rows.size() >= 8)
+	_check("every ledge is sealed to one jump and open to two", bad == 0)
+	if not OS.get_cmdline_user_args().has("--no-doc"):
+		var f := FileAccess.open("res://docs/REACHABILITY.md", FileAccess.WRITE)
+		if f != null:
+			f.store_string("\n".join(PackedStringArray(lines)) + "\n")
+			f.close()
+	print("[reach] done")
+	get_tree().quit()
+
+
+## Souls Mode's guidance: you start far from the keepers, the wisp leads, the
+## steps advance (walk, roll, strike, rest), then it points at a keeper.
+func _run_guide_test() -> void:
+	souls_mode = true
+	_souls_requested = true
+	_start_match()
+	for i in 90:
+		await get_tree().physics_frame
+	var nearest := INF
+	for b in bots:
+		if is_instance_valid(b) and b is Revenant:
+			nearest = minf(nearest, (b as Revenant).arena.distance_to(player.global_position))
+	print("[guide] start: nearest keeper %.0f m, step %d, tracker '%s'" % [nearest, guide.step if guide != null else -1, hud.lbl_obj_title.text])
+	_check("souls mode starts far from every keeper", nearest > 150.0)
+	_check("the guide starts on its first step", guide != null and guide.step == 0 and hud.obj_box.visible)
+	_check("the wisp shows the way", guide._wisp.visible)
+	# Walk to the wisp's goal.
+	player.global_position = guide.target + Vector3.UP * 0.5
+	for i in 20:
+		await get_tree().physics_frame
+	_check("reaching the goal moves on to the roll", guide.step == 1)
+	Input.action_press("dodge")
+	await get_tree().physics_frame
+	Input.action_release("dodge")
+	for i in 20:
+		await get_tree().physics_frame
+	_check("rolling moves on to the hollow", guide.step == 2 and guide.hollow != null)
+	if guide.hollow != null and is_instance_valid(guide.hollow):
+		guide.hollow.take_damage(999.0, guide.hollow.global_position, false, player)
+	for i in 20:
+		await get_tree().physics_frame
+	_check("felling the hollow sends you to the Wayshrine", guide.step == 3)
+	var sh: Dictionary = guide.shrine
+	souls_rest(sh.get("pos", player.global_position), float(sh.get("yaw", 0.0)))
+	for i in 20:
+		await get_tree().physics_frame
+	print("[guide] after rest: step %d, target %s, tracker '%s'" % [guide.step, str(guide.target.round()), hud.lbl_obj_text.text])
+	_check("resting sends you to the first keeper", guide.step == 4 and guide.target != Vector3.INF)
+	hud.opts["guidance"] = 1
+	for i in 5:
+		await get_tree().physics_frame
+	_check("guidance off hides the wisp, the tracker stays", not guide._wisp.visible and hud.obj_box.visible)
+	print("[guide] done")
 	get_tree().quit()
 
 

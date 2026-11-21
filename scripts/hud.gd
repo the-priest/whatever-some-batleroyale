@@ -226,6 +226,7 @@ func _ready() -> void:
 	_build_bars()
 	_build_weapon_panel()
 	_build_kit_panel()
+	_build_objective()
 	_build_minimap()
 	_build_bottom_text()
 	_build_big_map()
@@ -663,14 +664,84 @@ var kit_bar: ColorRect
 var lbl_kit_bar: Label
 
 
+var obj_box: PanelContainer
+var lbl_obj_title: Label
+var lbl_obj_text: Label
+var lbl_obj_dist: Label
+var lbl_obj_hint: Label
+var _obj_flash := 0.0
+
+
+## What to do next (Souls Mode's guidance): the goal, how far, and the keys.
+func _build_objective() -> void:
+	obj_box = PanelContainer.new()
+	obj_box.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	obj_box.offset_left = 28
+	obj_box.offset_top = 58
+	obj_box.offset_right = 470
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.02, 0.022, 0.03, 0.72)
+	sb.border_width_left = 4
+	sb.border_color = ACCENT
+	sb.set_corner_radius_all(3)
+	sb.content_margin_left = 16
+	sb.content_margin_right = 16
+	sb.content_margin_top = 10
+	sb.content_margin_bottom = 10
+	obj_box.add_theme_stylebox_override("panel", sb)
+	obj_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 3)
+	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	obj_box.add_child(v)
+	var top := HBoxContainer.new()
+	top.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	v.add_child(top)
+	lbl_obj_title = _lv("", 15, ACCENT)
+	lbl_obj_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	top.add_child(lbl_obj_title)
+	lbl_obj_dist = _lv("", 14, WHITE)
+	top.add_child(lbl_obj_dist)
+	lbl_obj_text = _lv("", 14, WHITE, false)
+	lbl_obj_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	lbl_obj_text.custom_minimum_size = Vector2(400, 0)
+	v.add_child(lbl_obj_text)
+	lbl_obj_hint = _lv("", 12, Color(1.0, 0.85, 0.6), false)
+	lbl_obj_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	v.add_child(lbl_obj_hint)
+	obj_box.visible = false
+	root.add_child(obj_box)
+
+
+func set_objective(title: String, text: String, dist: String, hint: String) -> void:
+	if obj_box == null:
+		return
+	if title == "":
+		obj_box.visible = false
+		return
+	if lbl_obj_title.text != title:
+		_obj_flash = 1.0
+		sfx_click()
+	obj_box.visible = gameplay_visible()
+	lbl_obj_title.text = title
+	lbl_obj_text.text = text
+	lbl_obj_dist.text = dist
+	lbl_obj_hint.text = hint
+	lbl_obj_hint.visible = hint != ""
+
+
+func gameplay_visible() -> bool:
+	return lbl_alive == null or lbl_alive.is_visible_in_tree()
+
+
 ## Your class: its ability (key and cooldown) and its gauge (Ember, draw).
 func _build_kit_panel() -> void:
 	var box := _panel()
-	box.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	box.offset_left = -330
-	box.offset_right = -28
-	box.offset_top = -206
-	box.offset_bottom = -140
+	box.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	box.offset_left = -190
+	box.offset_right = 190
+	box.offset_top = -92
+	box.offset_bottom = -28
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", 3)
 	vb.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -2575,6 +2646,9 @@ func _process(delta: float) -> void:
 func _process_body(delta: float) -> void:
 	_story_tick(delta)
 	_sync_kit()
+	if _obj_flash > 0.0 and obj_box != null:
+		_obj_flash = maxf(0.0, _obj_flash - delta * 1.5)
+		obj_box.modulate = Color(1.0 + _obj_flash * 0.6, 1.0 + _obj_flash * 0.4, 1.0, 1.0)
 	_tick_fps(delta)
 	if hit_t > 0.0:
 		hit_t = maxf(0.0, hit_t - delta)

@@ -133,6 +133,21 @@ var blink_cd := 0.0
 var pclass := "gunslinger"
 var kit: ClassKit = null
 var kit_out := false
+## The movement kit: double jump, air dash and slide. In Souls Mode the
+## first two are earned from keepers; everywhere else they are yours.
+var moves: Dictionary = {"double": true, "dash": true}
+var _air_jumps := 1
+var _air_dashes := 1
+var _slide_t := 0.0
+var _slide_dir := Vector3.ZERO
+var _slide_speed := 0.0
+var air_jumps_done := 0
+var air_dashes_done := 0
+var slides_done := 0
+const AIR_DASH_SPEED := 17.0
+const AIR_DASH_TIME := 0.22
+const SLIDE_TIME := 0.75
+var _air_dash_t := 0.0
 var _charge_t := 0.0
 var _charge_dir := Vector3.ZERO
 var _charge_hit: Dictionary = {}
@@ -859,9 +874,41 @@ func _ground(delta: float) -> void:
 	var wish := basis_yaw * Vector3(input.x, 0.0, input.y)
 	var target := wish * speed * (0.55 if not is_on_floor() else 1.0)
 	var accel := ACCEL if is_on_floor() else AIR_ACCEL
-	if dodge_t <= 0.0 and _ajp("dodge"):
-		_start_dodge(wish, basis_yaw)
-	if _charge_t > 0.0:
+	if is_on_floor():
+		_air_jumps = 1
+		_air_dashes = 1
+	if dodge_t <= 0.0 and _air_dash_t <= 0.0 and _ajp("dodge"):
+		if is_on_floor() or _coyote > 0.0:
+			_start_dodge(wish, basis_yaw)
+		elif moves.has("dash") and _air_dashes > 0 and not swimming:
+			_start_air_dash(wish, basis_yaw)
+	# Slide: crouch while sprinting.
+	if _slide_t <= 0.0 and Vector2(velocity.x, velocity.z).length() > WALK + 1.2 and _ajp("crouch") and is_on_floor() and not aiming:
+		_slide_t = SLIDE_TIME
+		_slide_dir = Vector3(velocity.x, 0.0, velocity.z).normalized()
+		if _slide_dir.length() < 0.1:
+			_slide_dir = basis_yaw * Vector3(0, 0, -1)
+		_slide_speed = SPRINT * 1.4
+		slides_done += 1
+		land_dip = 0.2
+		add_trauma(0.05)
+		if game != null and game.sfx != null:
+			game.sfx.play_2d("step_dirt_1", -4.0, 0.1)
+	if _slide_t > 0.0:
+		_slide_t -= delta
+		if not _ap("crouch") or not is_on_floor():
+			_slide_t = 0.0
+		_slide_speed = move_toward(_slide_speed, CROUCH, delta * 11.0)
+	if _air_dash_t > 0.0:
+		# The Ash Stride: flat and fast, no falling while it lasts.
+		_air_dash_t -= delta
+		velocity.x = _dodge_dir.x * AIR_DASH_SPEED
+		velocity.z = _dodge_dir.z * AIR_DASH_SPEED
+		velocity.y = 0.0
+	elif _slide_t > 0.0:
+		velocity.x = _slide_dir.x * _slide_speed
+		velocity.z = _slide_dir.z * _slide_speed
+	elif _charge_t > 0.0:
 		# The Knight's Shield Charge: straight ahead, bashing through.
 		_charge_t -= delta
 		velocity.x = _charge_dir.x * 22.0
@@ -879,15 +926,33 @@ func _ground(delta: float) -> void:
 	if is_on_floor():
 		_coyote = 0.12
 	else:
-		velocity.y -= GRAVITY * delta
+		if _air_dash_t <= 0.0:
+			velocity.y -= GRAVITY * delta
 		_coyote = maxf(0.0, _coyote - delta)
 	if _ajp("jump") and not in_water and velocity.y > -6.0 and (_try_mantle() or _try_window_vault()):
 		return
 	if _ajp("jump") and _coyote > 0.0 and not in_water:
 		velocity.y = JUMP * (1.16 if Talismans.wears("feather") else 1.0)
 		_coyote = 0.0
+		if _slide_t > 0.0:
+			# A slide into a jump keeps the speed.
+			_slide_t = 0.0
 		if game != null and game.sfx != null:
 			game.sfx.play_2d("jump", -12.0, 0.08)
+	elif _ajp("jump") and not is_on_floor() and _coyote <= 0.0 and moves.has("double") and _air_jumps > 0 and not in_water and not swimming:
+		# Ember Wings: a second jump in the air, a burst of sparks underfoot.
+		_air_jumps -= 1
+		air_jumps_done += 1
+		velocity.y = JUMP * (1.16 if Talismans.wears("feather") else 1.0)
+		_air_dash_t = 0.0
+		add_trauma(0.06)
+		if game != null:
+			if game.get("anticheat") != null:
+				game.anticheat.grace(0.8)
+			if game.has_method("spawn_smoke"):
+				game.spawn_smoke(global_position, 0.5)
+			if game.sfx != null:
+				game.sfx.play_2d("jump_whoosh", -6.0, 0.1)
 	velocity = velocity.limit_length(60.0)
 	if not is_on_floor():
 		_fall_speed = minf(_fall_speed, velocity.y)
@@ -2508,6 +2573,31 @@ func quickdraw() -> void:
 	_emit_ammo()
 
 
+func _start_air_dash(wish: Vector3, basis_yaw: Basis) -> void:
+	var dir := wish
+	dir.y = 0.0
+	if dir.length() < 0.2:
+		dir = basis_yaw * Vector3(0, 0, -1)
+	_dodge_dir = dir.normalized()
+	_air_dash_t = AIR_DASH_TIME
+	_air_dashes -= 1
+	air_dashes_done += 1
+	iframes = maxf(iframes, 0.16)
+	add_trauma(0.08)
+	if game != null:
+		if game.get("anticheat") != null:
+			game.anticheat.grace(0.8)
+		if game.has_method("spawn_smoke"):
+			game.spawn_smoke(global_position + Vector3.UP, 0.5)
+		if game.sfx != null:
+			game.sfx.play_2d("jump_whoosh", -4.0, 0.12)
+
+
+## Is the slide on (the body low, for the camera and the hitbox)?
+func sliding() -> bool:
+	return _slide_t > 0.0
+
+
 func _blink() -> void:
 	if blink_cd > 0.0 or mode != Mode.GROUND or downed or swimming:
 		return
@@ -3034,6 +3124,9 @@ func reset_for_match() -> void:
 	_casings.clear()
 	_charge_t = 0.0
 	_quick_t = 0.0
+	moves = {"double": true, "dash": true}
+	_air_dash_t = 0.0
+	_slide_t = 0.0
 	blocked = 0
 	parries = 0
 	Classes.load_choice()

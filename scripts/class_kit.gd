@@ -13,6 +13,8 @@ const SWINGS := [
 	[0.46, 36.0, 3.1, 2.6, false],
 	[0.78, 64.0, 3.5, 1.8, true],
 ]
+## How big each weapon sits in first person (its parts are built life-size).
+const VIEW_SCALE := {"knight": 0.36, "hunter": 0.62, "pyro": 0.5}
 const GUARD_TAKEN := 0.2
 const PARRY_WINDOW := 0.22
 const DRAW_TIME := 0.75
@@ -379,7 +381,8 @@ func _build_trail() -> void:
 func _show_trail(swing: int) -> void:
 	_trail.visible = true
 	_trail_t = 0.16
-	_trail.position = Vector3(0, -0.15, -0.2)
+	_trail.position = Vector3(0, -0.12, -0.15)
+	_trail.scale = Vector3.ONE * 0.55
 	match swing:
 		0:
 			_trail.rotation = Vector3(0.1, 0, 0.12)
@@ -683,6 +686,7 @@ func view_tick(delta: float) -> void:
 				var sr := Vector3(0.1, 0.5, 0.15).lerp(Vector3(0.0, 0.1, 0.0), g)
 				if _parried_t > 0.0:
 					sp += Vector3(0.03, 0.04, 0.05)
+				_shield.scale = Vector3.ONE * 0.48
 				_shield.position = _shield.position.lerp(sp + bob * 0.6 + sway * 0.5, clampf(delta * 14.0, 0.0, 1.0))
 				_shield.rotation = _shield.rotation.lerp(sr, clampf(delta * 14.0, 0.0, 1.0))
 		"hunter":
@@ -716,6 +720,7 @@ func view_tick(delta: float) -> void:
 	rot.x -= (1.0 - e) * 0.8
 	_pivot.position = pos
 	_pivot.rotation = rot
+	_pivot.scale = Vector3.ONE * VIEW_SCALE.get(cls, 0.5)
 	if _trail_t > 0.0:
 		_trail_t -= delta
 		_trail_mat.albedo_color.a = clampf(_trail_t / 0.16, 0.0, 1.0) * 0.8
