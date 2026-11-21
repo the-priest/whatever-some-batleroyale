@@ -234,6 +234,9 @@ func _targets() -> Array:
 ## Everyone a player's fire can hurt: soldiers, bosses and other players.
 static func _reach_targets(g: Node, who: Node) -> Array:
 	var out: Array = []
+	# A soldier's fire burns you too.
+	if who != g.player and g.player != null and g.player.alive and g.player.mode == Player.Mode.GROUND:
+		out.append(g.player)
 	for b in g.bots:
 		if is_instance_valid(b) and b != who and b.alive and b.state == Bot.State.GROUND and not (b.friendly and who is Player):
 			out.append(b)

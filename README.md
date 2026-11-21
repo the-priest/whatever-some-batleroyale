@@ -35,6 +35,27 @@ from beak to tail and out to each wingtip (her wing hitboxes follow the wings as
 Bellkeeper's bell above his head. Boss rings are cleared of trees and rocks, and never laid over a
 building or tower.
 
+## Classes: choose who you are
+
+MENU → CHARACTER. Four classes, used in every mode (Battle Royale soldiers play them too):
+
+| Class | Attack | Alternate (right mouse / LT) | Ability (V / RB) | Passive |
+|---|---|---|---|---|
+| **The Knight** | greatsword, 3-swing combo | guard; raise it as a blow lands to **parry** | Shield Charge | +25 health, front ward |
+| **The Hunter** | longbow: hold to draw, release | focus (zoom, steady) | Volley (3 arrows) | faster sprint, double headshots |
+| **The Pyromancer** | fireballs that burn the ground | flame wall | Blink | Ember refills, more on kills |
+| **The Gunslinger** | any gun | aim | Quickdraw | faster reloads |
+
+Class weapon on **1**, guns on **2** / mouse wheel. Everyone has the **movement kit**: double jump, air
+dash (dodge in the air), slide (crouch while sprinting) and the dodge roll. In Souls Mode the double
+jump (**Ember Wings**) and the air dash (**Ash Stride**) are earned from keepers, and open the sealed
+**sky ledges** and **veils of ash**; `docs/REACHABILITY.md` lists every gated place, measured by the
+game against the real movement.
+
+**Gamepad**: plug one in and play; prompts switch to its buttons. Sticks move and look, RT attack,
+LT alternate, A jump, B roll/dash, X interact, Y swap, RB ability, LB flask, L3 sprint, R3 crouch,
+D-pad reload / grenade / heal / class weapon.
+
 ## Controls
 
 | Key | Action |

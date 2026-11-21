@@ -44,6 +44,10 @@ var stagger_t := 0.0
 ## and its height in the body's own units.
 var skin := ""
 var skin_height := 1.8
+## Battle Royale soldiers play the classes too: "knight" (closes in and
+## swings), "hunter" (arrows), "pyro" (fireballs) or "gunslinger" (guns).
+var bclass := "gunslinger"
+var melee_hits := 0
 var dead_timer := 0.0
 ## A body lies where it fell this long (by its dropped kit), then sinks away.
 const BODY_STAYS := 45.0
@@ -441,6 +445,10 @@ func _land() -> void:
 	global_position.y = game_ground_y() + 1.4
 	_play("Jump_Land")
 	roam_point = drop_target
+	# A class soldier lands with its own weapon in hand.
+	if bclass != "gunslinger" and not armed and not is_human:
+		arm_weapon("pistol")
+		mag = 999
 	# Fresh off the plane, people loot first and only fight what is in their face.
 	calm_t = randf_range(60.0, 150.0)
 	if game != null and game.has_method("on_bot_landed"):
@@ -724,6 +732,13 @@ var _nade_cd := 4.0
 
 
 func _hold_range() -> float:
+	match bclass:
+		"knight":
+			return 2.0
+		"hunter":
+			return 38.0
+		"pyro":
+			return 20.0
 	match Weapons.cls(weapon_id):
 		"smg", "pistol":
 			return 16.0
@@ -789,6 +804,12 @@ func _combat(delta: float, sees: bool) -> Array:
 	var d := to_e.length()
 	to_e = to_e / maxf(d, 0.01)
 	var hold := _hold_range()
+	if bclass == "knight":
+		# A knight does not take cover: it closes in, weaving a little.
+		fight_moving = false
+		rotation.y = lerp_angle(rotation.y, atan2(-to_e.x, -to_e.z), clampf(delta * 8.0, 0.0, 1.0))
+		var weave := to_e.cross(Vector3.UP) * sin(_engage_t * 2.3) * minf(d * 0.15, 2.0)
+		return [ep - to_e * 1.4 + weave, 0.0, d > 5.0]
 	# Cover we have ended up far from is no use to us now.
 	if _cover != Vector3.INF and _flat_d(here, _cover) > 20.0:
 		_cover = Vector3.INF
@@ -1817,6 +1838,13 @@ func _shoot_logic(delta: float) -> void:
 	var d: Dictionary = Weapons.def(weapon_id)
 	var dist := global_position.distance_to(enemy.global_position)
 	var max_range: float = minf(float(d["range"]), sight)
+	if bclass == "knight":
+		_melee_logic(delta, dist)
+		return
+	elif bclass == "pyro":
+		max_range = minf(60.0, sight)
+	elif bclass == "hunter":
+		max_range = minf(120.0, sight)
 	if dist > max_range:
 		return
 	var aim_h := aim_height(enemy)
@@ -1874,6 +1902,9 @@ func _shoot_logic(delta: float) -> void:
 	aim_pt.y += 0.5 * Ballistics.GRAVITY * tof * tof * comp
 	var base_dir := (aim_pt - from).normalized()
 	var mult := 0.62 if (enemy is Player or (enemy is Bot and (enemy as Bot).is_human)) else 0.2
+	if bclass == "hunter" or bclass == "pyro":
+		_loose_kit(from, enemy.global_position + Vector3(0, aim_h, 0), tvel, spread, mult)
+		return
 	var pellets := int(d["pellets"])
 	_shot_seq += 1
 	for i in pellets:
@@ -1888,6 +1919,45 @@ func _shoot_logic(delta: float) -> void:
 		game.bot_casing(from - global_basis.z * -0.25 + global_basis.x * 0.08, global_basis.x * randf_range(1.6, 2.4) + Vector3.UP * 1.2, Weapons.cls(weapon_id) == "shotgun")
 	if game != null and game.has_method("on_gunshot"):
 		game.on_gunshot(from, self)
+
+
+## A class soldier's arrow or fireball, led and held over as well as it can.
+func _loose_kit(from: Vector3, at: Vector3, tvel: Vector3, spread: float, mult: float) -> void:
+	var arrow := bclass == "hunter"
+	var speed := 70.0 if arrow else 34.0
+	var dist := from.distance_to(at)
+	var tof := dist / speed
+	var comp := clampf(shoot_skill * 1.15, 0.0, 1.0)
+	var pt := at + tvel * tof * comp
+	if arrow:
+		pt.y += 0.5 * KitShot.GRAVITY * tof * tof * comp
+	var s := spread * 1.4
+	var dir := ((pt - from).normalized() + Vector3(randf_range(-s, s), randf_range(-s, s), randf_range(-s, s))).normalized()
+	KitShot.launch(game, self, "arrow" if arrow else "fire", from, dir * speed, (46.0 if arrow else 38.0) * maxf(mult, 0.35) * (1.0 if mult > 0.3 else 0.8))
+	fire_timer = randf_range(1.0, 1.4) if arrow else randf_range(1.3, 1.8)
+	if game != null:
+		game.play_sfx_at("jump_whoosh" if arrow else "explosion", from, -2.0 if arrow else -14.0)
+		if game.has_method("on_gunshot") and not arrow:
+			game.on_gunshot(from, self)
+
+
+## A knight's sword: close enough, it swings.
+func _melee_logic(delta: float, dist: float) -> void:
+	var to := enemy.global_position - global_position
+	rotation.y = lerp_angle(rotation.y, atan2(-to.x, -to.z), clampf(delta * 10.0, 0.0, 1.0))
+	if fire_timer > 0.0 or dist > 2.9:
+		return
+	fire_timer = randf_range(0.85, 1.2)
+	if body != null:
+		body.play_attack()
+	var mult := 0.62 if (enemy is Player or (enemy is Bot and (enemy as Bot).is_human)) else 0.3
+	var dmg := 34.0 * maxf(mult, 0.5)
+	var killed = enemy.call("take_damage", dmg, global_position + Vector3.UP * 1.2, false, self)
+	melee_hits += 1
+	if game != null:
+		game.play_sfx_at("jump_whoosh", global_position, -4.0)
+		if killed is bool and not killed:
+			game.spawn_blood(enemy.global_position + Vector3.UP * 1.1)
 
 
 func _shot_origin() -> Vector3:

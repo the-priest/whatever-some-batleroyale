@@ -338,6 +338,14 @@ func _ready() -> void:
 	_show_menu()
 	_refresh_places()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	# Checks play as the Gunslinger (no class passives) unless they pick one,
+	# and never touch the player's saved class.
+	for ta in OS.get_cmdline_user_args():
+		if ta.begins_with("--") and ta not in ["--shot", "--hud", "--menu"] and not OS.get_cmdline_user_args().has("--shot"):
+			Classes.no_save = true
+			Classes._loaded = true
+			Classes.chosen = "gunslinger"
+			break
 	if OS.get_cmdline_user_args().has("--smoke"):
 		_run_smoke()
 	elif OS.get_cmdline_user_args().has("--sim"):
@@ -446,6 +454,8 @@ func _ready() -> void:
 		_run_pad_test()
 	elif OS.get_cmdline_user_args().has("--fauna"):
 		_run_fauna_test()
+	elif OS.get_cmdline_user_args().has("--classbots"):
+		_run_classbots_test()
 	elif OS.get_cmdline_user_args().has("--guide"):
 		_run_guide_test()
 	elif OS.get_cmdline_user_args().has("--sentinel"):
@@ -880,6 +890,7 @@ func _start_match() -> void:
 	for i in range(0 if ordeal_mode or souls_mode else MAX_BOTS):
 		var b := Bot.new()
 		b.skin = soldier_skin(i)
+		b.bclass = soldier_class(i)
 		var target := _bot_drop_point()
 		# Spread the lobby out: no two landing spots within 45 m.
 		for tries in 12:
@@ -1137,8 +1148,32 @@ const SOLDIER_SKINS := ["soldiers/DropZoneParatrooper.glb", "orcs/Rifleman.glb",
 	"soldiers/SwatBreacher.glb", "orcs/ArmyOfficer.glb", "soldiers/FieldRadioOperator.glb", "soldiers/ConvictCommando.glb", "orcs/ArmyGeneral.glb"]
 
 
+const KNIGHT_SKINS := ["medieval/Footman.glb", "bloodiron/BloodironGrunt.glb", "orcs/OrcShieldBearer.glb", "heroes/LadyKnight.glb", "heroes/Berserker.glb", "heroes/BoarHelmSpearman.glb", "heroes/AxeThrower.glb"]
+const HUNTER_SKINS := ["orcs/OrcLegionArcher.glb", "heroes/CourtCrossbowman.glb", "medieval/Archer.glb", "medieval/Scout.glb"]
+const PYRO_SKINS := ["bloodiron/OrcPyromancer.glb", "heroes/TorchRaider.glb", "heroes/FairyGodmother.glb", "orcs/OrcWarShaman.glb"]
+
+
+## Which class the i-th soldier plays (the same on every machine).
+static func soldier_class(i: int) -> String:
+	var k := i % 20
+	if k < 5:
+		return "knight"
+	if k < 9:
+		return "hunter"
+	if k < 12:
+		return "pyro"
+	return "gunslinger"
+
+
 ## The same soldier looks the same on every machine (by its number).
 static func soldier_skin(i: int) -> String:
+	match soldier_class(i):
+		"knight":
+			return Revenant.G + KNIGHT_SKINS[(i / 20 + i) % KNIGHT_SKINS.size()]
+		"hunter":
+			return Revenant.G + HUNTER_SKINS[(i / 20 + i) % HUNTER_SKINS.size()]
+		"pyro":
+			return Revenant.G + PYRO_SKINS[(i / 20 + i) % PYRO_SKINS.size()]
 	return Revenant.G + SOLDIER_SKINS[i % SOLDIER_SKINS.size()]
 
 
@@ -1566,6 +1601,12 @@ func _spawn_loot(kind: String, id: String, pos: Vector3, mag := -1, reserve := -
 
 func _cleanup_match() -> void:
 	_net_setup_ok = false
+	for bt in beasts:
+		if is_instance_valid(bt):
+			(bt as Node).queue_free()
+	beasts.clear()
+	if guide != null:
+		guide.stop()
 	if ordeal != null and is_instance_valid(ordeal):
 		ordeal.cleanup()
 		ordeal.queue_free()
@@ -6133,6 +6174,7 @@ func net_start_match(setup: Dictionary) -> void:
 		else:
 			b = Bot.new()
 			b.skin = soldier_skin(i)
+			b.bclass = soldier_class(i)
 			b.setup(str(names[i]), Vector2.ZERO, self, i)
 		b.puppet = true
 		b.net_index = i
@@ -7759,6 +7801,7 @@ func _run_souls_test() -> void:
 	_check("your embers stay where you fell", writs.my_embers == 0 and not writs.cinder.is_empty())
 	for i in 60 * 5:
 		await get_tree().physics_frame
+	print("[souls] rise: alive %s, %.1f m from the rising place, flask %d / %d" % [str(player.alive), player.global_position.distance_to(souls_respawn), player.flask, player.flask_max])
 	_check("the wayshrine's fire brings you back", player.alive and player.global_position.distance_to(souls_respawn) < 3.0 and player.flask == player.flask_max)
 	_check("the keepers are whole again", is_equal_approx(k0.hp, 100.0))
 	# Rest at another shrine.
@@ -8339,6 +8382,63 @@ func _run_reach_test() -> void:
 			f.store_string("\n".join(PackedStringArray(lines)) + "\n")
 			f.close()
 	print("[reach] done")
+	get_tree().quit()
+
+
+## Battle Royale soldiers playing the classes: a knight closes in and
+## swings, a hunter looses arrows, a pyromancer throws fire.
+func _run_classbots_test() -> void:
+	_start_match()
+	for i in 30:
+		await get_tree().physics_frame
+	_land_player_now()
+	for i in 30:
+		await get_tree().physics_frame
+	var counts := {}
+	for b in bots:
+		if is_instance_valid(b) and not (b is Revenant):
+			counts[b.bclass] = int(counts.get(b.bclass, 0)) + 1
+	print("[classbots] classes: %s" % str(counts))
+	_check("soldiers play every class", counts.has("knight") and counts.has("hunter") and counts.has("pyro") and counts.has("gunslinger"))
+	player.spawn_protect = 0.0
+	player.vest_level = 0
+	player.helmet_level = 0
+	var here := player.global_position
+	for cls in ["knight", "hunter", "pyro"]:
+		var bb: Bot = null
+		for b in bots:
+			if is_instance_valid(b) and not (b is Revenant) and b.bclass == cls and b.alive:
+				bb = b
+				break
+		if bb == null:
+			continue
+		var dist := 12.0 if cls == "knight" else (30.0 if cls == "hunter" else 16.0)
+		bb.state = Bot.State.GROUND
+		bb.landed = true
+		bb.global_position = ground_at(here + Vector3(dist, 30, 0)) + Vector3.UP * 0.3
+		if not bb.armed:
+			bb.arm_weapon("pistol")
+			bb.mag = 999
+		bb.calm_t = 0.0
+		bb.enemy = player
+		bb.shoot_skill = 0.95
+		var hp0 := player.hp
+		var hits0 := bb.melee_hits
+		var hurt := false
+		for i in 60 * 8:
+			await get_tree().physics_frame
+			bb.enemy = player
+			if player.hp < hp0 - 1.0:
+				hurt = true
+				break
+			player.hp = 100.0
+			hp0 = 100.0
+			player.global_position = Vector3(here.x, player.global_position.y, here.z)
+		print("[classbots] %s %s: hurt you %s (melee %d)" % [cls, bb.bot_name, str(hurt), bb.melee_hits - hits0])
+		_check("a %s soldier fights with its class" % cls, hurt)
+		bb.global_position = here + Vector3(400, 0, 400)
+		player.hp = 100.0
+	print("[classbots] done")
 	get_tree().quit()
 
 
