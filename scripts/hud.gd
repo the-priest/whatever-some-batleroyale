@@ -149,6 +149,8 @@ const OPTS := {
 	"hitmarkers": ["HIT MARKERS", ["ON", "OFF"], 0],
 	"damage_numbers": ["DAMAGE NUMBERS", ["OFF", "ON"], 0],
 	"viewmodel": ["GUN POSITION", ["NORMAL", "CENTRED", "LOW"], 0],
+	"guidance": ["GUIDANCE (EMBER WISP)", ["ON", "OFF"], 0],
+	"hints": ["TUTORIAL HINTS", ["ON", "OFF"], 0],
 }
 const XHAIR_COLS := [Color(0.95, 0.96, 0.97), Color(0.45, 1.0, 0.45), Color(1.0, 0.92, 0.3), Color(0.35, 0.95, 1.0), Color(1.0, 0.45, 0.85), Color(1.0, 0.3, 0.25)]
 var opts: Dictionary = {}
@@ -835,6 +837,7 @@ func _build_big_map() -> void:
 
 var menu_ordeal: Button
 var menu_ordeal_rec: Label
+var main_menu: MainMenu
 
 
 func _build_menu() -> void:
@@ -859,114 +862,14 @@ func _build_menu() -> void:
 	grad.stretch_mode = TextureRect.STRETCH_SCALE
 	menu.add_child(grad)
 
-	var col := VBoxContainer.new()
-	col.set_anchors_preset(Control.PRESET_CENTER_LEFT)
-	col.offset_left = 96
-	col.offset_right = 760
-	col.offset_top = -300
-	col.offset_bottom = 300
-	col.add_theme_constant_override("separation", 7)
-	col.alignment = BoxContainer.ALIGNMENT_CENTER
-	menu.add_child(col)
-
-	menu_kicker = _lv("", 12, ACCENT)
-	col.add_child(menu_kicker)
-	var title := _lv("BLOCK ROYALE", 96, WHITE)
-	title.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.55))
-	title.add_theme_constant_override("shadow_offset_y", 4)
-	col.add_child(title)
-	col.add_child(_lv("BATTLE ROYALE  ·  SOULS  ·  BOSS RUSH", 18, MUTED, false))
-	menu_rank = _lv("", 14, Color(1.0, 0.76, 0.42))
-	col.add_child(menu_rank)
-	col.add_child(_spacer(8))
-
-	play_button = _button("B A T T L E   R O Y A L E", true)
-	play_button.custom_minimum_size = Vector2(340, 50)
-	play_button.pressed.connect(func(): play_pressed.emit())
-	col.add_child(play_button)
-	var souls_b := _button("S O U L S   M O D E", true)
-	souls_b.custom_minimum_size = Vector2(340, 50)
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.55, 0.16, 0.1)
-	sb.set_corner_radius_all(3)
-	souls_b.add_theme_stylebox_override("normal", sb)
-	var sbh := sb.duplicate() as StyleBoxFlat
-	sbh.bg_color = Color(0.7, 0.22, 0.13)
-	souls_b.add_theme_stylebox_override("hover", sbh)
-	souls_b.add_theme_color_override("font_color", Color(1.0, 0.9, 0.8))
-	souls_b.add_theme_color_override("font_hover_color", Color(1.0, 0.95, 0.9))
-	souls_b.pressed.connect(func(): sfx_click(); souls_pressed.emit())
-	col.add_child(souls_b)
-	var lan := HBoxContainer.new()
-	lan.add_theme_constant_override("separation", 8)
-	var hb := _button("HOST GAME", false)
-	hb.custom_minimum_size = Vector2(166, 48)
-	hb.pressed.connect(func(): sfx_click(); host_lan_pressed.emit())
-	lan.add_child(hb)
-	var jb := _button("JOIN GAME", false)
-	jb.custom_minimum_size = Vector2(166, 48)
-	jb.pressed.connect(func(): sfx_click(); join_lan_pressed.emit())
-	lan.add_child(jb)
-	col.add_child(lan)
-	var qb := _button("QUICK LAN  ·  JOIN OR HOST WITH FRIENDS", false)
-	qb.custom_minimum_size = Vector2(340, 44)
-	qb.pressed.connect(func(): sfx_click(); quick_lan_pressed.emit())
-	col.add_child(qb)
-	var orow := HBoxContainer.new()
-	orow.add_theme_constant_override("separation", 8)
-	menu_ordeal = _button("THE ORDEAL", false)
-	menu_ordeal.custom_minimum_size = Vector2(166, 38)
-	menu_ordeal.add_theme_color_override("font_color", Color(1.0, 0.72, 0.42))
-	menu_ordeal.pressed.connect(func(): sfx_click(); ordeal_pressed.emit())
-	orow.add_child(menu_ordeal)
-	var eb := _button("HALL OF ECHOES", false)
-	eb.custom_minimum_size = Vector2(166, 38)
-	eb.add_theme_color_override("font_color", Color(0.75, 0.85, 1.0))
-	eb.pressed.connect(Callable(self, "_open_echoes"))
-	orow.add_child(eb)
-	col.add_child(orow)
-	menu_ordeal_rec = _lv("", 11, Color(0.85, 0.62, 0.42), false)
-	col.add_child(menu_ordeal_rec)
-	for pair in [[["LOADOUT", "_open_loadout"], ["OATHS", "_open_oaths"]], [["TALISMANS", "_open_talismans"], ["CODEX", "_open_codex"]], [["SETTINGS", "_open_settings"], ["QUIT", "_quit"]]]:
-		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 8)
-		for item in pair:
-			var b := _button(item[0], false)
-			b.custom_minimum_size = Vector2(166 if pair.size() > 1 else 340, 38)
-			b.pressed.connect(Callable(self, item[1]))
-			row.add_child(b)
-		col.add_child(row)
-	col.add_child(_spacer(2))
-	menu_seed = _lv("", 11, DIM, false)
-	col.add_child(menu_seed)
-
-	# Loadout card on the right: the gun you will drop with.
-	menu_card = VBoxContainer.new()
-	menu_card.set_anchors_preset(Control.PRESET_CENTER_RIGHT)
-	menu_card.offset_left = -720
-	menu_card.offset_right = -70
-	menu_card.offset_top = -230
-	menu_card.offset_bottom = 230
-	menu_card.add_theme_constant_override("separation", 6)
-	menu_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	menu.add_child(menu_card)
-	menu_card.add_child(_lv("YOUR LOADOUT", 12, ACCENT))
-	menu_preview = GunPreview.new()
-	menu_preview.custom_minimum_size = Vector2(650, 300)
-	menu_card.add_child(menu_preview)
-	menu_loadout = _lv("", 22, WHITE)
-	menu_card.add_child(menu_loadout)
-	menu_loadout_sub = _lv("", 13, MUTED, false)
-	menu_card.add_child(menu_loadout_sub)
-
-	menu_keys = _lv("", 11, DIM, false)
-	var foot := menu_keys
-	_menu_keys_text()
-	foot.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-	foot.offset_left = 96
-	foot.offset_top = -48
-	foot.offset_bottom = -26
-	menu.add_child(foot)
+	# Sections, a glass panel and a line that says what everything does.
+	main_menu = MainMenu.new()
+	main_menu.setup(self)
+	menu.add_child(main_menu)
+	menu_kicker = main_menu.kicker
+	menu_rank = main_menu.rank_label
+	menu_seed = main_menu.seed_label
+	menu_ordeal_rec = main_menu.ordeal_rec
 
 	loadout_screen = LoadoutScreen.new()
 	loadout_screen.setup(self)
@@ -1749,7 +1652,7 @@ func _build_pause() -> void:
 	size_slider.custom_minimum_size = Vector2(300, 22)
 	size_slider.value_changed.connect(func(_v): _settings_changed())
 	col2.add_child(size_slider)
-	for k in ["crosshair", "xhair_color", "hitmarkers", "damage_numbers"]:
+	for k in ["guidance", "hints", "crosshair", "xhair_color", "hitmarkers", "damage_numbers"]:
 		_opt_row(t_game[0], k)
 	for k in ["viewmodel", "head_bob", "shake"]:
 		_opt_row(t_game[1], k)
@@ -2511,7 +2414,7 @@ func set_mates(list: Array) -> void:
 
 func set_match_size(n: int) -> void:
 	if menu_kicker != null:
-		var src := "THE ISLE OF EMBERS  ·  %d PLAYERS  ·  13 BOSSES" % n
+		var src := "THE ISLE OF EMBERS  ·  %d PLAYERS" % n
 		var spaced := ""
 		for i in src.length():
 			spaced += src[i] + (" " if i < src.length() - 1 else "")

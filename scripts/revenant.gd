@@ -18,6 +18,25 @@ const NAMES := [
 	["THRAIN", "THE IRON OATH"], ["KESSA", "THE PALE HUNTRESS"], ["DORIAN", "THE LAST CAPTAIN"],
 	["VELKA", "WHO WALKS IN SMOKE"], ["ABBOT GREL", "THE UNBURIED"],
 ]
+## Who each of them is, to look at (assets/characters/gobkit).
+const G := "res://assets/characters/gobkit/"
+const SKINS := {
+	"MAELIS": G + "bloodiron/BloodironKnight.glb",
+	"ORVEN": G + "medieval/HeavyWarrior.glb",
+	"SERA VANE": G + "orcs/OrcWarShaman.glb",
+	"THRAIN": G + "bloodiron/BloodironHalberdier.glb",
+	"KESSA": G + "orcs/OrcLegionArcher.glb",
+	"DORIAN": G + "orcs/OrcLegionCommander.glb",
+	"VELKA": G + "bloodiron/OrcPyromancer.glb",
+	"ABBOT GREL": G + "undead/TombMummy.glb",
+	"MOURNE": G + "undead/CleaverButcher.glb",
+	"ISOLDE": G + "undead/NightWitch.glb",
+	"ELLAN": G + "undead/VampireCountess.glb",
+	"MOIRA": G + "undead/VampireCountess.glb",
+	"THE IRON SENTINEL": G + "orcs/OrcIronGuard.glb",
+	"THE HOLLOW WARDEN": G + "bloodiron/BloodironShieldwall.glb",
+	"THE UNKINDLED": G + "medieval/King.glb",
+}
 const DAMAGE_TAKEN := 0.2
 const LEASH := 55.0
 const REGEN := 6.0
@@ -67,6 +86,8 @@ func setup_revenant(p_name: String, p_title: String, p_arena: Vector3, p_game: N
 	state = State.GROUND
 	landed = true
 	set_meta("revenant", title)
+	skin = SKINS.get(p_name, "")
+	skin_height = 1.8
 
 
 func display_name() -> String:
@@ -81,36 +102,37 @@ func _ready() -> void:
 	# Black and crimson, a little taller than a soldier, with a dull red glow.
 	if body != null and body.model != null:
 		body.model.scale = Vector3.ONE * 1.12
-		for mi in body.model.find_children("*", "MeshInstance3D", true, false):
-			var m := mi as MeshInstance3D
-			var sm := m.get_surface_override_material(0)
-			if sm is ShaderMaterial:
-				var camo := (sm as ShaderMaterial).duplicate() as ShaderMaterial
-				camo.set_shader_parameter("c_base", Color(0.12, 0.11, 0.11))
-				camo.set_shader_parameter("c_a", Color(0.27, 0.035, 0.03))
-				camo.set_shader_parameter("c_b", Color(0.19, 0.17, 0.16))
-				camo.set_shader_parameter("c_c", Color(0.07, 0.065, 0.065))
-				m.set_surface_override_material(0, camo)
-		# Eyes that burn in the dark of the helmet.
-		var k := 1.12
-		var eyes := body._attach("Head", Transform3D(Basis.IDENTITY, Vector3(0, 1.62 * k, -0.11 * k)))
-		var em := StandardMaterial3D.new()
-		em.albedo_color = Color(1.0, 0.3, 0.12)
-		em.emission_enabled = true
-		em.emission = Color(1.0, 0.25, 0.08)
-		em.emission_energy_multiplier = 9.0
-		em.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		for sx: float in [-0.04, 0.04]:
-			var e := MeshInstance3D.new()
-			var bm := BoxMesh.new()
-			bm.size = Vector3(0.045, 0.018, 0.012)
-			e.mesh = bm
-			e.material_override = em
-			e.position = Vector3(sx, 0, 0)
-			e.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			eyes.add_child(e)
-		body.helmet.visible = true
-		_add_menace(k)
+		if body.skin == null:
+			for mi in body.model.find_children("*", "MeshInstance3D", true, false):
+				var m := mi as MeshInstance3D
+				var sm := m.get_surface_override_material(0)
+				if sm is ShaderMaterial:
+					var camo := (sm as ShaderMaterial).duplicate() as ShaderMaterial
+					camo.set_shader_parameter("c_base", Color(0.12, 0.11, 0.11))
+					camo.set_shader_parameter("c_a", Color(0.27, 0.035, 0.03))
+					camo.set_shader_parameter("c_b", Color(0.19, 0.17, 0.16))
+					camo.set_shader_parameter("c_c", Color(0.07, 0.065, 0.065))
+					m.set_surface_override_material(0, camo)
+			# Eyes that burn in the dark of the helmet.
+			var k := 1.12
+			var eyes := body._attach("Head", Transform3D(Basis.IDENTITY, Vector3(0, 1.62 * k, -0.11 * k)))
+			var em := StandardMaterial3D.new()
+			em.albedo_color = Color(1.0, 0.3, 0.12)
+			em.emission_enabled = true
+			em.emission = Color(1.0, 0.25, 0.08)
+			em.emission_energy_multiplier = 9.0
+			em.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			for sx: float in [-0.04, 0.04]:
+				var e := MeshInstance3D.new()
+				var bm := BoxMesh.new()
+				bm.size = Vector3(0.045, 0.018, 0.012)
+				e.mesh = bm
+				e.material_override = em
+				e.position = Vector3(sx, 0, 0)
+				e.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+				eyes.add_child(e)
+			body.helmet.visible = true
+			_add_menace(k)
 	head_offset = 1.66
 	if _cap != null:
 		_cap.radius = 0.4

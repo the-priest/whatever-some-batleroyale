@@ -44,6 +44,7 @@ var erupt_hits := 0
 
 func setup_wyrm(p_arena: Vector3, p_game: Node) -> void:
 	setup_revenant("SKARN", "THE WYRM BENEATH", p_arena, p_game)
+	skin = ""
 	damage_taken = 0.15
 	leash = 55.0
 	volleys = false

@@ -68,7 +68,7 @@ func _ready() -> void:
 		_glow.light_color = Color(0.7, 0.8, 1.0)
 		glow_base = 0.6
 	# No helmet: a veil of grey gauze from crown to shoulders.
-	if body != null:
+	if body != null and body.skin == null:
 		if body.helmet != null:
 			body.helmet.visible = false
 		var k := 1.05

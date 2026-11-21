@@ -101,6 +101,132 @@ func _ready() -> void:
 	_build_tree()
 	gun_holder = Node3D.new()
 	add_child(gun_holder)
+	if skin_path != "":
+		set_skin(skin_path)
+
+
+# ------------------------------------------------------------------ skins ----
+## A hand-made character (assets/characters/gobkit) worn over the mannequin:
+## the mannequin is hidden and stops animating, and the character plays its
+## own clips (Idle, Walk, Run, Attack, Hit, Death) from what the body does.
+var skin_path := ""
+var skin: Node3D = null
+var skin_anim: AnimationPlayer = null
+var _skin_clip := ""
+var _skin_once := 0.0
+var _skin_speed := 1.0
+## Height the character is scaled to, in the mannequin's own units.
+var skin_height := 1.8
+
+
+func set_skin(path: String) -> void:
+	skin_path = path
+	if model == null:
+		return
+	if skin != null:
+		skin.queue_free()
+		skin = null
+	var ps: PackedScene = load(path) as PackedScene
+	if ps == null:
+		return
+	skin = ps.instantiate() as Node3D
+	model.add_child(skin)
+	# Scale it to a soldier's height, feet on the ground.
+	for mi in skin.find_children("*", "MeshInstance3D", true, false):
+		(mi as MeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	var box := SoldierRig.skin_box(skin)
+	if box.size.y > 0.00001:
+		var k := skin_height / box.size.y
+		skin.scale = Vector3.ONE * k
+		skin.position.y = -box.position.y * k
+	for mi in model.find_children("*", "MeshInstance3D", true, false):
+		if not skin.is_ancestor_of(mi):
+			(mi as MeshInstance3D).visible = false
+	for n in [helmet, cap, vest]:
+		if n != null:
+			(n as Node3D).visible = false
+	for n in _extra_kit:
+		(n as Node3D).visible = false
+	gun_holder.visible = false
+	if tree != null:
+		tree.active = false
+	var aps := skin.find_children("*", "AnimationPlayer", true, false)
+	skin_anim = aps[0] as AnimationPlayer if not aps.is_empty() else null
+	if skin_anim != null:
+		for nm in ["Idle", "Walk", "Run"]:
+			if skin_anim.has_animation(nm):
+				skin_anim.get_animation(nm).loop_mode = Animation.LOOP_LINEAR
+		_skin_clip = ""
+		_skin_play("Idle")
+
+
+## A skinned character's real extent in its own space: the mesh bounds
+## carried through the skin's bind pose (the skeleton's units differ).
+static func skin_box(root: Node3D) -> AABB:
+	var box := AABB()
+	var first := true
+	for n in root.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		var ab := mi.get_aabb()
+		var xf := Transform3D.IDENTITY
+		var sk := mi.get_node_or_null(mi.skeleton) as Skeleton3D if mi.skin != null else null
+		if sk != null and mi.skin.get_bind_count() > 0:
+			var bi := mi.skin.get_bind_bone(0)
+			if bi < 0:
+				bi = sk.find_bone(mi.skin.get_bind_name(0))
+			xf = _rel_s(sk, root) * sk.get_bone_global_rest(maxi(0, bi)) * mi.skin.get_bind_pose(0)
+		else:
+			xf = _rel_s(mi, root)
+		var bb: AABB = xf * ab
+		box = bb if first else box.merge(bb)
+		first = false
+	return box
+
+
+static func _rel_s(n: Node, root: Node) -> Transform3D:
+	var t := Transform3D.IDENTITY
+	var c := n
+	while c != null and c != root:
+		if c is Node3D:
+			t = (c as Node3D).transform * t
+		c = c.get_parent()
+	return t
+
+
+func _skin_play(clip: String, blend := 0.18) -> void:
+	if skin_anim == null or not skin_anim.has_animation(clip):
+		return
+	if clip == _skin_clip and skin_anim.is_playing():
+		return
+	_skin_clip = clip
+	skin_anim.play(clip, blend)
+
+
+func _skin_tick(delta: float) -> void:
+	if skin_anim == null:
+		return
+	if _dead:
+		return
+	if _skin_once > 0.0:
+		_skin_once -= delta
+		return
+	var clip := "Idle"
+	if _legs in ["Jog_Fwd", "Sprint"]:
+		clip = "Run"
+	elif _legs in ["Walk", "Crouch_Fwd", "Swim_Fwd"]:
+		clip = "Walk"
+	_skin_play(clip)
+	skin_anim.speed_scale = clampf(_skin_speed, 0.5, 1.8) if clip != "Idle" else 1.0
+
+
+## A shot or a blow: the character's attack clip (not restarted mid-swing).
+func play_attack() -> void:
+	if skin_anim == null or _dead or _skin_once > 0.0:
+		return
+	if skin_anim.has_animation("Attack"):
+		_skin_clip = ""
+		_skin_play("Attack", 0.08)
+		_skin_once = minf(skin_anim.get_animation("Attack").length, 0.7)
 
 
 # ------------------------------------------------------------------- gear ----
@@ -190,7 +316,7 @@ var _extra_kit: Array = []
 
 
 func set_gear(vest_level: int, helmet_level: int) -> void:
-	if vest == null:
+	if vest == null or skin != null:
 		return
 	_vest_on = vest_level > 0
 	_helmet_on = helmet_level > 0
@@ -250,6 +376,10 @@ func _build_tree() -> void:
 
 
 func set_legs(name: String, speed := 1.0) -> void:
+	_skin_speed = speed
+	if skin != null and name in LEG_ANIMS:
+		_legs = name
+		return
 	if _dead or tree == null:
 		return
 	if name != _legs and name in LEG_ANIMS:
@@ -440,6 +570,11 @@ func _show_props(kind: String) -> void:
 
 
 func die() -> void:
+	if skin_anim != null:
+		_dead = true
+		_skin_clip = ""
+		_skin_play("Death", 0.1)
+		return
 	_show_props("")
 	_dead = true
 	if tree != null:
@@ -452,6 +587,10 @@ func die() -> void:
 func flinch(strength := 1.0) -> void:
 	if _dead or model == null:
 		return
+	if skin_anim != null and skin_anim.has_animation("Hit") and _skin_clip != "Attack":
+		_skin_clip = ""
+		_skin_play("Hit", 0.06)
+		_skin_once = minf(skin_anim.get_animation("Hit").length, 0.45)
 	var tw := model.create_tween()
 	tw.tween_property(model, "rotation:x", -0.16 * strength, 0.06).set_ease(Tween.EASE_OUT)
 	tw.tween_property(model, "rotation:x", 0.0, 0.22).set_trans(Tween.TRANS_SINE)
@@ -461,6 +600,10 @@ func flinch(strength := 1.0) -> void:
 func set_gun(id: String) -> void:
 	for c in gun_holder.get_children():
 		c.queue_free()
+	if skin != null:
+		# A character carries the weapon it was made with.
+		_armed = id != ""
+		return
 	if id == "":
 		_armed = false
 		return
@@ -485,6 +628,8 @@ var _kit_shown := true
 
 ## Helmet, vest, pack and belt are a few pixels past 300 m: skip them.
 func _set_kit_visible(v: bool) -> void:
+	if skin != null:
+		return
 	for n in [helmet, cap, vest]:
 		if n != null:
 			(n as Node3D).set_meta("kit_hidden", not v)
@@ -517,6 +662,8 @@ func _process(delta: float) -> void:
 
 
 func _process_body(delta: float) -> void:
+	if skin != null:
+		_skin_tick(delta)
 	if tree != null and tree.active:
 		_anim_acc += delta
 		_anim_frame += 1

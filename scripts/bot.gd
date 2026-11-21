@@ -40,6 +40,10 @@ var speed_anim := "Idle"
 var hit_flash := 0.0
 ## Seconds left reeling (a sword's heavy blow, a parried attack).
 var stagger_t := 0.0
+## A hand-made character to wear instead of the mannequin (path to a .glb),
+## and its height in the body's own units.
+var skin := ""
+var skin_height := 1.8
 var dead_timer := 0.0
 ## A body lies where it fell this long (by its dropped kit), then sinks away.
 const BODY_STAYS := 45.0
@@ -193,6 +197,9 @@ func _ready() -> void:
 	_cap = cap
 
 	body = SoldierRig.new()
+	if skin != "":
+		body.skin_path = skin
+		body.skin_height = skin_height
 	add_child(body)
 	# The body you see glides between the 60 Hz physics steps (see _process),
 	# so soldiers move smoothly on fast screens.
@@ -1837,7 +1844,12 @@ func _shoot_logic(delta: float) -> void:
 	_muzzle_flash.rotation.z = randf() * TAU
 	if body != null:
 		_muzzle_flash.global_position = body.muzzle_position()
-		if game != null and game.player != null and game.player.global_position.distance_to(global_position) < 60.0:
+		body.play_attack()
+		if body.skin != null:
+			# A character's own weapon: the shot leaves from its chest, no flash.
+			_muzzle_flash.visible = false
+			_muzzle_flash.global_position = global_position + Vector3.UP * (head_offset * 0.8)
+		elif game != null and game.player != null and game.player.global_position.distance_to(global_position) < 60.0:
 			game.spawn_smoke(_muzzle_flash.global_position, 0.6)
 	var from := _shot_origin()
 	# Aim error: skill, range, target movement and the first shots of a burst.

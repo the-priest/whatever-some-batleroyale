@@ -56,6 +56,7 @@ const QUAKE_R := 14.0
 
 func setup_colossus(p_name: String, p_title: String, p_arena: Vector3, p_game: Node) -> void:
 	setup_revenant(p_name, p_title, p_arena, p_game)
+	skin = Revenant.G + "bloodiron/BloodironJuggernaut.glb"
 	damage_taken = 0.045
 	leash = 75.0
 	volleys = false

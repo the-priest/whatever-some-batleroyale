@@ -26,6 +26,7 @@ var _echoes_called := false
 func setup_unkindled(p_arena: Vector3, p_game: Node) -> void:
 	setup_bell(p_arena, p_game)
 	bot_name = "THE UNKINDLED"
+	skin = Revenant.SKINS["THE UNKINDLED"]
 	title = "WHO KNELT AT THE HEART OF THE ORDEAL"
 	damage_taken = 0.085
 	regen_rate = 0.0

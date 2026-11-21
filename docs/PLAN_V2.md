@@ -141,6 +141,25 @@ Play the whole game on a gamepad (Xbox, PlayStation, Switch Pro, Steam Deck), wi
 - Settings: stick sensitivity, invert Y, deadzone, aim assist strength, vibration on/off
   (rumble on hits, parries and heavy blows).
 
+## Phase 3d — A living isle (the asset library)
+
+Hand-made, animated characters and creatures (CC0, `assets/characters/gobkit`, `assets/creatures`):
+
+- **Everyone gets a real body.** Bosses, Revenants, hollows and soldiers wear animated
+  characters instead of the mannequin: an orc juggernaut for the Colossus, the Night Witch,
+  the Vampire Countess sisters, a dead King for the Unkindled, the orc army and paratroopers in
+  Battle Royale, the undead and minions as hollows. Each plays its own Idle, Walk, Run, Attack,
+  Hit and Death.
+- **Your class has a face**: the Knight Captain, the Archer, the Priestess, the Frontline
+  Rifleman, turning on a plinth on the CHARACTER page and seen by other players in LAN games.
+- **Wildlife**: does, foxes, hares, squirrels and boars in the woods; owls and bats at night;
+  gulls on the shore; seals on the rocks; sharks and whales offshore. They graze, wander and bolt
+  at gunfire. The Skull Deer haunts the Ashen Hollow.
+- **Farms**: cows, sheep, goats, pigs, chickens and horses in and around the villages.
+- **Giant beetles**: Ash Beetles, man-sized and armoured, nest in the wilds in Souls Mode and
+  rarely in Battle Royale. They charge, flip, and drop embers. Their shells turn bullets from the
+  front; hit them in the back.
+
 ## Phase 4 — Battle Royale with classes
 
 - Bots pick classes too: Knights rush and swing, Hunters keep their distance and loose arrows,
@@ -175,6 +194,6 @@ Play the whole game on a gamepad (Xbox, PlayStation, Switch Pro, Steam Deck), wi
 
 ### Order of work
 
-1 → 2 → 3 → 3b → 3c are the foundation (who you are, where you go, what everything does, how you
+1 → 2 → 3 → 3b → 3c → 3d are the foundation (who you are, where you go, what everything does, how you
 move and what the isle hides). 4–6 deepen
 combat. 7 runs after every phase as well as at the end.

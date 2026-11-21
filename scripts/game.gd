@@ -845,6 +845,7 @@ func _start_match() -> void:
 	var route_len2 := maxf(1.0, route.x * route.x + route.z * route.z)
 	for i in range(0 if ordeal_mode or souls_mode else MAX_BOTS):
 		var b := Bot.new()
+		b.skin = soldier_skin(i)
 		var target := _bot_drop_point()
 		# Spread the lobby out: no two landing spots within 45 m.
 		for tries in 12:
@@ -1042,6 +1043,21 @@ func _begin_souls() -> void:
 
 
 ## Hollow soldiers, armed, in the towns and the woods.
+## The island's soldiers: the orc army, each with the weapon it carries.
+const SOLDIER_SKINS := ["soldiers/DropZoneParatrooper.glb", "orcs/Rifleman.glb", "soldiers/FrontlineRifleman.glb", "orcs/ArmySniper.glb",
+	"soldiers/GhillieSniper.glb", "orcs/MachineGunner.glb", "soldiers/NightReconScout.glb", "orcs/ReconScout.glb",
+	"soldiers/AssaultTeamLeader.glb", "orcs/CombatMedic.glb", "soldiers/BlackOpsOperator.glb", "orcs/CombatEngineer.glb",
+	"soldiers/SwatBreacher.glb", "orcs/ArmyOfficer.glb", "soldiers/FieldRadioOperator.glb", "soldiers/ConvictCommando.glb", "orcs/ArmyGeneral.glb"]
+
+
+## The same soldier looks the same on every machine (by its number).
+static func soldier_skin(i: int) -> String:
+	return Revenant.G + SOLDIER_SKINS[i % SOLDIER_SKINS.size()]
+
+
+const HOLLOW_SKINS := ["SheetGhost.glb", "StitchedBrute.glb", "PumpkinScarecrow.glb", "WerewolfCaptain.glb", "TombMummy.glb", "CleaverButcher.glb"]
+
+
 func _spawn_hollows() -> void:
 	var pads: Array = world.villages.village_pads.duplicate()
 	for i in SOULS_HOLLOWS:
@@ -1067,6 +1083,8 @@ func _spawn_hollows() -> void:
 			continue
 		var b := Bot.new()
 		b.setup("HOLLOW " + BOT_NAMES[(i + seed_value) % BOT_NAMES.size()], Vector2(at.x, at.z), self, seed_value + i * 131)
+		# The dead of the isle, risen: each hollow one of the undead.
+		b.skin = Revenant.G + "undead/" + HOLLOW_SKINS[i % HOLLOW_SKINS.size()]
 		add_child(b)
 		b.global_position = at + Vector3.UP * 0.3
 		b.state = Bot.State.GROUND
@@ -4369,6 +4387,9 @@ func _run_shot() -> void:
 		get_tree().quit()
 		return
 	if OS.get_cmdline_user_args().has("--menu"):
+		for sa in OS.get_cmdline_user_args():
+			if sa.begins_with("--section=") and hud.main_menu != null:
+				hud.main_menu._select(sa.substr(10))
 		if OS.get_cmdline_user_args().has("--loadout"):
 			hud._open_loadout()
 		if OS.get_cmdline_user_args().has("--oaths"):
@@ -5942,6 +5963,7 @@ func net_start_match(setup: Dictionary) -> void:
 				b = rv
 		else:
 			b = Bot.new()
+			b.skin = soldier_skin(i)
 			b.setup(str(names[i]), Vector2.ZERO, self, i)
 		b.puppet = true
 		b.net_index = i

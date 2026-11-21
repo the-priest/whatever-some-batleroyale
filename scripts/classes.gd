@@ -62,6 +62,14 @@ const DEFS := {
 	},
 }
 
+## What each class looks like to everyone else (and on the menu).
+const SKINS := {
+	"knight": "res://assets/characters/gobkit/medieval/KnightCaptain.glb",
+	"hunter": "res://assets/characters/gobkit/medieval/Archer.glb",
+	"pyro": "res://assets/characters/gobkit/medieval/Priestess.glb",
+	"gunslinger": "res://assets/characters/gobkit/soldiers/FrontlineRifleman.glb",
+}
+
 static var chosen := "knight"
 static var _loaded := false
 ## Tests leave the player's profile alone.

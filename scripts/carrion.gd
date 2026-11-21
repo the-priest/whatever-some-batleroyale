@@ -48,6 +48,7 @@ var dive_hits := 0
 
 func setup_carrion(p_arena: Vector3, p_game: Node) -> void:
 	setup_revenant("VESPERA", "THE CARRION QUEEN", p_arena, p_game)
+	skin = ""
 	damage_taken = 0.15
 	leash = 55.0
 	volleys = false
