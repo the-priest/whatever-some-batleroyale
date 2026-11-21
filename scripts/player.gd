@@ -2381,6 +2381,28 @@ func revive() -> void:
 		game.on_player_revived()
 
 
+## Souls mode: back from death at a Wayshrine, kit and all (only the Embers
+## stay where you fell).
+func souls_revive(at: Vector3, face_yaw: float) -> void:
+	alive = true
+	downed = false
+	bleed = 0.0
+	hp = max_hp()
+	flask = flask_max
+	healing = false
+	reloading = false
+	mode = Mode.GROUND
+	landed = true
+	global_position = at
+	velocity = Vector3.ZERO
+	yaw = face_yaw
+	gun_holder.visible = true
+	spawn_protect = 3.0
+	_emit_health()
+	_emit_weapon()
+	inventory_changed.emit()
+
+
 ## Bled out (or no squad mate left standing).
 func bleed_out() -> void:
 	if downed:

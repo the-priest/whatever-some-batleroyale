@@ -6,6 +6,28 @@ and be the last one standing, alone or with friends on a game one of you hosts. 
 
 Open the project in Godot 4.7 and press Play, or export with the presets in `export_presets.cfg`.
 
+## Game modes
+
+The main menu offers three ways to play:
+
+- **BATTLE ROYALE**: the classic drop. Sixty-four players, the plane, the storm, last one standing,
+  with every boss, writ, vault and secret of the island along the way. Solo or over LAN.
+- **SOULS MODE**: the Isle of Embers, alone, at your own pace. A short tale tells you why you are here
+  (SPACE moves it on, ESC skips it). You wash ashore at a Wayshrine with a rifle, a pistol and an Ember
+  Flask of three swallows. No plane, no storm: the thirteen **keepers** (every boss on the island) stand
+  where they always stand, and hollow soldiers wander the towns and the woods. **Every keeper is on your
+  map (M), named**, and the **red diamond on your compass** (with its name and distance under it) leads
+  to the nearest one still standing; the count of the slain is where the count of the living would be.
+  Fall and it is not over: **YOU DIED**, your Embers stay where you fell, the keepers you hurt are whole
+  again, and in a moment the fire of the last Wayshrine you **rested at** (open its shop) brings you
+  back, kit and all; resting also heals you and fills the flask. Slay all thirteen and **the Unkindled**
+  rises at the heart of the isle: the last fire. End it and the isle is free (the end screen shows your
+  time and your deaths). The Hollow Warden kneels unharmed until you light the Ashen Hollow's braziers,
+  as ever.
+- **THE ORDEAL** (and the **HALL OF ECHOES**): the boss rush, below.
+
+In Battle Royale too, every boss is now on the big map, named, from the start.
+
 ## Controls
 
 | Key | Action |
@@ -554,7 +576,8 @@ Souls-like systems: `--writs`, `--revenant`, `--colossus`, `--vault`, `--gods`, 
 empty flask, a shrine's refill), `--dodge` (the roll's speed, its moment untouchable, its cooldown), `--unkindled` (an Ordeal already endured, all twelve bouts, then the hidden one through its three
 parts), `--bell` (the toll strikes you on the ground and passes under you in the air), `--carrion` (aloft, the strip, the dive, the perch), `--witch` (low beam jumped, high beam
 crouched under, and both standing), `--echo` (a slain boss leaves its echo; fought again alone, its
-time kept), `--talisman` (won from bosses, five notches, each one's effect), `--sisters` (crossfire, the swap, the grief), `--sentinel` (plate, vents, stomp), `--ordeal` (all twelve bouts, the altars, the win, the ring's edge
+time kept), `--talisman` (won from bosses, five notches, each one's effect), `--souls` (Souls mode: ashore, keepers on the map and compass, YOU DIED and back, rest, all
+thirteen, the Unkindled, the isle free), `--sisters` (crossfire, the swap, the grief), `--sentinel` (plate, vents, stomp), `--ordeal` (all twelve bouts, the altars, the win, the ring's edge
 and a fall) and `--hollow` (walks into the Ashen Hollow, lights its braziers,
 wakes and fells the Warden and takes the Heart).
 

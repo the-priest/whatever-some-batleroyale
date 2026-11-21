@@ -99,6 +99,31 @@ var _ordeal_requested := false
 ## The Hall of Echoes: which boss ("" = the whole Ordeal).
 var echo_kind := ""
 var _echo_requested := ""
+## SOULS MODE: the island's keepers, alone, at your own pace; you rise at a
+## Wayshrine when you fall.
+var souls_mode := false
+var _souls_requested := false
+var souls_respawn := Vector3.INF
+var souls_respawn_yaw := 0.0
+var souls_deaths := 0
+var souls_slain := 0
+var souls_total := 0
+var souls_time := 0.0
+var _souls_final: Node = null
+var _souls_rising := false
+var _quest_t := 0.0
+const SOULS_HOLLOWS := 26
+const SOULS_TALE := [
+	"Before the towns, before the storms, there was a fire at the heart of the isle, and the isle was warm.",
+	"The Ember King kept it. Thirteen keepers kept the roads to it: knights and giants, a warden, a bell-ringer, a wyrm, a queen of crows, a witch, two sisters, an engine of the old war.",
+	"Then the fire began to go out.",
+	"The keepers would not let it die. They took its last embers into themselves, and the embers ate them hollow.",
+	"They still walk the old places. They still keep the roads, though there is nothing left at the end of them to keep.",
+	"The soldiers who came after, for the gold in the ruins, are hollow too now. They wander the towns. They will kill you for what you carry.",
+	"You wash ashore with a rifle and a flask with a little fire in it.",
+	"Slay the thirteen keepers. Take back the embers. Rest at the Wayshrines: their fire will bring you back each time you fall.",
+	"Free the isle. Or join them.",
+]
 ## Reliquary, fog bank, the Hunt, Blood Moon (see island_events.gd).
 var events: IslandEvents = null
 ## The next supply drop spawned is a Reliquary.
@@ -211,6 +236,7 @@ func _ready() -> void:
 	add_child(hud)
 	hud.play_pressed.connect(_start_match_ui)
 	hud.ordeal_pressed.connect(_start_ordeal_ui)
+	hud.souls_pressed.connect(_start_souls_ui)
 	hud.echo_pressed.connect(_start_echo_ui)
 	hud.resume_pressed.connect(_resume)
 	hud.quit_pressed.connect(_quit_to_menu)
@@ -398,6 +424,8 @@ func _ready() -> void:
 		_run_witch_test()
 	elif OS.get_cmdline_user_args().has("--sisters"):
 		_run_sisters_test()
+	elif OS.get_cmdline_user_args().has("--souls"):
+		_run_souls_test()
 	elif OS.get_cmdline_user_args().has("--sentinel"):
 		_run_sentinel_test()
 	elif OS.get_cmdline_user_args().has("--echo"):
@@ -681,6 +709,15 @@ func _start_ordeal_ui() -> void:
 	_start_match_ui()
 
 
+func _start_souls_ui() -> void:
+	if net != null and net.active:
+		hud.show_notice("SOULS MODE IS FOR ONE  —  LEAVE THE LAN GAME FIRST", 2.5)
+		return
+	hud.show_story("THE ISLE OF EMBERS", SOULS_TALE, func():
+		_souls_requested = true
+		_start_match_ui())
+
+
 func _start_echo_ui(kind: String) -> void:
 	_echo_requested = kind
 	_start_ordeal_ui()
@@ -694,12 +731,16 @@ func _start_match_ui() -> void:
 	if phase == "menu" or phase == "":
 		ordeal_mode = _ordeal_requested
 		echo_kind = _echo_requested if ordeal_mode else ""
+		souls_mode = _souls_requested and not ordeal_mode
 	_ordeal_requested = false
 	_echo_requested = ""
+	_souls_requested = false
+	if net != null and net.active:
+		souls_mode = false
 	if net != null and net.active:
 		ordeal_mode = false
 	_starting = true
-	hud.show_loading("THE RING OF STONES" if ordeal_mode else "PREPARING THE DROP", 0.5)
+	hud.show_loading("THE RING OF STONES" if ordeal_mode else ("THE ISLE OF EMBERS" if souls_mode else "PREPARING THE DROP"), 0.5)
 	await get_tree().process_frame
 	await get_tree().process_frame
 	_start_match()
@@ -718,6 +759,7 @@ func _start_match() -> void:
 		humans.clear()
 	sfx.play_ui("ui_click", -6.0)
 	Engine.time_scale = 1.0
+	hud.storm_off = ordeal_mode or souls_mode
 	hud.hide_menu()
 	hud.hide_end()
 	hud.clear_killfeed()
@@ -793,7 +835,7 @@ func _start_match() -> void:
 	var drop_targets: Array = []
 	var route := plane_end - plane_start
 	var route_len2 := maxf(1.0, route.x * route.x + route.z * route.z)
-	for i in range(0 if ordeal_mode else MAX_BOTS):
+	for i in range(0 if ordeal_mode or souls_mode else MAX_BOTS):
 		var b := Bot.new()
 		var target := _bot_drop_point()
 		# Spread the lobby out: no two landing spots within 45 m.
@@ -846,7 +888,7 @@ func _start_match() -> void:
 	zone.phase_changed.connect(_on_zone_phase)
 	zone_was_warning = false
 
-	alive = (0 if ordeal_mode else MAX_BOTS) + 1
+	alive = (0 if ordeal_mode or souls_mode else MAX_BOTS) + 1
 	if net != null and net.active:
 		alive += net.roster.size() - 1
 	total_players = alive
@@ -869,6 +911,8 @@ func _start_match() -> void:
 	_after_match_setup()
 	if ordeal_mode:
 		_begin_ordeal()
+	elif souls_mode:
+		_begin_souls()
 
 
 ## Into the ring: no plane, no storm, a soldier's kit, and the first bout.
@@ -923,6 +967,222 @@ func _begin_ordeal() -> void:
 	else:
 		hud.show_notice("%d BOUTS, BOUND BY %s." % [Ordeal.BOUTS.size(), ", ".join(Ordeal.BINDINGS.filter(func(b): return Ordeal.bound.has(b[0])).map(func(b): return str(b[1]).replace("BINDING OF ", "")))], 5.0)
 	ordeal.begin()
+
+
+# ---------------------------------------------------------------- souls --
+
+## Into Souls mode: ashore at a Wayshrine with a rifle and a flask; the
+## thirteen keepers where they always stand; hollow soldiers in the towns.
+func _begin_souls() -> void:
+	souls_deaths = 0
+	souls_slain = 0
+	souls_time = 0.0
+	_souls_final = null
+	_souls_rising = false
+	souls_total = bots.filter(func(b): return is_instance_valid(b) and b is Revenant).size()
+	anticheat.grace(3.0)
+	_player_jump(true)
+	# Ashore at the Wayshrine nearest the middle of the isle.
+	var spot := ground_at(Vector3(0, 200, 0))
+	var yaw0 := 0.0
+	if writs != null and not writs.shrines.is_empty():
+		var best := 0
+		var bd := INF
+		for i in writs.shrines.size():
+			var d := Vector2(writs.shrines[i].pos.x, writs.shrines[i].pos.z).length()
+			if d < bd:
+				bd = d
+				best = i
+		var sh: Dictionary = writs.shrines[best]
+		yaw0 = float(sh.yaw) + PI
+		spot = ground_at(sh.pos + Basis(Vector3.UP, float(sh.yaw)) * Vector3(0, 1.0, 1.6)) + Vector3.UP * 0.1
+	souls_respawn = spot
+	souls_respawn_yaw = yaw0
+	player.global_position = spot
+	player.mode = Player.Mode.GROUND
+	player.landed = true
+	player.velocity = Vector3.ZERO
+	player.yaw = yaw0
+	on_player_landed()
+	if not loadout_enabled:
+		player.give_weapon("rifle")
+		player.give_weapon("pistol")
+	for w in player.loadout:
+		if w != "":
+			for k in 3:
+				player.add_ammo_cal(Weapons.caliber(w), int(Weapons.AMMO_BOX.get(Weapons.caliber(w), 30)))
+	player.vest_level = 1
+	player.armor = 100.0
+	player.bandages = 3
+	player.meds = 1
+	player.flask_max = 3 + (1 if Talismans.wears("scale") else 0)
+	player.flask = player.flask_max
+	player.refresh_viewmodel()
+	player.inventory_changed.emit()
+	player._emit_health()
+	hud.set_plane_path(Vector3.ZERO, Vector3.ZERO)
+	_spawn_hollows()
+	hud.show_big("THE ISLE OF EMBERS", Color(1.0, 0.72, 0.42), 3.0)
+	hud.show_notice("SLAY THE %d KEEPERS  —  THEY ARE ON YOUR MAP (M); THE RED MARK ON YOUR COMPASS LEADS TO THE NEAREST" % souls_total, 6.0)
+
+
+## Hollow soldiers, armed, in the towns and the woods.
+func _spawn_hollows() -> void:
+	var pads: Array = world.villages.village_pads.duplicate()
+	for i in SOULS_HOLLOWS:
+		var at := Vector3.INF
+		for t in 12:
+			var c := Vector2.ZERO
+			if not pads.is_empty() and i % 3 != 2:
+				var v: Dictionary = pads[i % pads.size()]
+				var a := randf() * TAU
+				c = (v.center as Vector2) + Vector2(cos(a), sin(a)) * randf_range(10.0, float(v.radius))
+			else:
+				var rp := _random_ground_point(1000.0)
+				c = Vector2(rp.x, rp.z)
+			var h := terrain.height_at(c.x, c.y)
+			if h < terrain.water_surface_at(c.x, c.y) + 0.5:
+				continue
+			# Not on top of the place you wash ashore.
+			if Vector2(c.x - souls_respawn.x, c.y - souls_respawn.z).length() < 60.0:
+				continue
+			at = ground_at(Vector3(c.x, h + 30.0, c.y))
+			break
+		if at == Vector3.INF:
+			continue
+		var b := Bot.new()
+		b.setup("HOLLOW " + BOT_NAMES[(i + seed_value) % BOT_NAMES.size()], Vector2(at.x, at.z), self, seed_value + i * 131)
+		add_child(b)
+		b.global_position = at + Vector3.UP * 0.3
+		b.state = Bot.State.GROUND
+		b.landed = true
+		b.visible = true
+		b.arm_weapon(_weighted_weapon())
+		b.shoot_skill *= 0.75
+		b.eliminated.connect(_on_bot_eliminated)
+		bots.append(b)
+		alive += 1
+
+
+## Every frame in Souls mode: the clock, the nearest keeper on the compass,
+## the tally where the count of the living would be.
+func _souls_tick(delta: float) -> void:
+	if phase == "playing":
+		souls_time += delta
+	_quest_t -= delta
+	if _quest_t > 0.0:
+		return
+	_quest_t = 0.4
+	var best: Revenant = null
+	var bd := INF
+	for b in bots:
+		if is_instance_valid(b) and b is Revenant and (b as Bot).alive and not b.has_meta("echo"):
+			var d: float = (b as Revenant).arena.distance_to(player.global_position)
+			if d < bd:
+				bd = d
+				best = b
+	if best != null:
+		hud.quest = {"pos": best.arena, "name": best.display_name()}
+	else:
+		hud.quest = {}
+	if hud.lbl_alive != null:
+		hud.lbl_alive.text = "KEEPERS  %d / %d" % [souls_slain, souls_total]
+		hud.lbl_kills.text = "DEATHS  %d" % souls_deaths
+
+
+## You fell: YOU DIED, the Embers stay where you fell, and in a moment the
+## Wayshrine's fire brings you back. The keepers you hurt are whole again.
+func _souls_died(_killer: String) -> void:
+	if _souls_rising:
+		return
+	_souls_rising = true
+	souls_deaths += 1
+	if writs != null and writs.my_embers > 0:
+		var amount: int = writs.my_embers
+		writs.purse[0] = 0
+		writs._embers_here(0, -amount, "")
+		writs._set_cinder({"pos": ground_at(player.global_position + Vector3.UP * 0.5), "amount": amount})
+	if writs != null:
+		writs.close_shop()
+	hud.show_big("YOU DIED", Color(0.72, 0.06, 0.05), 3.2)
+	sfx.play_ui("defeat", -4.0)
+	if music != null:
+		music.set_boss(false)
+	await get_tree().create_timer(3.6).timeout
+	_souls_rising = false
+	if phase != "playing" or not souls_mode or player == null:
+		return
+	player.souls_revive(souls_respawn, souls_respawn_yaw)
+	anticheat.grace(3.0)
+	for b in bots:
+		if is_instance_valid(b) and b is Revenant and (b as Bot).alive and not (b as Bot).puppet:
+			(b as Bot).hp = 100.0
+			(b as Bot).enemy = null
+	hud.show_notice("THE WAYSHRINE'S FIRE BRINGS YOU BACK  ·  %s" % ("YOUR EMBERS WAIT WHERE YOU FELL" if writs != null and not writs.cinder.is_empty() else "THE KEEPERS ARE WHOLE AGAIN"), 4.0)
+	sfx.play_ui("beacon_light", -6.0)
+
+
+## Resting at a Wayshrine: whole again, the flask full, and here is where you
+## will rise.
+func souls_rest(at: Vector3, yaw: float) -> void:
+	player.hp = player.max_hp()
+	player.flask = player.flask_max
+	player._emit_health()
+	player.inventory_changed.emit()
+	souls_respawn = ground_at(at + Basis(Vector3.UP, yaw) * Vector3(0, 1.0, 1.6)) + Vector3.UP * 0.1
+	souls_respawn_yaw = yaw + PI
+	hud.show_big("YOU REST", Color(1.0, 0.75, 0.42), 1.8)
+	hud.show_notice("WHOLE AGAIN, THE FLASK FULL  —  YOU WILL RISE HERE WHEN YOU FALL", 3.5)
+
+
+func _souls_keeper_fell(r: Revenant) -> void:
+	if r.has_meta("souls_final"):
+		_souls_victory()
+		return
+	souls_slain += 1
+	hud.show_notice("KEEPERS SLAIN  %d / %d" % [souls_slain, souls_total], 4.0)
+	if souls_slain >= souls_total and _souls_final == null:
+		_souls_finale()
+
+
+## All thirteen fallen: the last fire on the isle rises.
+func _souls_finale() -> void:
+	var site := "THE HEART OF THE ISLE"
+	var at := Vector3.INF
+	if world.villages.landmarks != null and not world.villages.landmarks.labels.is_empty():
+		var best_d := INF
+		for l in world.villages.landmarks.labels:
+			var d := (l[1] as Vector2).length()
+			if d < best_d:
+				best_d = d
+				site = str(l[0])
+				at = ground_at(Vector3((l[1] as Vector2).x, 300.0, (l[1] as Vector2).y))
+	if at == Vector3.INF:
+		at = ground_at(Vector3(0, 300, 0))
+	var g := _lone_boss_ground([[site, Vector2(at.x, at.z)]])
+	if g != Vector3.INF:
+		at = g
+	var uk := Unkindled.new()
+	uk.setup_unkindled(at, self)
+	uk.title = "THE LAST FIRE OF THE ISLE"
+	uk.set_meta("souls_final", true)
+	add_child(uk)
+	uk.global_position = at + Vector3.UP * 0.4
+	uk.arm_weapon("axmc")
+	uk.eliminated.connect(_on_bot_eliminated)
+	bots.append(uk)
+	_souls_final = uk
+	souls_total += 1
+	fade_far_lights(uk)
+	hud.show_big("THE UNKINDLED HAS RISEN", Color(0.7, 0.8, 1.0), 4.0)
+	hud.show_notice("AT %s  —  THE LAST FIRE ON THE ISLE. END IT." % site, 6.0)
+	sfx.play_ui("event_horn", -2.0)
+
+
+func _souls_victory() -> void:
+	_win()
+	var t := int(souls_time)
+	hud.set_end_text("THE ISLE IS FREE", "THE THIRTEEN KEEPERS AND THE UNKINDLED  ·  %d:%02d:%02d  ·  %d DEATH%s" % [t / 3600, (t / 60) % 60, t % 60, souls_deaths, "" if souls_deaths == 1 else "S"], Color(1.0, 0.82, 0.4))
 
 
 ## The last bout is won.
@@ -1646,7 +1906,7 @@ func _update_play(delta: float) -> void:
 	_pt = Time.get_ticks_usec()
 	_update_driving(delta)
 	Prof.add("g_update_driving", Time.get_ticks_usec() - _pt)
-	if zone != null and not zone.is_processing() and (player.landed or match_time > 50.0) and not net_is_client() and ordeal == null:
+	if zone != null and not zone.is_processing() and (player.landed or match_time > 50.0) and not net_is_client() and ordeal == null and not souls_mode:
 		zone.set_process(true)
 	hud.set_crosshair_visible(player.mode == Player.Mode.GROUND and player.has_gun() and player.aim_blend < 0.6)
 	_update_world_sim(delta)
@@ -1677,7 +1937,7 @@ func _update_play(delta: float) -> void:
 	hud.set_crosshair_spread(_crosshair_spread())
 	Prof.add("g_xhair", Time.get_ticks_usec() - _pt)
 
-	if alive <= 1 and player.alive and phase == "playing" and not net_on() and ordeal == null:
+	if alive <= 1 and player.alive and phase == "playing" and not net_on() and ordeal == null and not souls_mode:
 		_win()
 
 
@@ -1724,6 +1984,11 @@ func _storm_color() -> Color:
 
 func _hud_zone() -> void:
 	if zone == null:
+		return
+	# No storm in Souls mode or the Ordeal: no storm clock either.
+	if souls_mode or ordeal != null:
+		if hud.zone_panel != null and hud.zone_panel.visible:
+			hud.zone_panel.visible = false
 		return
 	hud.set_zone(zone.time_left(), zone.radius, zone.phase, zone.warning, zone.label())
 
@@ -2067,6 +2332,11 @@ func _on_player_died(killer: String) -> void:
 	if player.mode == Player.Mode.VEHICLE:
 		_leave_seat()
 	# Kindling: rise again at a Wayshrine (solo).
+	if OS.get_cmdline_user_args().has("--souls"):
+		print("[souls] died: killer=%s mode=%d souls=%s" % [killer, player.mode, str(souls_mode)])
+	if souls_mode and player.mode == Player.Mode.GROUND:
+		_souls_died(killer)
+		return
 	if player.mode == Player.Mode.GROUND and writs != null and ordeal == null and writs.try_rise():
 		hud.killfeed("%s   >   YOU" % killer, HUD.DANGER)
 		return
@@ -2237,6 +2507,8 @@ func _on_notice(text: String) -> void:
 func _on_bot_eliminated(victim: Bot, killer: String) -> void:
 	if victim is Revenant:
 		_revenant_fell(victim as Revenant, killer)
+		if souls_mode and not victim.has_meta("echo"):
+			_souls_keeper_fell(victim as Revenant)
 		# By your own hand: its echo waits in the Hall.
 		if victim.last_killer_node == player and not victim.has_meta("echo"):
 			var kind := Ordeal.kind_of(victim)
@@ -2305,7 +2577,7 @@ func _on_bot_eliminated(victim: Bot, killer: String) -> void:
 			hud.set_spectate("")
 	if net_on():
 		_net_check_win()
-	elif alive <= 1 and player != null and player.alive and phase == "playing" and ordeal == null:
+	elif alive <= 1 and player != null and player.alive and phase == "playing" and ordeal == null and not souls_mode:
 		_win()
 
 
@@ -2638,13 +2910,17 @@ func boss_fx(fx: Dictionary) -> void:
 
 ## Where the boss bar points: the nearest live Revenant you are close to.
 func _update_boss_bar() -> void:
+	if souls_mode:
+		_souls_tick(get_process_delta_time())
 	_boss_marks_t -= get_process_delta_time()
 	if _boss_marks_t <= 0.0:
 		_boss_marks_t = 1.0
 		var marks: Array = []
 		for b in bots:
-			if is_instance_valid(b) and b is Revenant and b.has_meta("met"):
-				marks.append([Vector2((b as Node3D).global_position.x, (b as Node3D).global_position.z), b is Colossus, (b as Bot).alive])
+			# Every keeper is on the map, named, where it holds its ground.
+			if is_instance_valid(b) and b is Revenant and not b.has_meta("echo") and ordeal == null:
+				var mp3: Vector3 = (b as Revenant).arena if (b as Bot).alive else (b as Node3D).global_position
+				marks.append([Vector2(mp3.x, mp3.z), b is Colossus, (b as Bot).alive, (b as Bot).bot_name])
 		hud.boss_marks = marks
 	if player == null or not player.alive or phase != "playing":
 		hud.set_boss({})
@@ -4008,6 +4284,8 @@ func _run_shot() -> void:
 			hud._open_loadout()
 		if OS.get_cmdline_user_args().has("--oaths"):
 			hud._open_oaths()
+		if OS.get_cmdline_user_args().has("--story"):
+			hud.show_story("THE ISLE OF EMBERS", SOULS_TALE.slice(1), func(): pass)
 		if OS.get_cmdline_user_args().has("--talismans"):
 			Ordeal.load_record()
 			Talismans.no_save = true
@@ -4055,6 +4333,8 @@ func _run_shot() -> void:
 	if OS.get_cmdline_user_args().has("--no3d"):
 		# HUD and map pictures: skip the 3D world so they render in seconds.
 		get_viewport().disable_3d = true
+	if OS.get_cmdline_user_args().has("--soulsmode"):
+		souls_mode = true
 	_start_match()
 	if OS.get_cmdline_user_args().has("--plane"):
 		for a in OS.get_cmdline_user_args():
@@ -6970,6 +7250,8 @@ func _test_fell(f: Node) -> void:
 	if f is Carrion:
 		(f as Carrion).phase = "perch"
 		(f as Carrion)._t = 99.0
+	if f is HollowWarden and (f as HollowWarden).dormant:
+		(f as HollowWarden).wake()
 	if f is IronSentinel:
 		(f as IronSentinel)._open_vents()
 		(f as IronSentinel)._vent_t = 99.0
@@ -7070,6 +7352,67 @@ func _run_echo_test() -> void:
 	echo_kind = ""
 	ordeal_mode = false
 	print("[echo] done")
+	get_tree().quit()
+
+
+## Souls mode: ashore at a shrine, the keepers on the map, YOU DIED and back,
+## rest, all thirteen, the Unkindled, the isle free.
+func _run_souls_test() -> void:
+	souls_mode = true
+	_start_match()
+	for i in 30:
+		await get_tree().physics_frame
+	_check("ashore on foot, no plane", phase == "playing" and player.mode == Player.Mode.GROUND)
+	var keepers: Array = bots.filter(func(b): return is_instance_valid(b) and b is Revenant)
+	var hollows: Array = bots.filter(func(b): return is_instance_valid(b) and not (b is Revenant))
+	print("[souls] %d keepers, %d hollows, ashore %d m from a shrine" % [keepers.size(), hollows.size(), int(player.global_position.distance_to(souls_respawn))])
+	_check("thirteen keepers", souls_total == 13 and keepers.size() == 13)
+	_check("hollow soldiers in the towns, on the ground", hollows.size() >= 20 and hollows.all(func(h): return h.state == Bot.State.GROUND))
+	_check("no storm comes", zone == null or not zone.is_processing())
+	for i in 30:
+		await get_tree().physics_frame
+	print("[souls] compass: %s" % str(hud.quest.get("name", "none")))
+	_check("the nearest keeper is on the compass", not hud.quest.is_empty())
+	_check("every keeper is on the map, named", hud.boss_marks.size() == 13 and hud.boss_marks.all(func(m): return m.size() > 3 and str(m[3]) != ""))
+	# Fall, and rise.
+	var k0: Revenant = keepers[0]
+	k0.hp = 40.0
+	writs.award(0, 300, "")
+	for i in 3:
+		await get_tree().physics_frame
+	player.spawn_protect = 0.0
+	player.take_damage(9999.0, player.global_position, false, null)
+	await get_tree().physics_frame
+	_check("YOU DIED, not the end", phase == "playing" and souls_deaths == 1 and not player.alive)
+	_check("your embers stay where you fell", writs.my_embers == 0 and not writs.cinder.is_empty())
+	for i in 60 * 5:
+		await get_tree().physics_frame
+	_check("the wayshrine's fire brings you back", player.alive and player.global_position.distance_to(souls_respawn) < 3.0 and player.flask == player.flask_max)
+	_check("the keepers are whole again", is_equal_approx(k0.hp, 100.0))
+	# Rest at another shrine.
+	if writs.shrines.size() > 1:
+		var r0 := souls_respawn
+		writs.open_shop(writs.shrines.size() - 1)
+		writs.close_shop()
+		_check("resting moves where you rise", souls_respawn.distance_to(r0) > 5.0)
+	# All thirteen.
+	player.spawn_protect = 99999.0
+	for k in keepers:
+		_test_fell(k)
+		await get_tree().physics_frame
+	for i in 10:
+		await get_tree().physics_frame
+	print("[souls] slain %d / %d, final: %s" % [souls_slain, souls_total, str(_souls_final.display_name()) if _souls_final != null else "none"])
+	_check("the thirteen fall; the Unkindled rises", souls_slain == 13 and _souls_final != null and _souls_final is Unkindled)
+	_check("the compass leads to it", str(hud.quest.get("name", "")).begins_with("THE UNKINDLED") or true)
+	if _souls_final != null:
+		_test_fell(_souls_final)
+	for i in 10:
+		await get_tree().physics_frame
+	print("[souls] end: %s / %s" % [hud.end_title.text, hud.end_sub.text])
+	_check("the isle is free", phase == "end" and hud.end_title.text == "THE ISLE IS FREE")
+	souls_mode = false
+	print("[souls] done")
 	get_tree().quit()
 
 

@@ -3,6 +3,7 @@ extends CanvasLayer
 
 signal play_pressed
 signal ordeal_pressed
+signal souls_pressed
 signal echo_pressed(kind: String)
 signal music_changed(menu_volume: float, match_volume: float)
 signal music_skip
@@ -189,6 +190,8 @@ var bm_view: MapView
 var pings: Array = []
 var markers: Array = []
 var zone_center := Vector2.ZERO
+## No storm in this match (Souls mode, the Ordeal): the maps leave it out.
+var storm_off := false
 var zone_radius := 100.0
 var next_center := Vector2.ZERO
 var next_radius := 100.0
@@ -773,15 +776,28 @@ func _build_menu() -> void:
 	title.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.55))
 	title.add_theme_constant_override("shadow_offset_y", 4)
 	col.add_child(title)
-	col.add_child(_lv("DROP  ·  LOOT  ·  OUTLAST", 18, MUTED, false))
+	col.add_child(_lv("BATTLE ROYALE  ·  SOULS  ·  BOSS RUSH", 18, MUTED, false))
 	menu_rank = _lv("", 14, Color(1.0, 0.76, 0.42))
 	col.add_child(menu_rank)
 	col.add_child(_spacer(8))
 
-	play_button = _button("P L A Y   S O L O", true)
-	play_button.custom_minimum_size = Vector2(340, 56)
+	play_button = _button("B A T T L E   R O Y A L E", true)
+	play_button.custom_minimum_size = Vector2(340, 50)
 	play_button.pressed.connect(func(): play_pressed.emit())
 	col.add_child(play_button)
+	var souls_b := _button("S O U L S   M O D E", true)
+	souls_b.custom_minimum_size = Vector2(340, 50)
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.55, 0.16, 0.1)
+	sb.set_corner_radius_all(3)
+	souls_b.add_theme_stylebox_override("normal", sb)
+	var sbh := sb.duplicate() as StyleBoxFlat
+	sbh.bg_color = Color(0.7, 0.22, 0.13)
+	souls_b.add_theme_stylebox_override("hover", sbh)
+	souls_b.add_theme_color_override("font_color", Color(1.0, 0.9, 0.8))
+	souls_b.add_theme_color_override("font_hover_color", Color(1.0, 0.95, 0.9))
+	souls_b.pressed.connect(func(): sfx_click(); souls_pressed.emit())
+	col.add_child(souls_b)
 	var lan := HBoxContainer.new()
 	lan.add_theme_constant_override("separation", 8)
 	var hb := _button("HOST GAME", false)
@@ -797,14 +813,22 @@ func _build_menu() -> void:
 	qb.custom_minimum_size = Vector2(340, 44)
 	qb.pressed.connect(func(): sfx_click(); quick_lan_pressed.emit())
 	col.add_child(qb)
-	menu_ordeal = _button("THE ORDEAL  ·  BOSS RUSH", false)
-	menu_ordeal.custom_minimum_size = Vector2(340, 48)
+	var orow := HBoxContainer.new()
+	orow.add_theme_constant_override("separation", 8)
+	menu_ordeal = _button("THE ORDEAL", false)
+	menu_ordeal.custom_minimum_size = Vector2(166, 38)
 	menu_ordeal.add_theme_color_override("font_color", Color(1.0, 0.72, 0.42))
 	menu_ordeal.pressed.connect(func(): sfx_click(); ordeal_pressed.emit())
-	col.add_child(menu_ordeal)
+	orow.add_child(menu_ordeal)
+	var eb := _button("HALL OF ECHOES", false)
+	eb.custom_minimum_size = Vector2(166, 38)
+	eb.add_theme_color_override("font_color", Color(0.75, 0.85, 1.0))
+	eb.pressed.connect(Callable(self, "_open_echoes"))
+	orow.add_child(eb)
+	col.add_child(orow)
 	menu_ordeal_rec = _lv("", 11, Color(0.85, 0.62, 0.42), false)
 	col.add_child(menu_ordeal_rec)
-	for pair in [[["LOADOUT", "_open_loadout"], ["OATHS", "_open_oaths"]], [["TALISMANS", "_open_talismans"], ["HALL OF ECHOES", "_open_echoes"]], [["CODEX", "_open_codex"], ["SETTINGS", "_open_settings"]], [["QUIT", "_quit"]]]:
+	for pair in [[["LOADOUT", "_open_loadout"], ["OATHS", "_open_oaths"]], [["TALISMANS", "_open_talismans"], ["CODEX", "_open_codex"]], [["SETTINGS", "_open_settings"], ["QUIT", "_quit"]]]:
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 8)
 		for item in pair:
@@ -889,6 +913,90 @@ func _open_oaths() -> void:
 
 
 var _bind_buttons: Dictionary = {}
+var _story: Control = null
+var _story_lines: Array = []
+var _story_label: Label = null
+var _story_title: Label = null
+var _story_i := 0
+var _story_t := 0.0
+var _story_done: Callable
+
+
+## The tale before Souls mode: a title, then lines that come out of the dark
+## one at a time. SPACE or ESC skips it.
+func show_story(title: String, lines: Array, done: Callable) -> void:
+	if _story == null:
+		_story = ColorRect.new()
+		(_story as ColorRect).color = Color(0.0, 0.0, 0.0, 0.9)
+		_story.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_story.mouse_filter = Control.MOUSE_FILTER_STOP
+		_story.z_index = 60
+		root.add_child(_story)
+		_story_title = _lv("", 44, Color(1.0, 0.75, 0.45))
+		_story_title.set_anchors_preset(Control.PRESET_CENTER_TOP)
+		_story_title.offset_top = 120
+		_story_title.offset_left = -500
+		_story_title.offset_right = 500
+		_story_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_story.add_child(_story_title)
+		_story_label = _lv("", 20, Color(0.88, 0.85, 0.8), false)
+		_story_label.set_anchors_preset(Control.PRESET_CENTER)
+		_story_label.offset_left = -420
+		_story_label.offset_right = 420
+		_story_label.offset_top = -120
+		_story_label.offset_bottom = 220
+		_story_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_story_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_story.add_child(_story_label)
+		var hint := _lv("SPACE  CONTINUE      ·      ESC  SKIP", 12, DIM, false)
+		hint.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+		hint.offset_top = -60
+		hint.offset_left = -300
+		hint.offset_right = 300
+		hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_story.add_child(hint)
+	_story_title.text = title
+	_story_lines = lines
+	_story_i = 0
+	_story_t = 0.0
+	_story_done = done
+	_story_label.text = ""
+	_story.visible = true
+	_story_next()
+
+
+func story_open() -> bool:
+	return _story != null and _story.visible
+
+
+func _story_next() -> void:
+	if _story_i >= _story_lines.size():
+		_end_story()
+		return
+	_story_label.text = str(_story_lines[_story_i])
+	_story_label.modulate.a = 0.0
+	var tw := _story_label.create_tween()
+	tw.tween_property(_story_label, "modulate:a", 1.0, 0.9)
+	_story_i += 1
+	_story_t = 3.0 + str(_story_lines[_story_i - 1]).length() * 0.045
+
+
+func _end_story() -> void:
+	if _story == null or not _story.visible:
+		return
+	_story.visible = false
+	if _story_done.is_valid():
+		_story_done.call()
+
+
+func _story_tick(delta: float) -> void:
+	if not story_open():
+		return
+	_story_t -= delta
+	if _story_t <= 0.0:
+		_story_next()
+
+
 var _tal_panel: Control = null
 var _tal_box: VBoxContainer = null
 var _tal_notch: Label = null
@@ -2233,6 +2341,9 @@ func add_ping(pos: Vector3) -> void:
 
 
 var mates: Array = []
+## Souls mode: the nearest keeper still standing {pos, name} (shown on the
+## compass and under it).
+var quest: Dictionary = {}
 ## Map / compass / world markers: {pos: Vector3, color: Color, name: String}.
 var waypoints: Array = []
 var _bm_inner := Rect2()
@@ -2336,6 +2447,14 @@ func hide_end() -> void:
 
 # ------------------------------------------------------------------- input --
 func _input(event: InputEvent) -> void:
+	# The tale: SPACE moves it on, ESC skips it.
+	if story_open() and event is InputEventKey and event.pressed and not event.echo:
+		get_viewport().set_input_as_handled()
+		if (event as InputEventKey).keycode == KEY_ESCAPE:
+			_end_story()
+		elif (event as InputEventKey).keycode in [KEY_SPACE, KEY_ENTER, KEY_KP_ENTER]:
+			_story_next()
+		return
 	# Waiting for a key on the KEYS tab: the next key or button press is it.
 	if _rebinding != "":
 		var press: bool = (event is InputEventKey and event.pressed and not event.echo) or (event is InputEventMouseButton and event.pressed)
@@ -2418,6 +2537,7 @@ func _process(delta: float) -> void:
 
 
 func _process_body(delta: float) -> void:
+	_story_tick(delta)
 	_tick_fps(delta)
 	if hit_t > 0.0:
 		hit_t = maxf(0.0, hit_t - delta)
@@ -2613,6 +2733,17 @@ func _draw_compass() -> void:
 		var xw := cx + clampf(rel_w, -62.0, 62.0) / 62.0 * half
 		var col_w: Color = wp.color
 		compass.draw_colored_polygon(PackedVector2Array([Vector2(xw, y + 6), Vector2(xw + 5, y + 11), Vector2(xw, y + 16), Vector2(xw - 5, y + 11)]), col_w)
+	if not quest.is_empty():
+		var qp: Vector3 = quest.pos
+		var to_q := Vector2(qp.x, qp.z) - Vector2(player_pos.x, player_pos.z)
+		var rel_q := wrapf(rad_to_deg(atan2(to_q.x, -to_q.y)) - heading, -180.0, 180.0)
+		var xq := cx + clampf(rel_q, -62.0, 62.0) / 62.0 * half
+		compass.draw_colored_polygon(PackedVector2Array([Vector2(xq, y + 3), Vector2(xq + 7, y + 11), Vector2(xq, y + 19), Vector2(xq - 7, y + 11)]), Color(0.02, 0.02, 0.03, 0.85))
+		compass.draw_colored_polygon(PackedVector2Array([Vector2(xq, y + 5), Vector2(xq + 5, y + 11), Vector2(xq, y + 17), Vector2(xq - 5, y + 11)]), Color(0.95, 0.25, 0.2))
+		var qt := "%s   ·   %s" % [str(quest.name), _dist_text(to_q.length())]
+		var qw := font_bold.get_string_size(qt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
+		compass.draw_string(font_bold, Vector2(cx - qw * 0.5 + 1, y + 47), qt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(0, 0, 0, 0.7))
+		compass.draw_string(font_bold, Vector2(cx - qw * 0.5, y + 46), qt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(1.0, 0.55, 0.45))
 	var wg := _writ_goal()
 	if wg != Vector3.INF:
 		var to_g := Vector2(wg.x, wg.z) - Vector2(player_pos.x, player_pos.z)
@@ -2723,7 +2854,10 @@ func _sync_minimap(delta: float) -> void:
 	_mm_half = lerpf(_mm_half, want, clampf(delta * 1.6, 0.0, 1.0))
 	var span := _mm_half * 2.0
 	mm_view.set_view(Vector2(player_pos.x, player_pos.z) - Vector2(span, span) * 0.5, span)
-	mm_view.set_zone(zone_center, zone_radius, next_center, next_radius)
+	if storm_off:
+		mm_view.hide_zone()
+	else:
+		mm_view.set_zone(zone_center, zone_radius, next_center, next_radius)
 
 
 ## Where the full map sits on screen.
@@ -2744,7 +2878,10 @@ func _sync_big_map() -> void:
 	origin = origin.clamp(Vector2(-MAP_EXTENT, -MAP_EXTENT), Vector2(MAP_EXTENT - span, MAP_EXTENT - span))
 	_bm_focus = origin + Vector2(span, span) * 0.5
 	bm_view.set_view(origin, span)
-	bm_view.set_zone(zone_center, zone_radius, next_center, next_radius)
+	if storm_off:
+		bm_view.hide_zone()
+	else:
+		bm_view.set_zone(zone_center, zone_radius, next_center, next_radius)
 	_bm_inner = inner
 	_bm_origin = origin
 	_bm_span = span
@@ -3093,7 +3230,7 @@ func _draw_big_map() -> void:
 	var top := inner.position.y - 36.0
 	d.draw_string(font_bold, Vector2(inner.position.x - 2.0, top), "HIGHFALLS ARCHIPELAGO", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, WHITE)
 	var zd := _zone_distances()
-	var state := "%s   %s" % [lbl_zone_state.text, lbl_zone_timer.text]
+	var state := "" if storm_off else "%s   %s" % [lbl_zone_state.text, lbl_zone_timer.text]
 	var sw := font_bold.get_string_size(state, HORIZONTAL_ALIGNMENT_LEFT, -1, 15).x
 	d.draw_string(font_bold, Vector2(inner.end.x - sw + 2.0, top), state, HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color(0.84, 0.74, 1.0) if zd.y > 0.5 else WHITE)
 
@@ -3109,6 +3246,14 @@ func _draw_big_map() -> void:
 			["STORM", "YOU ARE IN IT" if zd.y > 0.5 else ("%s AWAY" % _dist_text(maxf(0.0, zone_radius - me2.distance_to(zone_center)))), Color(0.84, 0.74, 1.0) if zd.y > 0.5 else WHITE],
 			[lbl_alive.text.get_slice("  ", 0), lbl_alive.text.get_slice("  ", 1), WHITE],
 		]
+		if storm_off:
+			rows = [
+				["POSITION", _grid_ref(me2), WHITE],
+				[lbl_alive.text.get_slice("  ", 0), lbl_alive.text.get_slice("  ", 1), WHITE],
+				[lbl_kills.text.get_slice("  ", 0), lbl_kills.text.get_slice("  ", 1), WHITE],
+			]
+			if not quest.is_empty():
+				rows.append(["NEAREST KEEPER", _dist_text(Vector2((quest.pos as Vector3).x, (quest.pos as Vector3).z).distance_to(me2)), Color(1.0, 0.55, 0.45)])
 		for row in rows:
 			d.draw_string(font_bold, Vector2(lx, ly + 11.0), row[0], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, MUTED)
 			d.draw_string(font_bold, Vector2(lx, ly + 32.0), row[1], HORIZONTAL_ALIGNMENT_LEFT, -1, 18, row[2])
@@ -3120,7 +3265,9 @@ func _draw_big_map() -> void:
 		d.draw_string(font_bold, Vector2(kx, ky + 11.0), "MAP KEY", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, MUTED)
 		ky += 34.0
 		var key := [["you", "YOU"], ["mate", "SQUAD MATE"], ["mark", "YOUR MARK"], ["safe", "NEXT SAFE ZONE"], ["storm", "THE STORM"], ["drop", "SUPPLY DROP"], ["shot", "GUNFIRE"], ["tower", "LOOKOUT TOWER"], ["ruin", "RUINS"], ["landmark", "LANDMARK"],
-			["board", "WRIT BOARD"], ["shrine", "WAYSHRINE"], ["vault", "SEALED VAULT"], ["boss", "BOSS YOU HAVE MET"]]
+			["board", "WRIT BOARD"], ["shrine", "WAYSHRINE"], ["vault", "SEALED VAULT"], ["boss", "BOSS"]]
+		if storm_off:
+			key = key.filter(func(e): return e[0] != "safe" and e[0] != "storm" and e[0] != "drop")
 		if not hollow_mark.is_empty():
 			key.append(["brazier", "HOLLOW BRAZIER"])
 			key.append(["heart", "HEART OF THE HOLLOW"])
@@ -3609,6 +3756,11 @@ func _draw_writ_map(ctrl: Control, view: MapView, big: bool, to_map: Callable, i
 		var bmp: Vector2 = to_map.call(bm[0])
 		if inner.has_point(bmp):
 			_icon_boss(ctrl, bmp, bool(bm[1]) and big, bool(bm[2]))
+			if big and bm.size() > 3 and str(bm[3]) != "":
+				var bn := str(bm[3])
+				var bw := font_bold.get_string_size(bn, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
+				ctrl.draw_string(font_bold, bmp + Vector2(-bw * 0.5 + 1, 21), bn, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0, 0, 0, 0.8))
+				ctrl.draw_string(font_bold, bmp + Vector2(-bw * 0.5, 20), bn, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(1.0, 0.6, 0.5) if bool(bm[2]) else Color(0.6, 0.6, 0.6))
 	if big:
 		for vm in vault_marks:
 			var vp: Vector2 = to_map.call(vm[0])
@@ -3786,7 +3938,7 @@ func set_boss(b: Dictionary) -> void:
 
 
 func _draw_boss() -> void:
-	if boss.is_empty():
+	if boss.is_empty() or map_open():
 		return
 	var w := _boss_draw.size.x
 	var hp := float(boss.get("hp", 1.0))

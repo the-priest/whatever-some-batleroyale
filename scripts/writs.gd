@@ -350,6 +350,8 @@ func shrine_near(p: Vector3) -> int:
 
 func open_shop(si: int) -> void:
 	shop = si
+	if game.souls_mode:
+		game.souls_rest(shrines[si].pos, float(shrines[si].yaw))
 	if game.player != null and game.player.refill_flask():
 		game.hud.show_notice("THE SHRINE REKINDLES YOUR EMBER FLASK", 2.5)
 	game.input_locked = true
