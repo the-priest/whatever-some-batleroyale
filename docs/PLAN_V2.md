@@ -80,6 +80,39 @@ nothing overlaps at 1280×720 and 1920×1080.
 **Done when:** a new player reaches and fights the first keeper without opening the map;
 screenshots of every tutorial step.
 
+## Phase 3b — Movement kit and a metroidvania isle
+
+Every character, every class, gets the same movement kit on top of the dodge roll:
+
+| Move | Input | What it does |
+|---|---|---|
+| **Double jump** | jump again in the air | a second, slightly weaker jump; resets on landing |
+| **Air dash** | dodge in the air | a fast, flat burst in the direction you hold (one per jump) |
+| **Ground dash** | dodge on the ground | the roll you know, with i-frames |
+| **Slide** | crouch while sprinting | keeps momentum, ducks under blows |
+
+- **Battle Royale, the Ordeal, the Hall of Echoes:** the full kit from the first second.
+- **Souls Mode:** the kit is **earned**, Hollow Knight style. You wash ashore with the roll and
+  a single jump. Keepers give up the rest:
+  - **Ember Wings** (double jump): from the first keeper you meet, the Bellkeeper
+  - **Ash Stride** (air dash): from the Carrion Queen
+  - **Sigils** (one from each keeper): open the **sealed doors**
+- **Sealed regions** you can see but not reach until you have the move:
+  - **Sky ledges**: shelves of rock above the cliffs, too high for one jump and in reach of two
+    (Ember Wings). Each holds a chest, a codex page or a shortcut.
+  - **Broken bridges**: gaps too wide to jump and in reach of a jump plus an air dash (Ash Stride).
+  - **Sealed gates**: stone doors with sigil sockets in front of the vaults and the Unkindled's
+    sanctum; enough sigils open them.
+  - **Ember-lit braziers** at the Ashen Hollow (as now) wake the Warden.
+- The objective tracker and the guide wisp know what you can reach: they only lead you somewhere
+  you can get to with what you have, and say what you need for the rest
+  (*"A ledge too high to reach — you need a second jump"*).
+- **Reachability is checked by the game, not guessed**: an automated audit measures every
+  gated place against the real jump height, double-jump height and dash distance, and writes
+  `docs/REACHABILITY.md` — what can be reached with nothing, with Ember Wings, with Ash Stride,
+  with both, and what is sealed behind sigils. A gate that can be reached without its move
+  fails the audit.
+
 ## Phase 4 — Battle Royale with classes
 
 - Bots pick classes too: Knights rush and swing, Hunters keep their distance and loose arrows,
@@ -114,5 +147,6 @@ screenshots of every tutorial step.
 
 ### Order of work
 
-1 → 2 → 3 are the foundation (who you are, where you go, what everything does). 4–6 deepen
+1 → 2 → 3 → 3b are the foundation (who you are, where you go, what everything does, how you
+move and what the isle hides). 4–6 deepen
 combat. 7 runs after every phase as well as at the end.
