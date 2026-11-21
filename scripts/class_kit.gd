@@ -503,7 +503,7 @@ func melee_targets(reach: float, width: float) -> Array:
 	var res := player.get_world_3d().direct_space_state.intersect_shape(q, 24)
 	var seen := {}
 	for r in res:
-		var col: Object = r.collider
+		var col: Object = Hurtbox.resolve(r.collider)
 		if col == null or seen.has(col) or col == player:
 			continue
 		if not col.has_method("take_damage") or col.get("alive") != true:

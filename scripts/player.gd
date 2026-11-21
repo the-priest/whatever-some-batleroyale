@@ -2394,6 +2394,9 @@ func take_damage(amount: float, from_pos: Vector3 = Vector3.ZERO, headshot: bool
 		dodged += 1
 		return false
 	var dmg := amount * (0.88 if blessings.has("warding") and source != null else 1.0) * (0.9 if Talismans.wears("iron") and source != null else 1.0)
+	# Difficulty: blows and bullets (not the storm).
+	if source != null and source != self and game != null and game.has_method("diff_taken"):
+		dmg *= game.diff_taken()
 	if source != null and kit != null and from_pos != Vector3.ZERO:
 		var g := kit.guard_taken(from_pos)
 		if g <= 0.0:

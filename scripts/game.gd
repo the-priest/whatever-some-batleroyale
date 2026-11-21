@@ -86,6 +86,8 @@ var bots: Array = []
 var airdrops: Array = []
 ## Writ boards, writs and Embers (see writs.gd).
 var writs: Writs = null
+## The opening film of Souls Mode.
+var intro: Intro = null
 ## Souls Mode's ember wisp and objective tracker.
 var guide: Guide = null
 ## The sky ledges (double-jump caches).
@@ -345,6 +347,8 @@ func _ready() -> void:
 			Classes.no_save = true
 			Classes._loaded = true
 			Classes.chosen = "gunslinger"
+			_force_hard = true
+			difficulty = 2
 			break
 	if OS.get_cmdline_user_args().has("--smoke"):
 		_run_smoke()
@@ -458,6 +462,8 @@ func _ready() -> void:
 		_run_classbots_test()
 	elif OS.get_cmdline_user_args().has("--hitcover"):
 		_run_hitcover_test()
+	elif OS.get_cmdline_user_args().has("--introtest"):
+		_run_intro_test()
 	elif OS.get_cmdline_user_args().has("--guide"):
 		_run_guide_test()
 	elif OS.get_cmdline_user_args().has("--sentinel"):
@@ -756,9 +762,22 @@ func _start_souls_ui() -> void:
 	if net != null and net.active:
 		hud.show_notice("SOULS MODE IS FOR ONE  —  LEAVE THE LAN GAME FIRST", 2.5)
 		return
-	hud.show_story("THE ISLE OF EMBERS", SOULS_TALE, func():
+	# The film first (hold to skip), then ashore.
+	hud.menu.visible = false
+	play_intro(func():
 		_souls_requested = true
 		_start_match_ui())
+
+
+## The opening film over the isle; `then` runs when it ends or is skipped.
+func play_intro(then: Callable) -> void:
+	if intro == null:
+		intro = Intro.new()
+		intro.name = "Intro"
+		add_child(intro)
+		intro.setup(self)
+	hud.menu.visible = false
+	intro.play(then)
 
 
 func _start_echo_ui(kind: String) -> void:
@@ -1077,6 +1096,9 @@ func _begin_souls() -> void:
 	souls_respawn_yaw = yaw0
 	# Souls Mode: the roll and one jump. The keepers give up the rest.
 	player.moves = {}
+	# Easier settings: more swallows in the flask.
+	player.flask_max += [2, 1, 0][clampi(difficulty, 0, 2)]
+	player.flask = player.flask_max
 	player.global_position = spot
 	player.mode = Player.Mode.GROUND
 	player.landed = true
@@ -1190,13 +1212,21 @@ func _shore_from(p: Vector3) -> Vector3:
 		out = Vector2(1, 0)
 	var dir := out.normalized()
 	var last := Vector2.INF
-	for k in range(8, 200, 4):
+	for k in range(8, 220, 4):
 		var q := Vector2(p.x, p.z) + dir * float(k)
 		var h := terrain.height_at(q.x, q.y)
 		if h < terrain.water_surface_at(q.x, q.y) + 0.6:
 			if last == Vector2.INF or k < 30:
 				return Vector3.INF
-			return ground_at(Vector3(last.x, 300.0, last.y)) + Vector3.UP * 0.1
+			# A beach, not a cliff: low over the water, gently sloped, and
+			# nothing standing on the spot (a rock, a roof).
+			var lh := terrain.height_at(last.x, last.y)
+			if lh > terrain.water_surface_at(q.x, q.y) + 4.0 or terrain.slope_at(last.x, last.y) > 0.22:
+				return Vector3.INF
+			var g := ground_at(Vector3(last.x, lh + 30.0, last.y))
+			if absf(g.y - lh) > 1.0:
+				return Vector3.INF
+			return Vector3(last.x, lh + 0.1, last.y)
 		last = q - dir * 6.0
 	return Vector3.INF
 
@@ -2477,7 +2507,7 @@ var _menu_pose: Array = []
 
 
 func _menu_flyby(delta: float) -> void:
-	if terrain == null:
+	if terrain == null or (intro != null and intro.running):
 		return
 	_menu_shot_t -= delta
 	if _menu_shot < 0 or _menu_shot_t <= 0.0:
@@ -4463,6 +4493,24 @@ func _run_shot() -> void:
 	# Free camera: --lm=<landmark> or --cam=x,y,z --look=x,y,z.
 	var cam_pos := Vector3.INF
 	var cam_look := Vector3.ZERO
+	for ia in OS.get_cmdline_user_args():
+		if ia.begins_with("--intro="):
+			# A still from the opening film: shot n, halfway through.
+			var n := int(ia.substr(8))
+			if intro == null:
+				intro = Intro.new()
+				add_child(intro)
+				intro.setup(self)
+			intro._plan()
+			intro.visible = true
+			intro.shot = n - 1
+			intro._next()
+			for i in 6:
+				await get_tree().process_frame
+			intro.pose(n, 0.5)
+			var s: Array = intro.shots[n]
+			cam_pos = (s[0] as Vector3).lerp(s[1], 0.5)
+			cam_look = (s[2] as Vector3).lerp(s[3], 0.5)
 	for fa in OS.get_cmdline_user_args():
 		if fa.begins_with("--farmcam=") and fauna != null:
 			# A look at the animals: the n-th of a kind, close up.
@@ -7773,7 +7821,7 @@ func _run_hitbox_test() -> void:
 		var q := PhysicsRayQueryParameters3D.create(from, to, Ballistics.MASK)
 		q.exclude = [player.get_rid()]
 		var hit := space.intersect_ray(q)
-		return hit.get("collider") if not hit.is_empty() else null
+		return Hurtbox.resolve(hit.get("collider")) if not hit.is_empty() else null
 	for b in bots:
 		if not (is_instance_valid(b) and b is Revenant):
 			continue
@@ -7853,7 +7901,7 @@ func _run_souls_test() -> void:
 	_check("your embers stay where you fell", writs.my_embers == 0 and not writs.cinder.is_empty())
 	for i in 60 * 5:
 		await get_tree().physics_frame
-	print("[souls] rise: alive %s, %.1f m from the rising place, flask %d / %d" % [str(player.alive), player.global_position.distance_to(souls_respawn), player.flask, player.flask_max])
+	print("[souls] rise: alive %s, %.1f m from the rising place, flask %d / %d, at %s respawn %s swimming %s vel %s" % [str(player.alive), player.global_position.distance_to(souls_respawn), player.flask, player.flask_max, str(player.global_position.round()), str(souls_respawn.round()), str(player.swimming), str(player.velocity.round())])
 	_check("the wayshrine's fire brings you back", player.alive and player.global_position.distance_to(souls_respawn) < 3.0 and player.flask == player.flask_max)
 	_check("the keepers are whole again", is_equal_approx(k0.hp, 100.0))
 	# Rest at another shrine.
@@ -8437,6 +8485,50 @@ func _run_reach_test() -> void:
 	get_tree().quit()
 
 
+## The opening film plays, holds its shots, can be skipped, and Souls Mode
+## begins after it; difficulty eases the blows.
+func _run_intro_test() -> void:
+	await get_tree().process_frame
+	_start_souls_ui()
+	for i in 30:
+		await get_tree().process_frame
+	_check("the souls button plays the film", intro != null and intro.running and intro.shots.size() >= 8)
+	var s0 := intro.shot
+	for i in 60 * 11:
+		await get_tree().process_frame
+	_check("the film moves from shot to shot", intro.shot > s0)
+	Input.action_press("jump")
+	for i in 70:
+		await get_tree().process_frame
+	Input.action_release("jump")
+	_check("holding jump skips it", not intro.running)
+	for i in 120:
+		await get_tree().physics_frame
+	print("[intro] after: phase %s souls %s" % [phase, str(souls_mode)])
+	_check("souls mode begins after the film", souls_mode and phase == "playing")
+	var actors := 0
+	for n in get_children():
+		if n.has_meta("intro"):
+			actors += 1
+	_check("the film's cast is gone", actors == 0)
+	# Difficulty: the same blow on each setting.
+	_force_hard = false
+	player.spawn_protect = 0.0
+	player.vest_level = 0
+	player.helmet_level = 0
+	var taken: Array = []
+	for d in 3:
+		difficulty = d
+		player.hp = 100.0
+		player.iframes = 0.0
+		player.take_damage(40.0, player.global_position + Vector3(0, 0, -3), false, _net_dummy)
+		taken.append(100.0 - player.hp)
+	print("[intro] a 40 blow takes %s (easy, normal, hard)" % str(taken))
+	_check("easy and normal soften the blows", float(taken[0]) < float(taken[1]) and float(taken[1]) < float(taken[2]))
+	print("[intro] done")
+	get_tree().quit()
+
+
 ## How much of each boss's visible body its hitbox covers: the posed model is
 ## baked into a temporary collision mesh, and rays from all round (front,
 ## back, sides, above) that touch the body must also hit the boss.
@@ -8511,7 +8603,7 @@ func _cover_of(b: Node3D) -> Array:
 				hit_vis += 1
 				var q2 := PhysicsRayQueryParameters3D.create(a, e, 4)
 				var hb := space.intersect_ray(q2)
-				if not hb.is_empty() and hb.collider == b:
+				if not hb.is_empty() and Hurtbox.resolve(hb.collider) == b:
 					hit_both += 1
 	vis.queue_free()
 	return [hit_both, hit_vis, float(hit_both) / maxf(1.0, float(hit_vis))]
@@ -11083,8 +11175,30 @@ func _run_drive_test() -> void:
 ## Adaptive vsync: no tearing at full rate, no stutter below it (plain vsync
 ## halves the frame rate in steps whenever a frame runs a little late).
 ## Player, frame-rate and interface options from Settings.
+## 0 easy, 1 normal, 2 hard (Settings → Gameplay, or the PLAY page).
+var difficulty := 1
+## Checks always play on hard, so their numbers mean the same.
+var _force_hard := false
+
+
+## How much of a blow you take.
+func diff_taken() -> float:
+	return [0.45, 0.7, 1.0][clampi(difficulty, 0, 2)]
+
+
+## How much harder your blows land on a boss.
+func diff_boss() -> float:
+	return [1.7, 1.3, 1.0][clampi(difficulty, 0, 2)]
+
+
+## How much wider enemies' shots scatter at you.
+func diff_aim() -> float:
+	return [1.9, 1.4, 1.0][clampi(difficulty, 0, 2)]
+
+
 func _apply_options() -> void:
 	var o := func(k: String) -> int: return int(options.get(k, HUD.OPTS[k][2]))
+	difficulty = 2 if _force_hard else clampi(o.call("difficulty"), 0, 2)
 	Engine.max_fps = [0, 30, 60, 90, 120, 144, 165, 240][clampi(o.call("fps_cap"), 0, 7)]
 	if DisplayServer.get_name() != "headless":
 		get_tree().root.content_scale_factor = [0.85, 1.0, 1.15, 1.3][clampi(o.call("ui_scale"), 0, 3)]

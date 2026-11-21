@@ -149,6 +149,7 @@ const OPTS := {
 	"hitmarkers": ["HIT MARKERS", ["ON", "OFF"], 0],
 	"damage_numbers": ["DAMAGE NUMBERS", ["OFF", "ON"], 0],
 	"viewmodel": ["GUN POSITION", ["NORMAL", "CENTRED", "LOW"], 0],
+	"difficulty": ["DIFFICULTY", ["EASY", "NORMAL", "HARD"], 1],
 	"guidance": ["GUIDANCE (EMBER WISP)", ["ON", "OFF"], 0],
 	"pad_sens": ["STICK SENSITIVITY", ["LOW", "MEDIUM", "HIGH", "VERY HIGH"], 1],
 	"vibration": ["VIBRATION", ["ON", "OFF"], 0],
@@ -1727,7 +1728,7 @@ func _build_pause() -> void:
 	size_slider.custom_minimum_size = Vector2(300, 22)
 	size_slider.value_changed.connect(func(_v): _settings_changed())
 	col2.add_child(size_slider)
-	for k in ["guidance", "hints", "crosshair", "xhair_color", "hitmarkers", "damage_numbers"]:
+	for k in ["difficulty", "guidance", "hints", "crosshair", "xhair_color", "hitmarkers", "damage_numbers"]:
 		_opt_row(t_game[0], k)
 	for k in ["viewmodel", "head_bob", "shake"]:
 		_opt_row(t_game[1], k)
@@ -2509,6 +2510,8 @@ func show_menu(seed_text: String) -> void:
 	menu.visible = true
 	if main_menu != null and not Input.get_connected_joypads().is_empty():
 		main_menu.focus_first.call_deferred()
+	if main_menu != null:
+		main_menu._mark_difficulty()
 	end_panel.visible = false
 	pause_panel.visible = false
 	set_gameplay_visible(false)

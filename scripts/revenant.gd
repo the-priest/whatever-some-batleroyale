@@ -374,6 +374,7 @@ func _add_embers(k: float) -> void:
 ## into bands (legs, hips, chest and arms, shoulders and head), a box round
 ## each, so wherever you can see the body a hit lands, weapons included.
 var _fit_shapes: Array[CollisionShape3D] = []
+var _hurtbox: Hurtbox = null
 const FIT_BANDS := [0.0, 0.28, 0.5, 0.72, 0.86, 1.0]
 
 
@@ -387,6 +388,11 @@ func fit_hitbox() -> void:
 		if is_instance_valid(c):
 			c.queue_free()
 	_fit_shapes.clear()
+	if _hurtbox == null:
+		_hurtbox = Hurtbox.new()
+		_hurtbox.name = "Hurtbox"
+		_hurtbox.owner_bot = self
+		add_child(_hurtbox)
 	var inv := global_transform.affine_inverse()
 	var pts := PackedVector3Array()
 	for n in body.skin.find_children("*", "MeshInstance3D", true, false):
@@ -421,7 +427,10 @@ func fit_hitbox() -> void:
 		var bx := BoxShape3D.new()
 		# A little room for the clips moving the limbs about.
 		bx.size = Vector3((mx.x - mn.x) * 1.08 + 0.06, y1 - y0, (mx.z - mn.z) * 1.08 + 0.06)
-		var cs := add_hit_shape(bx, Vector3((mn.x + mx.x) * 0.5, (y0 + y1) * 0.5, (mn.z + mx.z) * 0.5))
+		var cs := CollisionShape3D.new()
+		cs.shape = bx
+		cs.position = Vector3((mn.x + mx.x) * 0.5, (y0 + y1) * 0.5, (mn.z + mx.z) * 0.5)
+		_hurtbox.add_child(cs)
 		_fit_shapes.append(cs)
 	# The head is the top band of the body as it is built, not a soldier's.
 	head_offset = lo + h * 0.8
@@ -581,6 +590,8 @@ func take_damage(amount: float, pos: Vector3 = Vector3.ZERO, headshot: bool = fa
 		return super.take_damage(amount, pos, headshot, source)
 	# The storm burns it like anyone; bullets and blasts barely scratch it.
 	var scaled := amount * (damage_taken if source != null else 1.0)
+	if game != null and (source is Player or (source is Bot and (source as Bot).is_human)):
+		scaled *= game.diff_boss()
 	var killed := super.take_damage(scaled, pos, headshot, source)
 	if alive and not raged and hp <= 50.0:
 		_rage()

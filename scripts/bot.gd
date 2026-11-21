@@ -1892,6 +1892,8 @@ func _shoot_logic(delta: float) -> void:
 	spread_deg += Vector2(tvel.x, tvel.z).length() * 0.12
 	spread_deg += maxf(0.0, 3.0 - float(_burst)) * 0.35
 	spread_deg *= float(d["spread"]) / 1.35 * 0.5 + 0.5
+	if game != null and (enemy is Player or (enemy is Bot and (enemy as Bot).is_human)):
+		spread_deg *= game.diff_aim()
 	_burst += 1
 	var spread := deg_to_rad(spread_deg)
 	# Lead the target and hold over for drop, as well as this bot is able to.
@@ -2037,7 +2039,7 @@ func _can_see(target: Node3D) -> bool:
 	var hit := get_world_3d().direct_space_state.intersect_ray(q)
 	if hit.is_empty():
 		return false
-	return hit["collider"] == target
+	return Hurtbox.resolve(hit["collider"]) == target
 
 
 func enemy_visible() -> bool:
@@ -2054,7 +2056,7 @@ func enemy_visible() -> bool:
 	var hit := get_world_3d().direct_space_state.intersect_ray(q)
 	var vis := false
 	if not hit.is_empty():
-		var col: Object = hit["collider"]
+		var col: Object = Hurtbox.resolve(hit["collider"])
 		vis = col == enemy or (col is Node and (col as Node).is_ancestor_of(enemy))
 	_see_cache = {"id": key, "f": now, "v": vis}
 	return vis

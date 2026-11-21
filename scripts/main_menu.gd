@@ -341,6 +341,27 @@ func _build_play(page: Control) -> void:
 	grid.add_child(ec)
 	ordeal_rec = hud._lv("", 11, Color(0.85, 0.62, 0.42), false)
 	v.add_child(ordeal_rec)
+	# Difficulty, right where you choose what to play.
+	var drow := HBoxContainer.new()
+	drow.add_theme_constant_override("separation", 10)
+	v.add_child(drow)
+	var dl := hud._lv("DIFFICULTY", 13, HUD.MUTED)
+	dl.custom_minimum_size = Vector2(110, 0)
+	dl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	drow.add_child(dl)
+	var descs := [
+		"EASY: for the story and the sights. You take less than half the harm, enemies miss far more, bosses fall much faster, and the flask holds two more swallows.",
+		"NORMAL: the challenge as meant. Fair and hard: bosses need learning, but a mistake will not end you.",
+		"HARD: every blow at full weight, enemies sharp-eyed, bosses at full strength. For when you know the isle.",
+	]
+	for i in 3:
+		var nm: String = ["EASY", "NORMAL", "HARD"][i]
+		var db := _small(nm, "DIFFICULTY  —  %s" % nm, str(descs[i]), 150.0)
+		var idx := i
+		db.pressed.connect(func(): _set_difficulty(idx))
+		drow.add_child(db)
+		_diff_buttons.append(db)
+	_mark_difficulty()
 	v.add_child(hud._lv("PLAY WITH FRIENDS (SAME NETWORK)", 12, HUD.MUTED))
 	var lan := HBoxContainer.new()
 	lan.add_theme_constant_override("separation", 10)
@@ -354,6 +375,41 @@ func _build_play(page: Control) -> void:
 	var qb := _small("QUICK LAN", "QUICK LAN", "Joins a game on your network if there is one; if not, hosts one for others to join.", 300.0)
 	qb.pressed.connect(func(): hud.sfx_click(); hud.quick_lan_pressed.emit())
 	lan.add_child(qb)
+	var sb := _small("WATCH THE STORY", "WATCH THE STORY", "The opening film of the Isle of Embers: how the fire went out and the keepers went hollow. Hold SPACE to skip it.", 300.0)
+	sb.pressed.connect(func():
+		hud.sfx_click()
+		var g = hud.get_parent()
+		if g != null and g.has_method("play_intro"):
+			g.play_intro(func(): hud.menu.visible = true))
+	v.add_child(sb)
+
+
+var _diff_buttons: Array[Button] = []
+
+
+func _set_difficulty(i: int) -> void:
+	hud.sfx_click()
+	hud.opts["difficulty"] = i
+	hud._opt_labels()
+	hud.option_changed.emit("difficulty", i)
+	_mark_difficulty()
+
+
+func _mark_difficulty() -> void:
+	var cur := hud.opt("difficulty")
+	var cols := [Color(0.45, 0.85, 0.5), HUD.ACCENT, Color(0.9, 0.3, 0.25)]
+	for i in _diff_buttons.size():
+		var b := _diff_buttons[i]
+		var on := i == cur
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(cols[i].r, cols[i].g, cols[i].b, 0.85) if on else Color(1, 1, 1, 0.06)
+		sb.border_color = cols[i]
+		sb.set_border_width_all(1)
+		sb.set_corner_radius_all(3)
+		b.add_theme_stylebox_override("normal", sb)
+		var fc: Color = Color(0.05, 0.05, 0.05) if on else HUD.WHITE
+		b.add_theme_color_override("font_color", fc)
+		b.add_theme_color_override("font_hover_color", fc)
 
 
 func _build_character(page: Control) -> void:
