@@ -91,6 +91,9 @@ var guide: Guide = null
 ## The sky ledges (double-jump caches).
 var reaches: Reaches = null
 var _reach_hint := ""
+## Animals of the isle, and the Ash Beetles of the wilds.
+var fauna: Fauna = null
+var beasts: Array = []
 ## The torn pages of the island's story (see codex.gd).
 var codex: Codex = null
 ## Treasure chests, and the Mimics among them (see chests.gd).
@@ -441,6 +444,8 @@ func _ready() -> void:
 		_run_reach_test()
 	elif OS.get_cmdline_user_args().has("--pad"):
 		_run_pad_test()
+	elif OS.get_cmdline_user_args().has("--fauna"):
+		_run_fauna_test()
 	elif OS.get_cmdline_user_args().has("--guide"):
 		_run_guide_test()
 	elif OS.get_cmdline_user_args().has("--sentinel"):
@@ -508,6 +513,10 @@ func _build_world() -> void:
 	reaches.name = "Reaches"
 	world.add_child(reaches)
 	reaches.build(self, seed_value)
+	fauna = Fauna.new()
+	fauna.name = "Fauna"
+	world.add_child(fauna)
+	fauna.setup(self, seed_value)
 	codex = Codex.new()
 	codex.name = "Codex"
 	world.add_child(codex)
@@ -779,6 +788,10 @@ func _start_match() -> void:
 		for sh in reaches.shelves:
 			sh.taken = false
 			(sh.cache as Node3D).visible = true
+	for bt in beasts:
+		if is_instance_valid(bt):
+			(bt as Node).queue_free()
+	beasts.clear()
 	# In a LAN game only the host starts matches; clients follow its setup.
 	if net != null and net.active and not net.hosting:
 		return
@@ -1078,6 +1091,7 @@ func _begin_souls() -> void:
 	player._emit_health()
 	hud.set_plane_path(Vector3.ZERO, Vector3.ZERO)
 	_spawn_hollows()
+	spawn_beasts(14)
 	hud.show_big("THE ISLE OF EMBERS", Color(1.0, 0.72, 0.42), 3.0)
 	hud.show_notice("YOU WASH ASHORE  —  FOLLOW THE EMBER WISP", 5.0)
 	if guide == null:
@@ -1086,6 +1100,33 @@ func _begin_souls() -> void:
 		add_child(guide)
 		guide.setup(self)
 	guide.begin(spot, first_shrine)
+
+
+## Ash Beetles in the wild places (away from towns and from where you start).
+func spawn_beasts(n: int) -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed_value + 5150
+	var tries := 0
+	while beasts.size() < n and tries < 2000:
+		tries += 1
+		var p := terrain.random_land_point(rng, Terrain.WATER_LEVEL + 2.0, 0.3)
+		if not world.villages.house_at(p, 40.0).is_empty():
+			continue
+		if player != null and Vector2(player.global_position.x, player.global_position.z).distance_to(p) < 120.0:
+			continue
+		var clash := false
+		for b in beasts:
+			if Vector2((b as Node3D).global_position.x, (b as Node3D).global_position.z).distance_to(p) < 90.0:
+				clash = true
+				break
+		if clash:
+			continue
+		var at := ground_at(Vector3(p.x, 300.0, p.y))
+		var bt := Beast.new()
+		bt.setup(self, at, beasts.size())
+		add_child(bt)
+		bt.global_position = at + Vector3.UP * 0.3
+		beasts.append(bt)
 
 
 ## Hollow soldiers, armed, in the towns and the woods.
@@ -3172,6 +3213,9 @@ func _win() -> void:
 
 
 func on_player_landed() -> void:
+	# A few Ash Beetles roam Battle Royale's wilds too (solo games).
+	if not souls_mode and not ordeal_mode and beasts.is_empty() and not (net != null and net.active):
+		spawn_beasts(6)
 	sfx.play_ui("land_thud", -6.0)
 	if oath("glass"):
 		player.hp = minf(player.hp, player.max_hp())
@@ -3213,6 +3257,8 @@ func on_player_hit(_pos: Vector3, dmg: float, _headshot: bool) -> void:
 func on_gunshot(pos: Vector3, shooter: Node) -> void:
 	if wildlife != null:
 		wildlife.gunshot(pos)
+		if fauna != null:
+			fauna.gunshot(pos)
 	for b in bots:
 		if is_instance_valid(b) and b != shooter and b.alive and b.global_position.distance_to(pos) < HEAR_RANGE:
 			b.hear_shot(pos, shooter)
@@ -4327,6 +4373,28 @@ func _run_shot() -> void:
 	# Free camera: --lm=<landmark> or --cam=x,y,z --look=x,y,z.
 	var cam_pos := Vector3.INF
 	var cam_look := Vector3.ZERO
+	for fa in OS.get_cmdline_user_args():
+		if fa.begins_with("--farmcam=") and fauna != null:
+			# A look at the animals: the n-th of a kind, close up.
+			var want := fa.substr(10)
+			for an in fauna.animals:
+				if an.kind == want:
+					var np: Vector3 = (an.node as Node3D).global_position
+					var h: float = float(Fauna.KINDS[want][1])
+					cam_pos = np + Vector3(h * 2.6, h * 0.9 + 0.6, h * 2.6)
+					cam_look = np + Vector3.UP * h * 0.5
+					break
+		if fa == "--beastcam":
+			var bp := ground_at(Vector3(40, 300, 60))
+			var bt := Beast.new()
+			bt.setup(self, bp, 1)
+			add_child(bt)
+			bt.global_position = bp
+			bt.rotation.y = PI * 0.75
+			bt.set_physics_process(false)
+			bt._play("threat")
+			cam_pos = bp + Vector3(3.2, 1.6, -3.2)
+			cam_look = bp + Vector3.UP * 0.6
 	if OS.get_cmdline_user_args().has("--ordealring"):
 		var od := Ordeal.new()
 		add_child(od)
@@ -8271,6 +8339,73 @@ func _run_reach_test() -> void:
 			f.store_string("\n".join(PackedStringArray(lines)) + "\n")
 			f.close()
 	print("[reach] done")
+	get_tree().quit()
+
+
+## The animals and the Ash Beetles.
+func _run_fauna_test() -> void:
+	_start_match()
+	for i in 30:
+		await get_tree().physics_frame
+	_land_player_now()
+	for i in 30:
+		await get_tree().physics_frame
+	player.spawn_protect = 0.0
+	var kinds := {}
+	for a in fauna.animals:
+		kinds[a.kind] = int(kinds.get(a.kind, 0)) + 1
+	print("[fauna] %d animals: %s" % [fauna.animals.size(), str(kinds)])
+	_check("the isle has animals, wild and farm", fauna.animals.size() > 60 and kinds.has("doe") and (kinds.has("cow") or kinds.has("sheep")))
+	# A doe near you hears a shot and bolts.
+	var doe: Dictionary = {}
+	for a in fauna.animals:
+		if a.kind == "doe":
+			doe = a
+			break
+	if not doe.is_empty():
+		var dn: Node3D = doe.node
+		player.global_position = ground_at(dn.global_position + Vector3(12, 30, 0)) + Vector3.UP * 0.2
+		for i in 5:
+			await get_tree().physics_frame
+		var d0 := dn.global_position
+		fauna.gunshot(player.global_position)
+		for i in 60:
+			await get_tree().process_frame
+		var moved := dn.global_position.distance_to(d0)
+		print("[fauna] doe bolted %.1f m" % moved)
+		_check("a shot sends a doe running", moved > 2.0)
+	# An Ash Beetle sees you, charges and strikes.
+	var bt := Beast.new()
+	var at := ground_at(player.global_position + Vector3(0, 30, -14))
+	bt.setup(self, at, 0)
+	add_child(bt)
+	bt.global_position = at + Vector3.UP * 0.3
+	beasts.append(bt)
+	player.vest_level = 0
+	player.helmet_level = 0
+	player.hp = 100.0
+	var hp0 := player.hp
+	for i in 240:
+		await get_tree().physics_frame
+		player.hp = maxf(player.hp, 30.0)
+		if bt.strikes > 0:
+			break
+	print("[fauna] beetle state %s, strikes %d" % [bt._state, bt.strikes])
+	_check("an Ash Beetle charges and strikes", bt.strikes > 0)
+	# Its shell: from the front it takes far less.
+	bt.set_physics_process(false)
+	var h1 := bt.hp
+	bt.take_damage(40.0, bt.global_position + bt.global_basis.z * 2.0 + Vector3.UP, false, player)
+	var front := h1 - bt.hp
+	var h2 := bt.hp
+	bt.take_damage(40.0, bt.global_position - bt.global_basis.z * 2.0 + Vector3.UP, false, player)
+	var back := h2 - bt.hp
+	print("[fauna] shell: front took %.0f, back took %.0f" % [front, back])
+	_check("the shell turns blows from the front", front < back * 0.5)
+	var e0: int = writs.my_embers
+	bt.take_damage(999.0, bt.global_position - bt.global_basis.z * 2.0, false, player)
+	_check("a slain beetle pays embers", not bt.alive and writs.my_embers > e0)
+	print("[fauna] done")
 	get_tree().quit()
 
 
