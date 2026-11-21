@@ -111,6 +111,8 @@ var souls_total := 0
 var souls_time := 0.0
 var _souls_final: Node = null
 var _souls_rising := false
+## How long YOU DIED holds before you rise (screenshots stretch it).
+var souls_rise_delay := 3.6
 var _quest_t := 0.0
 const SOULS_HOLLOWS := 26
 const SOULS_TALE := [
@@ -760,6 +762,7 @@ func _start_match() -> void:
 	sfx.play_ui("ui_click", -6.0)
 	Engine.time_scale = 1.0
 	hud.storm_off = ordeal_mode or souls_mode
+	hud.quest = {}
 	hud.hide_menu()
 	hud.hide_end()
 	hud.clear_killfeed()
@@ -1090,6 +1093,27 @@ func _souls_tick(delta: float) -> void:
 		hud.lbl_kills.text = "DEATHS  %d" % souls_deaths
 
 
+## Battle royale: the nearest living boss on the compass (a red diamond; no
+## line under it, the storm clock lives there).
+func _br_boss_tick(delta: float) -> void:
+	_quest_t -= delta
+	if _quest_t > 0.0:
+		return
+	_quest_t = 0.5
+	if player == null or not player.alive:
+		hud.quest = {}
+		return
+	var best: Revenant = null
+	var bd := INF
+	for b in bots:
+		if is_instance_valid(b) and b is Revenant and (b as Bot).alive:
+			var d: float = (b as Revenant).arena.distance_to(player.global_position)
+			if d < bd:
+				bd = d
+				best = b
+	hud.quest = {"pos": best.arena, "name": best.display_name()} if best != null else {}
+
+
 ## You fell: YOU DIED, the Embers stay where you fell, and in a moment the
 ## Wayshrine's fire brings you back. The keepers you hurt are whole again.
 func _souls_died(_killer: String) -> void:
@@ -1104,11 +1128,13 @@ func _souls_died(_killer: String) -> void:
 		writs._set_cinder({"pos": ground_at(player.global_position + Vector3.UP * 0.5), "amount": amount})
 	if writs != null:
 		writs.close_shop()
-	hud.show_big("YOU DIED", Color(0.72, 0.06, 0.05), 3.2)
+	hud.death_fade(souls_rise_delay + 0.6)
+	hud.show_notice("", 0.05)
+	hud.show_big("Y O U    D I E D", Color(0.78, 0.07, 0.05), souls_rise_delay - 0.3)
 	sfx.play_ui("defeat", -4.0)
 	if music != null:
 		music.set_boss(false)
-	await get_tree().create_timer(3.6).timeout
+	await get_tree().create_timer(souls_rise_delay).timeout
 	_souls_rising = false
 	if phase != "playing" or not souls_mode or player == null:
 		return
@@ -1180,6 +1206,7 @@ func _souls_finale() -> void:
 
 
 func _souls_victory() -> void:
+	survive_time = souls_time
 	_win()
 	var t := int(souls_time)
 	hud.set_end_text("THE ISLE IS FREE", "THE THIRTEEN KEEPERS AND THE UNKINDLED  ·  %d:%02d:%02d  ·  %d DEATH%s" % [t / 3600, (t / 60) % 60, t % 60, souls_deaths, "" if souls_deaths == 1 else "S"], Color(1.0, 0.82, 0.4))
@@ -1908,7 +1935,7 @@ func _update_play(delta: float) -> void:
 	Prof.add("g_update_driving", Time.get_ticks_usec() - _pt)
 	if zone != null and not zone.is_processing() and (player.landed or match_time > 50.0) and not net_is_client() and ordeal == null and not souls_mode:
 		zone.set_process(true)
-	hud.set_crosshair_visible(player.mode == Player.Mode.GROUND and player.has_gun() and player.aim_blend < 0.6)
+	hud.set_crosshair_visible(player.alive and player.mode == Player.Mode.GROUND and player.has_gun() and player.aim_blend < 0.6)
 	_update_world_sim(delta)
 	if zone != null and (zone.is_processing() or net_is_client()):
 		if zone.warning and not zone_was_warning:
@@ -2912,6 +2939,8 @@ func boss_fx(fx: Dictionary) -> void:
 func _update_boss_bar() -> void:
 	if souls_mode:
 		_souls_tick(get_process_delta_time())
+	elif ordeal == null:
+		_br_boss_tick(get_process_delta_time())
 	_boss_marks_t -= get_process_delta_time()
 	if _boss_marks_t <= 0.0:
 		_boss_marks_t = 1.0
@@ -5501,6 +5530,39 @@ func _shot_state(st: String) -> void:
 			for b in bots:
 				if is_instance_valid(b) and b.alive:
 					b.take_damage(9999.0, b.global_position, false, p)
+		"soulsdied":
+			souls_rise_delay = 120.0
+			p.spawn_protect = 0.0
+			p.take_damage(9999.0, p.global_position + Vector3(5, 0, 0), false, null)
+			for i in 40:
+				await get_tree().process_frame
+		"soulsrest":
+			if writs != null and not writs.shrines.is_empty():
+				var sh0: Dictionary = writs.shrines[0]
+				p.global_position = ground_at(sh0.pos + Basis(Vector3.UP, float(sh0.yaw)) * Vector3(0, 1.0, 1.6)) + Vector3.UP * 0.1
+				p.yaw = float(sh0.yaw)
+				for i in 5:
+					await get_tree().process_frame
+				writs.open_shop(0)
+				for i in 20:
+					await get_tree().process_frame
+		"soulsprompt":
+			if writs != null and not writs.shrines.is_empty():
+				var sh: Dictionary = writs.shrines[0]
+				p.global_position = ground_at(sh.pos + Basis(Vector3.UP, float(sh.yaw)) * Vector3(0, 1.0, 1.6)) + Vector3.UP * 0.1
+				p.yaw = float(sh.yaw)
+				for i in 20:
+					await get_tree().process_frame
+		"soulsfree":
+			for b in bots:
+				if is_instance_valid(b) and b is Revenant:
+					_test_fell(b)
+			for i in 10:
+				await get_tree().process_frame
+			if _souls_final != null:
+				_test_fell(_souls_final)
+			for i in 20:
+				await get_tree().process_frame
 		"loading":
 			hud.show_loading("GROWING THE FORESTS", 0.6)
 		"pause":
@@ -7392,9 +7454,18 @@ func _run_souls_test() -> void:
 	# Rest at another shrine.
 	if writs.shrines.size() > 1:
 		var r0 := souls_respawn
-		writs.open_shop(writs.shrines.size() - 1)
+		var far_i := 0
+		var far_d := -1.0
+		for i in writs.shrines.size():
+			var dd := (writs.shrines[i].pos as Vector3).distance_to(r0)
+			if dd > far_d:
+				far_d = dd
+				far_i = i
+		writs.open_shop(far_i)
 		writs.close_shop()
 		_check("resting moves where you rise", souls_respawn.distance_to(r0) > 5.0)
+		var sh := writs.shelf()
+		_check("no kindling on a souls shelf; the 8th ware is the sigil", sh.size() == Writs.WARES.size() - 1 and str(Writs.WARES[int(sh[sh.size() - 1])][0]) == "sigil")
 	# All thirteen.
 	player.spawn_protect = 99999.0
 	for k in keepers:

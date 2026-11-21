@@ -913,6 +913,27 @@ func _open_oaths() -> void:
 
 
 var _bind_buttons: Dictionary = {}
+var _death_fade: ColorRect = null
+
+
+## YOU DIED: the screen sinks into a dark red, then lifts as you rise.
+func death_fade(total: float) -> void:
+	if _death_fade == null:
+		_death_fade = ColorRect.new()
+		_death_fade.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_death_fade.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		# Under the rest of the HUD: the words stay on top of the red.
+		root.add_child(_death_fade)
+		root.move_child(_death_fade, 0)
+	_death_fade.color = Color(0.12, 0.0, 0.0, 0.0)
+	_death_fade.visible = true
+	var tw := _death_fade.create_tween()
+	tw.tween_property(_death_fade, "color:a", 0.72, 0.8).set_ease(Tween.EASE_OUT)
+	tw.tween_interval(maxf(0.1, total - 1.6))
+	tw.tween_property(_death_fade, "color:a", 0.0, 0.8)
+	tw.tween_callback(func(): _death_fade.visible = false)
+
+
 var _story: Control = null
 var _story_lines: Array = []
 var _story_label: Label = null
@@ -2232,6 +2253,9 @@ func set_zone(time_left: float, _radius: float, _phase: int, warning: bool, labe
 
 
 func set_alive(count: int, _total: int) -> void:
+	# Souls mode and the Ordeal keep their own tally there.
+	if storm_off:
+		return
 	if lbl_alive != null:
 		lbl_alive.text = "ALIVE  %d" % count
 		lbl_kills.text = "KILLS  %d" % _kills
@@ -2740,10 +2764,11 @@ func _draw_compass() -> void:
 		var xq := cx + clampf(rel_q, -62.0, 62.0) / 62.0 * half
 		compass.draw_colored_polygon(PackedVector2Array([Vector2(xq, y + 3), Vector2(xq + 7, y + 11), Vector2(xq, y + 19), Vector2(xq - 7, y + 11)]), Color(0.02, 0.02, 0.03, 0.85))
 		compass.draw_colored_polygon(PackedVector2Array([Vector2(xq, y + 5), Vector2(xq + 5, y + 11), Vector2(xq, y + 17), Vector2(xq - 5, y + 11)]), Color(0.95, 0.25, 0.2))
-		var qt := "%s   ·   %s" % [str(quest.name), _dist_text(to_q.length())]
-		var qw := font_bold.get_string_size(qt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
-		compass.draw_string(font_bold, Vector2(cx - qw * 0.5 + 1, y + 47), qt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(0, 0, 0, 0.7))
-		compass.draw_string(font_bold, Vector2(cx - qw * 0.5, y + 46), qt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(1.0, 0.55, 0.45))
+		if storm_off:
+			var qt := "%s   ·   %s" % [str(quest.name), _dist_text(to_q.length())]
+			var qw := font_bold.get_string_size(qt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
+			compass.draw_string(font_bold, Vector2(cx - qw * 0.5 + 1, y + 47), qt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(0, 0, 0, 0.7))
+			compass.draw_string(font_bold, Vector2(cx - qw * 0.5, y + 46), qt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(1.0, 0.55, 0.45))
 	var wg := _writ_goal()
 	if wg != Vector3.INF:
 		var to_g := Vector2(wg.x, wg.z) - Vector2(player_pos.x, player_pos.z)
@@ -3147,7 +3172,7 @@ func _draw_minimap() -> void:
 	d.draw_colored_polygon(PackedVector2Array([Vector2(nx, inner.position.y + 2.0), Vector2(nx - 4.5, inner.position.y + 9.0), Vector2(nx + 4.5, inner.position.y + 9.0)]), Color(1, 1, 1, 0.9))
 	# How far to safety, along the bottom, while you are outside it.
 	var zd := _zone_distances()
-	if zd.x > 0.5 or zd.y > 0.5:
+	if not storm_off and (zd.x > 0.5 or zd.y > 0.5):
 		var stormy := zd.y > 0.5
 		var bar := Rect2(Vector2(inner.position.x, inner.end.y - 21.0), Vector2(inner.size.x, 21.0))
 		var pulse := 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.008)

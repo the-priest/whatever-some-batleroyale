@@ -233,6 +233,8 @@ func prompt(p: Vector3) -> String:
 			return "HOLD [%s]  KNEEL BEFORE %s   (%s)" % [key, str(idol.god), str(BLESSINGS[str(idol.kind)][0])]
 		return "HOLD [%s]  %s" % [key, "DIG UP THE RELIC" if act == "dig" else "LIGHT THE BEACON"]
 	if shrine_near(p) >= 0:
+		if game.souls_mode:
+			return "[%s]  REST AT THE WAYSHRINE  —  HEAL, FILL THE FLASK, SPEND YOUR EMBERS   (◆ %d)" % [key, my_embers]
 		return "[%s]  WAYSHRINE  —  SPEND YOUR EMBERS   (◆ %d)" % [key, my_embers]
 	var ti := tower_top(p)
 	if ti >= 0 and not _surveyed.has(ti):
@@ -359,9 +361,20 @@ func open_shop(si: int) -> void:
 	game.sfx.play_ui("ui_click", -8.0)
 
 
-func _priced_wares() -> Array:
+## The wares on this shelf (indices into WARES): in Souls mode you always
+## rise, so there is no Kindling.
+func shelf() -> Array:
 	var out: Array = []
 	for i in WARES.size():
+		if game.souls_mode and str(WARES[i][0]) == "kindling":
+			continue
+		out.append(i)
+	return out
+
+
+func _priced_wares() -> Array:
+	var out: Array = []
+	for i in shelf():
 		out.append([WARES[i][0], WARES[i][1], ware_cost(i)])
 	return out
 
@@ -381,9 +394,10 @@ func _input(event: InputEvent) -> void:
 	var k := event as InputEventKey
 	var code := k.physical_keycode if k.physical_keycode != KEY_NONE else k.keycode
 	if code >= KEY_1 and code <= KEY_9:
+		var shown := shelf()
 		var n := int(code - KEY_1)
-		if n < WARES.size():
-			_buy(n)
+		if n < shown.size():
+			_buy(int(shown[n]))
 		get_viewport().set_input_as_handled()
 	elif event.is_action("interact") or event.is_action("ui_cancel") or code == KEY_ESCAPE:
 		close_shop()
