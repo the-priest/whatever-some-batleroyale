@@ -41,7 +41,7 @@ const FAIL_BAN_MS := 600000
 ## Messages per second a client may send, by kind: [sustained, burst].
 const RATES := {
 	"pstate": [30.0, 45.0], "vstate": [30.0, 45.0], "shots": [40.0, 70.0], "chat": [1.5, 5.0], "marker": [2.0, 6.0],
-	"grenade": [1.5, 4.0], "hit": [30.0, 70.0], "loot": [12.0, 40.0], "veh": [20.0, 40.0], "misc": [4.0, 12.0], "inv": [1.0, 3.0], "writ": [3.0, 8.0],
+	"grenade": [1.5, 4.0], "kit": [6.0, 14.0], "class": [1.0, 4.0], "hit": [30.0, 70.0], "loot": [12.0, 40.0], "veh": [20.0, 40.0], "misc": [4.0, 12.0], "inv": [1.0, 3.0], "writ": [3.0, 8.0],
 }
 ## Dropped messages before a flooding client is kicked.
 const FLOOD_KICK := 600
@@ -1469,6 +1469,75 @@ func _grenade(key: String, from: Vector3, vel: Vector3) -> void:
 		return
 	if game != null:
 		game.net_remote_grenade(key, from, vel)
+
+
+## Who each player is (Classes): sent at every match start, relayed by the
+## host, so every machine dresses everyone's body right.
+var classes: Dictionary = {}
+
+
+func send_class(cls: String) -> void:
+	if not active:
+		return
+	classes[my_id()] = cls
+	if hosting:
+		_class.rpc(1, cls)
+	else:
+		_class.rpc_id(1, my_id(), cls)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _class(pid: int, cls: String) -> void:
+	var sender := multiplayer.get_remote_sender_id()
+	if not Classes.DEFS.has(cls):
+		return
+	if hosting:
+		if not _gate(sender, "class"):
+			return
+		# A client speaks for itself only.
+		pid = sender
+		for p in _others(sender):
+			_class.rpc_id(p, pid, cls)
+		# And hears who everyone else already is.
+		for other in classes:
+			if int(other) != sender:
+				_class.rpc_id(sender, int(other), str(classes[other]))
+	elif sender != 1:
+		return
+	classes[pid] = cls
+	if game != null:
+		game.net_class(pid, cls)
+
+
+## An arrow, a fireball or a sword swing: everyone else sees it (the damage
+## goes the usual way, by the hits).
+func send_kit(key: String, kind: String, from: Vector3, vel: Vector3) -> void:
+	if not active:
+		return
+	if hosting:
+		_kit.rpc(key, kind, from, vel)
+	else:
+		_kit.rpc_id(1, key, kind, from, vel)
+
+
+@rpc("any_peer", "call_remote", "unreliable", 4)
+func _kit(key: String, kind: String, from: Vector3, vel: Vector3) -> void:
+	var sender := multiplayer.get_remote_sender_id()
+	if kind not in ["arrow", "fire", "swing"] or not _finite(from) or not is_finite(vel.length()) or vel.length() > 110.0:
+		return
+	if hosting:
+		if not _gate(sender, "kit"):
+			return
+		key = "p%d" % sender
+		var where: Vector3 = game.net_peer_position(sender) if game != null else Vector3.INF
+		if where != Vector3.INF and where.distance_to(from) > 12.0:
+			return
+		for pid in _others(sender):
+			_kit.rpc_id(pid, key, kind, from, vel)
+	elif sender != 1:
+		return
+	if game != null:
+		game.net_remote_kit(key, kind, from, vel)
 
 
 ## A client hit a bot: the host applies it to the real one.

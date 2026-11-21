@@ -1934,6 +1934,8 @@ func _loose_kit(from: Vector3, at: Vector3, tvel: Vector3, spread: float, mult: 
 	var s := spread * 1.4
 	var dir := ((pt - from).normalized() + Vector3(randf_range(-s, s), randf_range(-s, s), randf_range(-s, s))).normalized()
 	KitShot.launch(game, self, "arrow" if arrow else "fire", from, dir * speed, (46.0 if arrow else 38.0) * maxf(mult, 0.35) * (1.0 if mult > 0.3 else 0.8))
+	if game != null and game.has_method("net_kit_shot"):
+		game.net_kit_shot(self, "arrow" if arrow else "fire", from, dir * speed)
 	fire_timer = randf_range(1.0, 1.4) if arrow else randf_range(1.3, 1.8)
 	if game != null:
 		game.play_sfx_at("jump_whoosh" if arrow else "explosion", from, -2.0 if arrow else -14.0)
@@ -1954,6 +1956,8 @@ func _melee_logic(delta: float, dist: float) -> void:
 	var dmg := 34.0 * maxf(mult, 0.5)
 	var killed = enemy.call("take_damage", dmg, global_position + Vector3.UP * 1.2, false, self)
 	melee_hits += 1
+	if game != null and game.has_method("net_kit_shot"):
+		game.net_kit_shot(self, "swing", global_position + Vector3.UP * 1.2, Vector3.ZERO)
 	if game != null:
 		game.play_sfx_at("jump_whoosh", global_position, -4.0)
 		if killed is bool and not killed:

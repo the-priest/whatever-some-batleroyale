@@ -447,6 +447,8 @@ func _start_swing(i: int) -> void:
 	_swing_t = 0.0
 	_swing_hit = false
 	_queued = false
+	if game != null and game.has_method("net_kit_shot"):
+		game.net_kit_shot(player, "swing", player.global_position + Vector3.UP * 1.2, Vector3.ZERO)
 	player._sfx("jump_whoosh", -6.0 if i < 2 else -2.0)
 
 

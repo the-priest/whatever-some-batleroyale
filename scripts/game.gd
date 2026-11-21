@@ -1450,7 +1450,54 @@ func fade_far_lights(root: Node = null) -> void:
 		l.distance_fade_shadow = l.distance_fade_begin * 0.5
 
 
+## Someone's class arrived: their body wears the class's character.
+func net_class(pid: int, cls: String) -> void:
+	if pid == net.my_id():
+		return
+	var h = humans.get(pid)
+	if h != null and is_instance_valid(h):
+		_dress_human(h as Bot, cls)
+
+
+func _dress_human(h: Bot, cls: String) -> void:
+	h.bclass = cls
+	if Classes.SKINS.has(cls) and h.body != null:
+		h.body.set_skin(str(Classes.SKINS[cls]))
+
+
+## An arrow, fireball or swing from someone else's machine: only the picture.
+var _kit_seen := 0
+
+
+func net_remote_kit(key: String, kind: String, from: Vector3, vel: Vector3) -> void:
+	if not _net_setup_ok:
+		return
+	_kit_seen += 1
+	var src = node_for_key(key)
+	if src is Bot and is_instance_valid(src) and (src as Bot).body != null:
+		(src as Bot).body.play_attack()
+	if kind == "swing":
+		play_sfx_at("jump_whoosh", from, -4.0)
+		return
+	KitShot.launch(self, src as Node3D if src is Node3D else null, kind, from, vel, 0.0, true)
+
+
+## One of ours (the player, or a bot run here on the host) loosed or swung.
+func net_kit_shot(shooter: Node, kind: String, from: Vector3, vel: Vector3) -> void:
+	if not net_on():
+		return
+	if shooter is Bot and ((shooter as Bot).puppet or not net.hosting):
+		return
+	var key := node_key(shooter)
+	if key != "":
+		net.send_kit(key, kind, from, vel)
+
+
 func _after_match_setup() -> void:
+	if net_on():
+		net.send_class(player.pclass)
+		for pid in net.classes:
+			net_class(int(pid), str(net.classes[pid]))
 	if events != null:
 		events.reset()
 	if chests != null:
@@ -6030,6 +6077,9 @@ func _make_human(peer_id: int, pname: String) -> Bot:
 	h.peer_id = peer_id
 	h.friendly = net.squad
 	h.setup(pname, Vector2.ZERO, self, peer_id)
+	if net.classes.has(peer_id) and Classes.SKINS.has(str(net.classes[peer_id])):
+		h.bclass = str(net.classes[peer_id])
+		h.skin = str(Classes.SKINS[h.bclass])
 	add_child(h)
 	h.global_position = plane.seat_position() if plane != null else Vector3(0, 300, 0)
 	humans[peer_id] = h
@@ -9918,6 +9968,8 @@ func _run_net_attack(as_host: bool) -> void:
 
 
 func _run_net_test(as_host: bool) -> void:
+	# Two classes, so each side can check it sees the other's.
+	Classes.chosen = "knight" if as_host else "hunter"
 	net.status.connect(func(t): print("[net] status: ", t))
 	net.left_session.connect(func(t): print("[net] left: ", t))
 	net.multiplayer.peer_connected.connect(func(id): print("[net] peer connected ", id))
@@ -10059,6 +10111,22 @@ func _run_net_test(as_host: bool) -> void:
 			print("[net] %s %s sees the brazier lit" % ["PASS" if hollow.lit[0] else "FAIL", "host" if as_host else "client"])
 		if i == 48 and not as_host and writs != null:
 			print("[net] %s client relic writ over LAN, embers %d" % ["PASS" if writs.my_embers >= Writs.REWARD["relic"] and writs.view.is_empty() else "FAIL", writs.my_embers])
+		if i == 8:
+			for id in humans:
+				var hh = humans[id]
+				if is_instance_valid(hh):
+					var want := "hunter" if as_host else "knight"
+					var ok: bool = (hh as Bot).bclass == want and (hh as Bot).body != null and (hh as Bot).body.skin != null
+					print("[net] %s %s sees the other as %s, dressed %s" % ["PASS" if ok else "FAIL", "host" if as_host else "client", (hh as Bot).bclass, str((hh as Bot).body.skin != null if (hh as Bot).body != null else false)])
+		if i == 10 and not as_host:
+			var af := player.global_position + Vector3.UP * 1.6
+			var av := Vector3(1, 0.2, 0).normalized() * 60.0
+			KitShot.launch(self, player, "arrow", af, av, 40.0)
+			net_kit_shot(player, "arrow", af, av)
+			net_kit_shot(player, "swing", af, Vector3.ZERO)
+			print("[net] client looses an arrow")
+		if i == 14 and as_host:
+			print("[net] %s host saw the client's arrow and swing (%d)" % ["PASS" if _kit_seen >= 2 else "FAIL", _kit_seen])
 		if i == 50 and not as_host and near != null:
 			print("[net] client shooting ", near.bot_name, " at ", int(bd), " m")
 			net_route_hit(near, 500.0, near.global_position + Vector3(0, 1.6, 0), true, player)
