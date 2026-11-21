@@ -39,6 +39,11 @@ func setup_bell(p_arena: Vector3, p_game: Node) -> void:
 	shoot_skill = 0.62
 	sight = 130.0
 	set_meta("bell", true)
+	aura_color = Color(1.0, 0.82, 0.45)
+	aura_size = 1.2
+	cloak_color = Color(0.24, 0.21, 0.17)
+	cloak_long = 1.3
+	crown = "hood"
 
 
 func display_name() -> String:
@@ -54,15 +59,21 @@ func _ready() -> void:
 			var sm := m.get_surface_override_material(0)
 			if sm is ShaderMaterial:
 				var camo := (sm as ShaderMaterial).duplicate() as ShaderMaterial
-				camo.set_shader_parameter("c_base", Color(0.5, 0.47, 0.4))
-				camo.set_shader_parameter("c_a", Color(0.72, 0.68, 0.58))
-				camo.set_shader_parameter("c_b", Color(0.42, 0.37, 0.3))
-				camo.set_shader_parameter("c_c", Color(0.22, 0.19, 0.15))
+				# Robes the colour of old ash and dried blood.
+				camo.set_shader_parameter("c_base", Color(0.11, 0.1, 0.09))
+				camo.set_shader_parameter("c_a", Color(0.17, 0.15, 0.12))
+				camo.set_shader_parameter("c_b", Color(0.2, 0.08, 0.06))
+				camo.set_shader_parameter("c_c", Color(0.07, 0.06, 0.05))
 				m.set_surface_override_material(0, camo)
 	if _glow != null:
 		_glow.light_color = Color(1.0, 0.85, 0.55)
-		glow_base = 0.6
+		glow_base = 0.25
 	_build_bell()
+	# The bell can be struck: above its head, so every hit there is a
+	# headshot, and it rings.
+	var bs := SphereShape3D.new()
+	bs.radius = 0.62
+	add_hit_shape(bs, Vector3(0, 3.25, 0))
 
 
 func _build_bell() -> void:

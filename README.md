@@ -28,6 +28,13 @@ The main menu offers three ways to play:
 
 In Battle Royale too, every boss is now on the big map, named, from the start.
 
+![The bosses of the Isle of Embers](docs/bosses/all_bosses.jpg)
+
+Every boss is shot across its whole body: the wyrm along its arch and open maw, the Carrion Queen
+from beak to tail and out to each wingtip (her wing hitboxes follow the wings as they beat), the
+Bellkeeper's bell above his head. Boss rings are cleared of trees and rocks, and never laid over a
+building or tower.
+
 ## Controls
 
 | Key | Action |

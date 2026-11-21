@@ -37,6 +37,10 @@ func setup_warden(p_arena: Vector3, p_game: Node) -> void:
 	shoot_skill = 0.7
 	sight = 120.0
 	set_meta("warden", true)
+	aura_color = Color(0.78, 0.74, 0.7)
+	aura_size = 1.4
+	cloak_color = Color(0.36, 0.34, 0.32)
+	crown = "spikes"
 
 
 func display_name() -> String:

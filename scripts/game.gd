@@ -428,6 +428,8 @@ func _ready() -> void:
 		_run_sisters_test()
 	elif OS.get_cmdline_user_args().has("--souls"):
 		_run_souls_test()
+	elif OS.get_cmdline_user_args().has("--hitbox"):
+		_run_hitbox_test()
 	elif OS.get_cmdline_user_args().has("--sentinel"):
 		_run_sentinel_test()
 	elif OS.get_cmdline_user_args().has("--echo"):
@@ -4202,6 +4204,54 @@ func _run_shot() -> void:
 		od.setup(self)
 		cam_pos = od.centre + Vector3(0, 7.0, Ordeal.R * 0.95)
 		cam_look = od.centre + Vector3(0, 2.0, 0)
+		for pa in OS.get_cmdline_user_args():
+			if pa.begins_with("--portrait="):
+				# One boss, alone in the ring, facing you: its portrait.
+				var kind := pa.substr(11)
+				var pf := od._spawn(kind, od.centre)
+				var foes: Array = [pf]
+				if kind == "sister":
+					var p2 := od._spawn("sister", od.centre + Vector3(2.4, 0, 0))
+					foes.append(p2)
+				for f in foes:
+					f.set_physics_process(false)
+					f.rotation.y = PI
+					f.enemy = null
+				var dist := 4.6
+				var hgt := 1.45
+				if pf is Colossus:
+					dist = 9.5
+					hgt = 3.0
+				elif pf is Wyrm:
+					(pf as Wyrm).phase = "up"
+					pf.global_position = od.centre
+					dist = 11.0
+					hgt = 3.5
+				elif pf is Carrion:
+					(pf as Carrion).phase = "perch"
+					pf.global_position = od.centre
+					dist = 10.0
+					hgt = 2.4
+				elif pf is IronSentinel:
+					dist = 8.0
+					hgt = 2.0
+				elif pf is HollowWarden:
+					(pf as HollowWarden).dormant = false
+				elif pf is Bellkeeper:
+					dist = 7.5
+					hgt = 2.4
+				# In front of it, whichever way its body faces.
+				# A bot looks down its -Z (the rig turns its model inside).
+				var front: Vector3 = -pf.global_transform.basis.z
+				front.y = 0.0
+				front = front.normalized()
+				var side := front.cross(Vector3.UP)
+				if kind == "sister":
+					cam_look = od.centre + Vector3(1.2, 1.3, 0)
+					cam_pos = od.centre + Vector3(1.2, 1.6, 0) + front * 7.0
+				else:
+					cam_look = pf.global_position + Vector3(0, hgt * 0.8, 0)
+					cam_pos = pf.global_position + Vector3(0, hgt, 0) + front * dist + side * dist * 0.25
 		if OS.get_cmdline_user_args().has("--uk"):
 			var ukf := od._spawn("unkindled", od.centre)
 			ukf.set_physics_process(false)
@@ -7417,6 +7467,65 @@ func _run_echo_test() -> void:
 	get_tree().quit()
 
 
+## Bullets find the whole of a boss: wing tips, an arched neck, a bell.
+func _run_hitbox_test() -> void:
+	_start_match()
+	for i in 30:
+		await get_tree().physics_frame
+	_land_player_now()
+	var space := get_world_3d().direct_space_state
+	var shoot := func(from: Vector3, to: Vector3) -> Object:
+		var q := PhysicsRayQueryParameters3D.create(from, to, Ballistics.MASK)
+		q.exclude = [player.get_rid()]
+		var hit := space.intersect_ray(q)
+		return hit.get("collider") if not hit.is_empty() else null
+	for b in bots:
+		if not (is_instance_valid(b) and b is Revenant):
+			continue
+		if b is Wyrm:
+			var wy: Wyrm = b
+			wy.phase = "up"
+			wy._t = 99.0
+			wy.global_position = ground_at(wy.arena + Vector3.UP * 20.0)
+			wy.rotation.y = 0.0
+			for f in 3:
+				await get_tree().physics_frame
+			var head: Vector3 = wy.global_transform * Vector3(0, (Wyrm.HEIGHT - 1.4) - 0.6 + 0.7, -2.7)
+			var mid: Vector3 = wy.global_transform * Vector3(0, 2.6, -0.95)
+			var c1 = shoot.call(head + Vector3(8, 0, 0), head)
+			var c2 = shoot.call(mid + Vector3(8, 0, 0), mid)
+			print("[hitbox] wyrm head hit=%s (headshot %s), arch hit=%s" % [str(c1 == wy), str(head.y >= wy.head_y()), str(c2 == wy)])
+			_check("the wyrm's head can be shot, and it is its weak point", c1 == wy and head.y >= wy.head_y())
+			_check("the wyrm's arched neck can be shot", c2 == wy)
+		elif b is Carrion:
+			var cr: Carrion = b
+			cr.phase = "perch"
+			cr._t = 99.0
+			cr.global_position = ground_at(cr.arena + Vector3.UP * 20.0) + Vector3.UP * 0.1
+			cr.rotation.y = 0.0
+			for f in 3:
+				await get_tree().physics_frame
+			cr._process(0.016)
+			var tip: Vector3 = cr.wing_tip(1)
+			var tail: Vector3 = cr.global_transform * Vector3(0.0, 1.45, 1.9)
+			var c3 = shoot.call(tip + Vector3.UP * 6.0, tip)
+			var c4 = shoot.call(tail + Vector3.UP * 6.0, tail)
+			print("[hitbox] carrion wing tip hit=%s, tail hit=%s" % [str(c3 == cr), str(c4 == cr)])
+			_check("the carrion queen's wing tips can be shot", c3 == cr)
+			_check("her long body can be shot, head to tail", c4 == cr)
+		elif b is Bellkeeper and not (b is Unkindled):
+			var bk: Bellkeeper = b
+			bk.set_physics_process(false)
+			for f in 3:
+				await get_tree().physics_frame
+			var bell: Vector3 = bk.global_position + Vector3(0, 3.25, 0)
+			var c5 = shoot.call(bell + Vector3(6, 0, 0), bell)
+			print("[hitbox] bell hit=%s (headshot %s) collider=%s layer=%d dist=%d shapes=%d" % [str(c5 == bk), str(bell.y >= bk.head_y()), str(c5), bk.collision_layer, int(bk.global_position.distance_to(player.global_position)), bk.find_children("*", "CollisionShape3D", false, false).size()])
+			_check("the bell can be struck, and it is a weak point", c5 == bk and bell.y >= bk.head_y())
+	print("[hitbox] done")
+	get_tree().quit()
+
+
 ## Souls mode: ashore at a shrine, the keepers on the map, YOU DIED and back,
 ## rest, all thirteen, the Unkindled, the isle free.
 func _run_souls_test() -> void:
@@ -7625,8 +7734,11 @@ func _run_witch_test() -> void:
 		lw.set_physics_process(true)
 		player.global_position = spot
 		player.velocity = Vector3.ZERO
-		for i in 10:
+		# Let the player come to rest on the ground first.
+		for i in 60:
 			await get_tree().physics_frame
+			if i >= 10 and player.is_on_floor():
+				break
 		lw._hit_by.clear()
 		lw._sweep_t = 999.0
 		lw._lantern_t = 999.0
@@ -7635,11 +7747,14 @@ func _run_witch_test() -> void:
 		var a0 := atan2(off.z, off.x) - 1.2
 		lw._beams = [{"a0": a0, "spin": LanternWitch.BEAM_SPIN, "high": high, "t": 0.0, "last": a0}]
 		var h0 := lw.beam_hits
+		var wpos := lw.global_position
 		if how == "crouch":
 			Input.action_press("crouch")
 		for i in 60 * 3:
 			await get_tree().physics_frame
 			player.hp = 100.0
+			# She stands where she cast it (the beams turn about her).
+			lw.global_position = wpos
 			if how == "jump":
 				player.global_position = Vector3(spot.x, spot.y + 1.6, spot.z)
 				player.velocity = Vector3.ZERO
@@ -7649,7 +7764,7 @@ func _run_witch_test() -> void:
 				break
 		Input.action_release("crouch")
 		var struck := lw.beam_hits > h0
-		print("[witch] %s beam, you %s: struck %s" % ["high" if high else "low", how, str(struck)])
+		print("[witch] %s beam, you %s: struck %s (%.1f m off, floor %s, witch alive %s)" % ["high" if high else "low", how, str(struck), Vector2(player.global_position.x - lw.global_position.x, player.global_position.z - lw.global_position.z).length(), str(player.is_on_floor()), str(lw.alive)])
 		_check("%s beam, %s: %s" % ["high" if high else "low", how, "struck" if c[2] else "passes"], struck == bool(c[2]))
 	var em := writs.my_embers
 	_test_fell(lw)

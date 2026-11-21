@@ -37,6 +37,7 @@ var _spit_t := 0.0
 var _encore := false
 var _segs: Array[Node3D] = []
 var _head: Node3D
+var _jaws: Array[Node3D] = []
 ## Eruptions that struck the local player (for the checks).
 var erupt_hits := 0
 
@@ -48,6 +49,8 @@ func setup_wyrm(p_arena: Vector3, p_game: Node) -> void:
 	volleys = false
 	regen_rate = 3.0
 	set_meta("wyrm", true)
+	aura_color = Color(0.55, 1.0, 0.35)
+	aura_size = 2.0
 
 
 func display_name() -> String:
@@ -62,113 +65,269 @@ func _ready() -> void:
 		_glow.light_color = Color(0.5, 1.0, 0.4)
 		_glow.position = Vector3(0, HEIGHT - 0.8, 0)
 		glow_base = 0.7
-	head_offset = HEIGHT - 0.6
+	# Its head is the weak point: headshots from where the maw sits.
+	head_offset = HEIGHT - 1.6
 	if _cap != null:
-		_cap.radius = 1.15
-		_cap.height = HEIGHT + 0.4
-		_col.position.y = (HEIGHT + 0.4) * 0.5
+		# The capsule holds the trunk; spheres follow the arch up to the head.
+		_cap.radius = 1.2
+		_cap.height = 3.4
+		_col.position.y = 1.7
+	for k: float in [0.45, 0.65, 0.82, 1.0]:
+		var sp := SphereShape3D.new()
+		sp.radius = lerpf(1.15, 0.9, k)
+		add_hit_shape(sp, Vector3(0, k * (HEIGHT - 1.4) - k * k * 0.6, -k * k * 2.2))
+	var hs := SphereShape3D.new()
+	hs.radius = 0.95
+	add_hit_shape(hs, Vector3(0, (HEIGHT - 1.4) - 0.6 + 0.7, -2.2 - 0.5))
+	# And the open maw thrust out at you, jaws and all.
+	var ms := SphereShape3D.new()
+	ms.radius = 0.9
+	add_hit_shape(ms, Vector3(0, (HEIGHT - 1.4) - 0.6 + 0.6, -3.9))
 	_build_body()
 
 
 func _build_body() -> void:
 	var hide := StandardMaterial3D.new()
-	hide.albedo_color = Color(0.32, 0.27, 0.22)
-	hide.roughness = 0.75
+	hide.albedo_color = Color(0.15, 0.135, 0.115)
+	hide.roughness = 0.38
+	hide.metallic = 0.25
+	hide.metallic_specular = 0.7
+	var plate := StandardMaterial3D.new()
+	plate.albedo_color = Color(0.2, 0.18, 0.15)
+	plate.roughness = 0.5
+	plate.metallic = 0.2
 	var belly := StandardMaterial3D.new()
-	belly.albedo_color = Color(0.55, 0.45, 0.32)
-	belly.roughness = 0.6
-	var n := 7
+	belly.albedo_color = Color(0.38, 0.33, 0.25)
+	belly.roughness = 0.7
+	var bone := StandardMaterial3D.new()
+	bone.albedo_color = Color(0.82, 0.78, 0.66)
+	bone.roughness = 0.6
+	var sick := StandardMaterial3D.new()
+	sick.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	sick.albedo_color = Color(0.55, 1.0, 0.25)
+	sick.emission_enabled = true
+	sick.emission = Color(0.45, 1.0, 0.15)
+	sick.emission_energy_multiplier = 4.0
+	var n := 8
 	for i in n:
 		var k := float(i) / float(n - 1)
 		var seg := Node3D.new()
 		seg.position = Vector3(0, k * (HEIGHT - 1.4), 0)
 		add_child(seg)
+		var r := lerpf(1.3, 0.85, k)
 		var sm := SphereMesh.new()
-		var r := lerpf(1.25, 0.85, k)
 		sm.radius = r
-		sm.height = r * 1.7
+		sm.height = r * 1.6
 		sm.radial_segments = 14
 		sm.rings = 7
 		var mi := MeshInstance3D.new()
 		mi.mesh = sm
-		mi.material_override = hide if i % 2 == 0 else belly
+		mi.material_override = hide
 		seg.add_child(mi)
+		# A pale ribbed belly on the front of each ring.
+		var bm := SphereMesh.new()
+		bm.radius = r * 0.75
+		bm.height = r * 1.2
+		bm.radial_segments = 10
+		bm.rings = 5
+		var bl := MeshInstance3D.new()
+		bl.mesh = bm
+		bl.material_override = belly
+		bl.position = Vector3(0, 0, -r * 0.42)
+		bl.scale = Vector3(1.0, 0.8, 0.6)
+		seg.add_child(bl)
+		# Overlapping armour plates on its back, and a ridge of bone spines.
+		var pm := BoxMesh.new()
+		pm.size = Vector3(r * 1.5, r * 0.5, r * 0.9)
+		var pl := MeshInstance3D.new()
+		pl.mesh = pm
+		pl.material_override = plate
+		pl.position = Vector3(0, r * 0.15, r * 0.62)
+		pl.rotation.x = -0.35
+		seg.add_child(pl)
+		for sx: float in [-0.35, 0.0, 0.35]:
+			var cm := CylinderMesh.new()
+			cm.top_radius = 0.0
+			cm.bottom_radius = 0.11 * r
+			cm.height = (0.95 if sx == 0.0 else 0.6) * r
+			cm.radial_segments = 5
+			cm.rings = 1
+			var sp := MeshInstance3D.new()
+			sp.mesh = cm
+			sp.material_override = bone
+			sp.position = Vector3(sx * r, r * 0.35, r * 0.95)
+			sp.rotation = Vector3(1.05, 0, -sx * 1.2)
+			seg.add_child(sp)
+		# Weeping sores of green fire.
+		if i % 3 == 1:
+			for q in 2:
+				var a := (float(q) - 0.5) * 2.1 + float(i)
+				var gm := SphereMesh.new()
+				gm.radius = 0.08
+				gm.height = 0.16
+				var g := MeshInstance3D.new()
+				g.mesh = gm
+				g.material_override = sick
+				g.position = Vector3(sin(a) * r * 0.97, 0.05, cos(a) * r * 0.97)
+				g.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+				seg.add_child(g)
 		_segs.append(seg)
-	# Broken earth heaped round where it stands.
+	# Broken earth and slabs of rock heaved up round where it stands.
 	var dirt := StandardMaterial3D.new()
-	dirt.albedo_color = Color(0.3, 0.22, 0.14)
+	dirt.albedo_color = Color(0.22, 0.17, 0.12)
 	dirt.roughness = 1.0
-	for j in 7:
-		var a := TAU * float(j) / 7.0
-		var rm := SphereMesh.new()
-		rm.radius = randf_range(0.6, 1.0)
-		rm.height = rm.radius * 1.2
-		rm.radial_segments = 6
-		rm.rings = 3
+	for j in 9:
+		var a := TAU * float(j) / 9.0 + randf_range(-0.2, 0.2)
+		var rm := BoxMesh.new()
+		rm.size = Vector3(randf_range(0.9, 1.6), randf_range(0.25, 0.45), randf_range(0.8, 1.3))
 		var rk := MeshInstance3D.new()
 		rk.mesh = rm
 		rk.material_override = dirt
-		rk.position = Vector3(cos(a) * 1.7, 0.1, sin(a) * 1.7)
-		rk.scale = Vector3(1.0, 0.55, 1.0)
+		rk.position = Vector3(cos(a) * 1.9, 0.15, sin(a) * 1.9)
+		rk.rotation = Vector3(randf_range(-0.2, 0.2), -a, 0.45 + randf_range(-0.15, 0.15))
 		add_child(rk)
-	# The head: a blunt maw of plates, a ring of teeth, small green eyes.
+	# The head: an armoured skull whose maw splits into four hooked jaws,
+	# rows of teeth spiralling into a throat of green fire.
 	_head = Node3D.new()
 	_head.position = Vector3(0, HEIGHT - 0.9, 0)
 	add_child(_head)
 	var hm := CylinderMesh.new()
-	hm.top_radius = 0.75
-	hm.bottom_radius = 1.05
-	hm.height = 1.5
-	hm.radial_segments = 10
+	hm.top_radius = 0.9
+	hm.bottom_radius = 1.0
+	hm.height = 1.2
+	hm.radial_segments = 12
+	hm.cap_top = false
 	var hmi := MeshInstance3D.new()
 	hmi.mesh = hm
 	hmi.material_override = hide
-	hmi.rotation.x = -0.5
-	hmi.position = Vector3(0, 0.3, -0.25)
 	_head.add_child(hmi)
-	var tooth := StandardMaterial3D.new()
-	tooth.albedo_color = Color(0.9, 0.88, 0.78)
-	for t in 10:
-		var a := TAU * float(t) / 10.0
-		var tm := PrismMesh.new()
-		tm.size = Vector3(0.14, 0.32, 0.1)
-		var ti := MeshInstance3D.new()
-		ti.mesh = tm
-		ti.material_override = tooth
-		ti.position = Vector3(cos(a) * 0.5, 0.95, -0.55 + sin(a) * 0.5)
-		ti.rotation.x = PI
-		_head.add_child(ti)
-	var eye := StandardMaterial3D.new()
-	eye.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	eye.albedo_color = Color(0.6, 1.0, 0.3)
-	eye.emission_enabled = true
-	eye.emission = Color(0.5, 1.0, 0.2)
-	eye.emission_energy_multiplier = 5.0
-	for sx: float in [-0.42, 0.42]:
+	var cap := BoxMesh.new()
+	cap.size = Vector3(1.6, 0.35, 1.3)
+	var cp := MeshInstance3D.new()
+	cp.mesh = cap
+	cp.material_override = plate
+	cp.position = Vector3(0, 0.2, 0.75)
+	cp.rotation.x = 0.5
+	_head.add_child(cp)
+	var flesh := StandardMaterial3D.new()
+	flesh.albedo_color = Color(0.26, 0.035, 0.03)
+	flesh.roughness = 0.3
+	flesh.metallic_specular = 0.9
+	flesh.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var throat := MeshInstance3D.new()
+	var tm := CylinderMesh.new()
+	tm.top_radius = 0.72
+	tm.bottom_radius = 0.2
+	tm.height = 0.7
+	tm.cap_top = false
+	tm.radial_segments = 12
+	throat.mesh = tm
+	throat.material_override = flesh
+	throat.position = Vector3(0, 0.3, 0)
+	_head.add_child(throat)
+	var core := MeshInstance3D.new()
+	var co := SphereMesh.new()
+	co.radius = 0.28
+	co.height = 0.56
+	core.mesh = co
+	core.material_override = sick
+	core.position = Vector3(0, 0.05, 0)
+	_head.add_child(core)
+	for row in 2:
+		var rr := 0.62 - 0.22 * row
+		var cnt := 12 - 3 * row
+		for t in cnt:
+			var a := TAU * (float(t) + 0.5 * row) / float(cnt)
+			var tc := CylinderMesh.new()
+			tc.top_radius = 0.0
+			tc.bottom_radius = 0.06
+			tc.height = 0.42 - 0.1 * row
+			tc.radial_segments = 4
+			tc.rings = 1
+			var ti := MeshInstance3D.new()
+			ti.mesh = tc
+			ti.material_override = bone
+			ti.position = Vector3(cos(a) * rr, 0.55 - 0.15 * row, sin(a) * rr)
+			# Leaning inward, toward the throat.
+			ti.basis = Basis(Quaternion(Vector3.UP, (Vector3(-cos(a), 0.9, -sin(a))).normalized()))
+			_head.add_child(ti)
+	_jaws.clear()
+	for j in 4:
+		var a := TAU * float(j) / 4.0 + PI * 0.25
+		var hinge := Node3D.new()
+		hinge.position = Vector3(cos(a) * 0.82, 0.55, sin(a) * 0.82)
+		hinge.rotation.y = -a
+		_head.add_child(hinge)
+		var jm := PrismMesh.new()
+		jm.size = Vector3(0.75, 1.5, 0.14)
+		var jw := MeshInstance3D.new()
+		jw.mesh = jm
+		jw.material_override = plate
+		jw.position = Vector3(0, 0.7, 0)
+		jw.rotation.y = PI * 0.5
+		hinge.add_child(jw)
+		var inner := MeshInstance3D.new()
+		var im := PrismMesh.new()
+		im.size = Vector3(0.6, 1.3, 0.05)
+		inner.mesh = im
+		inner.material_override = flesh
+		inner.position = Vector3(-0.08, 0.6, 0)
+		inner.rotation.y = PI * 0.5
+		hinge.add_child(inner)
+		# A hooked fang on each jaw's tip.
+		var fm := CylinderMesh.new()
+		fm.top_radius = 0.0
+		fm.bottom_radius = 0.08
+		fm.height = 0.5
+		fm.radial_segments = 4
+		fm.rings = 1
+		var fg := MeshInstance3D.new()
+		fg.mesh = fm
+		fg.material_override = bone
+		fg.position = Vector3(-0.2, 1.35, 0)
+		fg.rotation.z = 2.2
+		hinge.add_child(fg)
+		_jaws.append(hinge)
+	# Six small eyes in a ring under the jaws, all green.
+	for e6 in 6:
+		var a := TAU * float(e6) / 6.0 + PI / 6.0
 		var em := SphereMesh.new()
-		em.radius = 0.09
-		em.height = 0.18
+		em.radius = 0.1
+		em.height = 0.2
 		var e := MeshInstance3D.new()
 		e.mesh = em
-		e.material_override = eye
-		e.position = Vector3(sx, 0.35, -0.75)
+		e.material_override = sick
+		e.position = Vector3(cos(a) * 0.97, 0.05, sin(a) * 0.97)
 		_head.add_child(e)
 
 
 func _process(delta: float) -> void:
 	super._process(delta)
-	# It sways like something that is mostly muscle.
 	var t := Time.get_ticks_msec() * 0.001
-	# It arches forward over whatever it faces, like a snake about to strike.
+	# It arches forward over whatever it faces, like a snake about to strike,
+	# and sways like something that is mostly muscle.
 	for i in _segs.size():
 		var k := float(i) / float(maxi(1, _segs.size() - 1))
 		_segs[i].position.x = sin(t * 2.2 + k * 2.5) * 0.35 * k
 		_segs[i].position.z = -k * k * 2.2 + cos(t * 1.7 + k * 2.0) * 0.25 * k
 		_segs[i].position.y = k * (HEIGHT - 1.4) - k * k * 0.6
+		_segs[i].rotation.x = -k * 0.9
 	if _head != null and not _segs.is_empty():
 		var top := _segs[_segs.size() - 1].position
-		_head.position = Vector3(top.x, top.y + 0.7, top.z - 0.5)
-		_head.rotation.x = -0.75 + sin(t * 1.3) * 0.08
+		_head.position = Vector3(top.x, top.y + 0.6, top.z - 0.55)
+		# The maw turned down at you.
+		_head.rotation.x = -1.6 + sin(t * 1.3) * 0.08
+	# The jaws gape when it is up and hungry, and snap when it spits.
+	var open := 0.35
+	match phase:
+		"up":
+			open = 0.7 + sin(t * 3.0) * 0.12
+		"rise":
+			open = 1.0
+		"tell", "under":
+			open = 0.1
+	for jw in _jaws:
+		jw.rotation.z = lerpf(jw.rotation.z, -open, clampf(delta * 8.0, 0.0, 1.0))
 
 
 func _physics_process(delta: float) -> void:
@@ -216,7 +375,7 @@ func _physics_process(delta: float) -> void:
 			if _t <= 0.0:
 				phase = "rise"
 				_t = RISE
-				collision_layer = 1
+				collision_layer = 4
 				_erupt()
 		"rise":
 			global_position = _at - Vector3.UP * (DEPTH * clampf(_t / RISE, 0.0, 1.0))
@@ -233,7 +392,7 @@ func _physics_process(delta: float) -> void:
 					_spits = 2
 					_spit_t = 0.8
 		"up":
-			collision_layer = 1
+			collision_layer = 4
 			global_position = _at
 			if tgt != null:
 				var d := tgt.global_position - global_position

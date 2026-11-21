@@ -108,15 +108,28 @@ export_one() {
 	[ -f "${out}" ] || die "export of ${preset} failed"
 }
 
+# The build's date and time, shown on the main menu.
+BUILD_DAY="$(date -u +%Y-%m-%d)"
+BUILD_STAMP="$(date -u +%Y-%m-%d\ %H:%M) UTC"
+cat > "${ROOT}/scripts/build_info.gd" <<EOF
+class_name BuildInfo
+extends RefCounted
+## Written by build.sh: when this build was made (shown on the main menu).
+const STAMP := "${BUILD_STAMP}"
+EOF
+
 # A zip with one clearly named folder: the game and a read-me.
 package() {
 	local plat="$1" name="$2" exe="$3"
 	local stage="${ROOT}/build/.stage"
-	rm -rf "${stage}" && mkdir -p "${stage}/${name}"
-	cp "${ROOT}/build/${plat}/${exe}" "${stage}/${name}/"
-	cp "${ROOT}/tools/README.txt" "${stage}/${name}/README.txt"
-	chmod +x "${stage}/${name}/${exe}"
-	(cd "${stage}" && rm -f "${ROOT}/build/${name}.zip" && zip -q -9 -r "${ROOT}/build/${name}.zip" "${name}")
+	# The folder inside carries the build's date: unzipping a new build never
+	# lands on (or is skipped in favour of) an old one.
+	local dir="${name}-${BUILD_DAY}"
+	rm -rf "${stage}" && mkdir -p "${stage}/${dir}"
+	cp "${ROOT}/build/${plat}/${exe}" "${stage}/${dir}/"
+	cp "${ROOT}/tools/README.txt" "${stage}/${dir}/README.txt"
+	chmod +x "${stage}/${dir}/${exe}"
+	(cd "${stage}" && rm -f "${ROOT}/build/${name}.zip" && zip -q -9 -r "${ROOT}/build/${name}.zip" "${dir}")
 	rm -rf "${stage}"
 }
 

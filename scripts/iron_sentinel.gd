@@ -38,6 +38,12 @@ func setup_sentinel(p_arena: Vector3, p_game: Node) -> void:
 	regen_rate = 2.5
 	shoot_skill = 0.55
 	set_meta("sentinel", true)
+	aura_color = Color(1.0, 0.55, 0.18)
+	aura_size = 1.5
+	cloak_color = Color(0, 0, 0, 0)
+	crown = "spikes"
+	# The furnace inside it shows through the seams of its plate.
+	embers = true
 
 
 func display_name() -> String:

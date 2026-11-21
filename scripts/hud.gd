@@ -2402,7 +2402,7 @@ func set_mates(list: Array) -> void:
 
 func set_match_size(n: int) -> void:
 	if menu_kicker != null:
-		var src := "ISLAND DROP  ·  %d PLAYERS  ·  SOLO" % n
+		var src := "THE ISLE OF EMBERS  ·  %d PLAYERS  ·  13 BOSSES" % n
 		var spaced := ""
 		for i in src.length():
 			spaced += src[i] + (" " if i < src.length() - 1 else "")
@@ -2417,7 +2417,7 @@ func show_menu(seed_text: String) -> void:
 	set_gameplay_visible(false)
 	lbl_spectate.text = ""
 	if menu_seed != null:
-		menu_seed.text = seed_text
+		menu_seed.text = "%s   ·   BUILD %s" % [seed_text, BuildInfo.STAMP]
 	if menu_ordeal_rec != null:
 		menu_ordeal_rec.text = Ordeal.record_line()
 

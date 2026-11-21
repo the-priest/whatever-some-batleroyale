@@ -41,6 +41,11 @@ func setup_witch(p_arena: Vector3, p_game: Node) -> void:
 	regen_rate = 3.0
 	shoot_skill = 0.55
 	set_meta("witch", true)
+	aura_color = Color(0.78, 0.58, 1.0)
+	aura_size = 1.2
+	cloak_color = Color(0.2, 0.1, 0.28)
+	cloak_long = 1.45
+	crown = "hood"
 
 
 func display_name() -> String:
@@ -56,10 +61,11 @@ func _ready() -> void:
 			var sm := m.get_surface_override_material(0)
 			if sm is ShaderMaterial:
 				var camo := (sm as ShaderMaterial).duplicate() as ShaderMaterial
-				camo.set_shader_parameter("c_base", Color(0.78, 0.76, 0.8))
-				camo.set_shader_parameter("c_a", Color(0.6, 0.55, 0.75))
-				camo.set_shader_parameter("c_b", Color(0.9, 0.88, 0.9))
-				camo.set_shader_parameter("c_c", Color(0.35, 0.3, 0.45))
+				# Robes of violet so deep they are nearly black.
+				camo.set_shader_parameter("c_base", Color(0.12, 0.08, 0.15))
+				camo.set_shader_parameter("c_a", Color(0.21, 0.12, 0.27))
+				camo.set_shader_parameter("c_b", Color(0.09, 0.06, 0.11))
+				camo.set_shader_parameter("c_c", Color(0.05, 0.035, 0.06))
 				m.set_surface_override_material(0, camo)
 	# Her lantern, held high.
 	var lan := Node3D.new()

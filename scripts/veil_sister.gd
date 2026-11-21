@@ -36,6 +36,9 @@ func setup_sister(p_name: String, p_arena: Vector3, p_game: Node, p_elder: bool)
 	shoot_skill = 0.7
 	reaction = 0.25
 	set_meta("sister", true)
+	aura_color = Color(0.72, 0.82, 1.0)
+	cloak_color = Color(0.7, 0.72, 0.78)
+	crown = ""
 	helmet_level = 0
 	if not elder:
 		_cross_t = 4.0
@@ -59,7 +62,7 @@ func _ready() -> void:
 				camo.set_shader_parameter("c_base", tint)
 				camo.set_shader_parameter("c_a", tint.lightened(0.15))
 				camo.set_shader_parameter("c_b", tint.darkened(0.25))
-				camo.set_shader_parameter("c_c", Color(0.25, 0.25, 0.3))
+				camo.set_shader_parameter("c_c", tint.darkened(0.35))
 				m.set_surface_override_material(0, camo)
 	if _glow != null:
 		_glow.light_color = Color(0.7, 0.8, 1.0)

@@ -1221,6 +1221,46 @@ func hide_trees(c: Vector3, r: float) -> int:
 	return n
 
 
+## Rocks: [pos, multimesh, index, collision shape or null].
+var _rocks: Array = []
+var _rock_bodies: Array[RID] = []
+var _rocks_hidden: Array = []
+
+
+## Rocks and pebbles within r of c lifted away (a boss ring's floor).
+func hide_rocks(c: Vector3, r: float) -> int:
+	var c2 := Vector2(c.x, c.z)
+	var n := 0
+	for rk in _rocks:
+		var p: Vector3 = rk[0]
+		if Vector2(p.x, p.z).distance_to(c2) > r:
+			continue
+		var mm: MultiMesh = rk[1]
+		_rocks_hidden.append([rk, mm.get_instance_transform(rk[2])])
+		mm.set_instance_transform(rk[2], Transform3D(Basis().scaled(Vector3.ONE * 0.0001), p + Vector3.DOWN * 50.0))
+		if rk[3] != null:
+			(rk[3] as CollisionShape3D).disabled = true
+		n += 1
+	return n
+
+
+func restore_rocks() -> void:
+	for h in _rocks_hidden:
+		var rk: Array = h[0]
+		(rk[1] as MultiMesh).set_instance_transform(rk[2], h[1])
+		if rk[3] != null:
+			(rk[3] as CollisionShape3D).disabled = false
+	_rocks_hidden.clear()
+
+
+## Bodies that are only trees and rocks (cleared away for a ring).
+func clutter_rids() -> Array[RID]:
+	var out: Array[RID] = _rock_bodies.duplicate()
+	if _tree_body != null:
+		out.append(_tree_body.get_rid())
+	return out
+
+
 func restore_trees() -> void:
 	if _tree_body == null:
 		return
@@ -1510,6 +1550,8 @@ func _scatter_ground_cover() -> void:
 				var it: Dictionary = arr[i]
 				mm.set_instance_transform(i, Transform3D(
 					Basis(Vector3.UP, it.rot).scaled(Vector3.ONE * it.scale), it.pos))
+				it["mm"] = mm
+				it["i"] = i
 			var mmi := MultiMeshInstance3D.new()
 			mmi.name = "G_%s_%s" % [k.name, key]
 			mmi.multimesh = mm
@@ -1594,6 +1636,8 @@ func _scatter_rocks() -> void:
 				var it: Dictionary = arr[i]
 				mm.set_instance_transform(i, Transform3D(
 					Basis(Vector3.UP, it.rot).scaled(Vector3.ONE * it.scale), it.pos))
+				it["mm"] = mm
+				it["i"] = i
 			var mmi := MultiMeshInstance3D.new()
 			mmi.name = "R_%s_%s" % [k, key]
 			mmi.multimesh = mm
@@ -1603,6 +1647,8 @@ func _scatter_rocks() -> void:
 		stats.rocks += list.size()
 		# Rocks stop bullets and bodies. Pebbles do not.
 		if k == "Pebble_Round_1":
+			for it in list:
+				_rocks.append([it.pos, it.mm, it.i, null])
 			continue
 		var body := StaticBody3D.new()
 		body.name = "RockCollision_" + k
@@ -1611,13 +1657,16 @@ func _scatter_rocks() -> void:
 		for it in list:
 			var sc: float = it.scale
 			if sc < 0.6:
+				_rocks.append([it.pos, it.mm, it.i, null])
 				continue
 			var cs := CollisionShape3D.new()
 			cs.shape = _mesh_shape(k, "")
 			cs.transform = Transform3D(Basis(Vector3.UP, it.rot).scaled(Vector3.ONE * sc), Vector3(it.pos))
 			body.add_child(cs)
 			stats.colliders += 1
+			_rocks.append([it.pos, it.mm, it.i, cs])
 		add_child(body)
+		_rock_bodies.append(body.get_rid())
 
 
 func _build_wild_loot() -> void:
@@ -2070,6 +2119,8 @@ func _fill_gaps() -> void:
 				var it: Dictionary = arr[i]
 				mm.set_instance_transform(i, Transform3D(
 					Basis(Vector3.UP, it.rot).scaled(Vector3.ONE * it.scale), it.pos))
+				it["mm"] = mm
+				it["i"] = i
 			var mmi := MultiMeshInstance3D.new()
 			mmi.name = "Gf_%s_%s" % [k.name, key]
 			mmi.multimesh = mm

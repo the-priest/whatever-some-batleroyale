@@ -35,6 +35,16 @@ var _away_t := 0.0
 var glow_base := 0.9
 var calm_before_regen := 5.0
 var raged := false
+## The motes that drift up round it (embers, ash, spores, feathers...).
+var aura_color := Color(1.0, 0.32, 0.14)
+var aura_size := 1.0
+## Its silhouette: a ragged cloak (clear: none), and what crowns its head
+## ("horns", "spikes", "great_horns" or "").
+var cloak_color := Color(0.32, 0.04, 0.04)
+var cloak_long := 1.0
+var crown := "horns"
+## Cracks of fire across the body and a burning heart (the giants).
+var embers := false
 var _volley_t := 6.0
 var _calm := 0.0
 var _rings: Array[Node3D] = []
@@ -76,35 +86,37 @@ func _ready() -> void:
 			var sm := m.get_surface_override_material(0)
 			if sm is ShaderMaterial:
 				var camo := (sm as ShaderMaterial).duplicate() as ShaderMaterial
-				camo.set_shader_parameter("c_base", Color(0.17, 0.16, 0.16))
-				camo.set_shader_parameter("c_a", Color(0.48, 0.07, 0.05))
-				camo.set_shader_parameter("c_b", Color(0.26, 0.24, 0.23))
+				camo.set_shader_parameter("c_base", Color(0.12, 0.11, 0.11))
+				camo.set_shader_parameter("c_a", Color(0.27, 0.035, 0.03))
+				camo.set_shader_parameter("c_b", Color(0.19, 0.17, 0.16))
 				camo.set_shader_parameter("c_c", Color(0.07, 0.065, 0.065))
 				m.set_surface_override_material(0, camo)
 		# Eyes that burn in the dark of the helmet.
 		var k := 1.12
-		var eyes := body._attach("Head", Transform3D(Basis.IDENTITY, Vector3(0, 1.62 * k, 0.11 * k)))
+		var eyes := body._attach("Head", Transform3D(Basis.IDENTITY, Vector3(0, 1.62 * k, -0.11 * k)))
 		var em := StandardMaterial3D.new()
 		em.albedo_color = Color(1.0, 0.3, 0.12)
 		em.emission_enabled = true
 		em.emission = Color(1.0, 0.25, 0.08)
-		em.emission_energy_multiplier = 6.0
+		em.emission_energy_multiplier = 9.0
 		em.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		for sx: float in [-0.036, 0.036]:
+		for sx: float in [-0.04, 0.04]:
 			var e := MeshInstance3D.new()
 			var bm := BoxMesh.new()
-			bm.size = Vector3(0.03, 0.012, 0.01)
+			bm.size = Vector3(0.045, 0.018, 0.012)
 			e.mesh = bm
 			e.material_override = em
 			e.position = Vector3(sx, 0, 0)
 			e.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 			eyes.add_child(e)
 		body.helmet.visible = true
+		_add_menace(k)
 	head_offset = 1.66
 	if _cap != null:
 		_cap.radius = 0.4
 		_cap.height = 1.98
 		_col.position.y = 0.99
+	_add_aura()
 	_glow = OmniLight3D.new()
 	_glow.light_color = Color(1.0, 0.25, 0.15)
 	_glow.light_energy = 0.9
@@ -112,6 +124,327 @@ func _ready() -> void:
 	_glow.position = Vector3(0, 1.4, 0)
 	_glow.shadow_enabled = false
 	add_child(_glow)
+
+
+## What makes it a boss at a glance: a ragged cloak streaming from its
+## shoulders, horns or a crown of iron spikes.
+func _add_menace(k: float) -> void:
+	# No soldier's backpack on a boss.
+	if not body._extra_kit.is_empty():
+		var pack: Node3D = body._extra_kit[0]
+		body._extra_kit.erase(pack)
+		pack.queue_free()
+	if cloak_color.a > 0.01:
+		# (A body looks down its -Z: the cloak hangs at +Z, behind.)
+		var back := body._attach("spine_03", Transform3D(Basis.IDENTITY, Vector3(0, 1.42 * k, 0.17 * k)))
+		var cm := StandardMaterial3D.new()
+		cm.albedo_color = cloak_color
+		cm.roughness = 1.0
+		cm.cull_mode = BaseMaterial3D.CULL_DISABLED
+		var mi := MeshInstance3D.new()
+		mi.mesh = _cloak_mesh(0.46 * k, 0.95 * k, 1.25 * k * cloak_long)
+		mi.material_override = cm
+		mi.rotation.x = -0.12
+		back.add_child(mi)
+	if embers:
+		_add_embers(k)
+	if crown == "hood":
+		_add_hood(k)
+		return
+	if crown == "":
+		return
+	# Spiked pauldrons of black iron on both shoulders.
+	var iron := StandardMaterial3D.new()
+	iron.albedo_color = Color(0.11, 0.1, 0.1)
+	iron.metallic = 0.75
+	iron.roughness = 0.38
+	var spike_m := StandardMaterial3D.new()
+	spike_m.albedo_color = Color(0.2, 0.18, 0.17)
+	spike_m.metallic = 0.6
+	spike_m.roughness = 0.45
+	for side: float in [-1.0, 1.0]:
+		var sh := body._attach("upperarm_l" if side < 0.0 else "upperarm_r", Transform3D(Basis.IDENTITY, Vector3(side * 0.19 * k, 1.47 * k, 0.0)))
+		var pm := SphereMesh.new()
+		pm.radius = 0.13 * k
+		pm.height = 0.18 * k
+		pm.is_hemisphere = true
+		pm.radial_segments = 10
+		pm.rings = 4
+		var pd := MeshInstance3D.new()
+		pd.mesh = pm
+		pd.material_override = iron
+		pd.scale = Vector3(1.15, 1.0, 1.25)
+		pd.rotation.z = -side * 0.35
+		sh.add_child(pd)
+		for j in 3:
+			var cm := CylinderMesh.new()
+			cm.top_radius = 0.0
+			cm.bottom_radius = 0.022 * k
+			cm.height = (0.2 - 0.04 * absf(float(j) - 1.0)) * k
+			cm.radial_segments = 5
+			cm.rings = 1
+			var sp := MeshInstance3D.new()
+			sp.mesh = cm
+			sp.material_override = spike_m
+			sp.position = Vector3(side * 0.04 * k, 0.1 * k, (float(j) - 1.0) * 0.07 * k)
+			sp.rotation = Vector3(0.0, 0.0, -side * 0.55)
+			sh.add_child(sp)
+	var head := body._attach("Head", Transform3D(Basis.IDENTITY, Vector3(0, 1.72 * k, -0.02 * k)))
+	var bone := StandardMaterial3D.new()
+	bone.albedo_color = Color(0.82, 0.78, 0.68) if crown != "spikes" else Color(0.14, 0.13, 0.13)
+	bone.roughness = 0.6
+	bone.metallic = 0.0 if crown != "spikes" else 0.7
+	if crown == "spikes":
+		# A ring of iron spikes all round the head, tallest at the brow.
+		for i in 9:
+			var a := TAU * float(i) / 9.0
+			var sp := CylinderMesh.new()
+			sp.top_radius = 0.0
+			sp.bottom_radius = 0.025
+			sp.height = 0.17 + 0.12 * (0.5 + 0.5 * cos(a))
+			sp.radial_segments = 5
+			var m := MeshInstance3D.new()
+			m.mesh = sp
+			m.material_override = bone
+			m.position = Vector3(sin(a) * 0.13, 0.08, -cos(a) * 0.13 - 0.02)
+			m.rotation = Vector3(-cos(a) * 0.35, 0.0, -sin(a) * 0.35)
+			head.add_child(m)
+		return
+	var big := crown == "great_horns"
+	for side: float in [-1.0, 1.0]:
+		# Three segments that sweep out, up and forward: a horn.
+		var root := Node3D.new()
+		root.position = Vector3(side * 0.11, 0.06, 0.0)
+		root.rotation = Vector3(-0.25, 0.0, side * -0.9)
+		head.add_child(root)
+		var seg_len := 0.15 * (1.6 if big else 1.0)
+		var r := 0.05 * (1.5 if big else 1.0)
+		var at := root
+		for j in 3:
+			var cy := CylinderMesh.new()
+			cy.top_radius = r * (0.65 - 0.2 * float(j)) if j < 2 else 0.0
+			cy.bottom_radius = r * (1.0 - 0.3 * float(j))
+			cy.height = seg_len
+			cy.radial_segments = 6
+			var m := MeshInstance3D.new()
+			m.mesh = cy
+			m.material_override = bone
+			m.position = Vector3(0, seg_len * 0.5, 0)
+			at.add_child(m)
+			var nxt := Node3D.new()
+			nxt.position = Vector3(0, seg_len, 0)
+			nxt.rotation = Vector3(-0.35, 0.0, side * 0.55)
+			at.add_child(nxt)
+			at = nxt
+
+
+## A deep cowl over the head; nothing inside but two eyes.
+func _add_hood(k: float) -> void:
+	if body.helmet != null:
+		body.helmet.visible = false
+	var head := body._attach("Head", Transform3D(Basis.IDENTITY, Vector3(0, 1.66 * k, 0.03 * k)))
+	var cloth := StandardMaterial3D.new()
+	cloth.albedo_color = cloak_color.darkened(0.15)
+	cloth.roughness = 1.0
+	cloth.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var hm := CylinderMesh.new()
+	hm.top_radius = 0.02
+	hm.bottom_radius = 0.2 * k
+	hm.height = 0.5 * k
+	hm.radial_segments = 12
+	hm.cap_top = false
+	hm.cap_bottom = false
+	var hood := MeshInstance3D.new()
+	hood.mesh = hm
+	hood.material_override = cloth
+	hood.rotation.x = 0.22
+	hood.position = Vector3(0, 0.02 * k, 0.02 * k)
+	head.add_child(hood)
+	# The dark inside the cowl, where a face should be.
+	var void_m := StandardMaterial3D.new()
+	void_m.albedo_color = Color(0.0, 0.0, 0.0)
+	void_m.roughness = 1.0
+	var vm := SphereMesh.new()
+	vm.radius = 0.13 * k
+	vm.height = 0.24 * k
+	var vd := MeshInstance3D.new()
+	vd.mesh = vm
+	vd.material_override = void_m
+	vd.position = Vector3(0, -0.04 * k, -0.06 * k)
+	head.add_child(vd)
+	var em := StandardMaterial3D.new()
+	em.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	em.albedo_color = aura_color.lightened(0.2)
+	em.emission_enabled = true
+	em.emission = aura_color
+	em.emission_energy_multiplier = 9.0
+	for sx: float in [-0.045, 0.045]:
+		var e := MeshInstance3D.new()
+		var sm := SphereMesh.new()
+		sm.radius = 0.022 * k
+		sm.height = 0.03 * k
+		e.mesh = sm
+		e.material_override = em
+		e.position = Vector3(sx * k, -0.02 * k, -0.18 * k)
+		e.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		head.add_child(e)
+
+
+## Cracks of fire across chest, arms and legs, and a heart that burns.
+func _add_embers(k: float) -> void:
+	var fire := StandardMaterial3D.new()
+	fire.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	fire.albedo_color = Color(1.0, 0.38, 0.08)
+	fire.emission_enabled = true
+	fire.emission = Color(1.0, 0.3, 0.05)
+	fire.emission_energy_multiplier = 4.0
+	var spots := [
+		["spine_03", Vector3(0, 1.36, -0.15), 0.0, 0.16],
+		["spine_03", Vector3(0.08, 1.28, -0.14), 0.7, 0.12],
+		["spine_02", Vector3(-0.07, 1.15, -0.13), -0.6, 0.13],
+		["spine_01", Vector3(0.05, 1.04, -0.12), 0.3, 0.1],
+		["spine_03", Vector3(0.0, 1.32, 0.15), 0.2, 0.18],
+		["upperarm_l", Vector3(-0.27, 1.38, -0.04), 1.2, 0.12],
+		["upperarm_r", Vector3(0.27, 1.38, -0.04), -1.2, 0.12],
+		["lowerarm_l", Vector3(-0.42, 1.2, -0.03), 1.0, 0.1],
+		["lowerarm_r", Vector3(0.42, 1.2, -0.03), -1.0, 0.1],
+		["thigh_l", Vector3(-0.11, 0.7, -0.09), 0.4, 0.14],
+		["thigh_r", Vector3(0.11, 0.62, -0.09), -0.5, 0.14],
+		["calf_l", Vector3(-0.11, 0.3, -0.07), 0.2, 0.11],
+		["calf_r", Vector3(0.11, 0.35, -0.07), -0.3, 0.11],
+	]
+	for sp in spots:
+		var at: Vector3 = sp[1]
+		var holder := body._attach(str(sp[0]), Transform3D(Basis.IDENTITY, at * k))
+		var bm := BoxMesh.new()
+		bm.size = Vector3(0.018, float(sp[3]), 0.01) * k
+		var c := MeshInstance3D.new()
+		c.mesh = bm
+		c.material_override = fire
+		c.rotation.z = float(sp[2])
+		c.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		holder.add_child(c)
+		# A branch off each crack.
+		var b2 := MeshInstance3D.new()
+		var bm2 := BoxMesh.new()
+		bm2.size = Vector3(0.014, float(sp[3]) * 0.55, 0.01) * k
+		b2.mesh = bm2
+		b2.material_override = fire
+		b2.position = Vector3(0.02, float(sp[3]) * 0.2, 0.0) * k
+		b2.rotation.z = float(sp[2]) - 0.8
+		b2.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		holder.add_child(b2)
+	# The heart: a coal showing through a split in its chest.
+	var heart := body._attach("spine_03", Transform3D(Basis.IDENTITY, Vector3(0, 1.3, -0.13) * k))
+	var hm := SphereMesh.new()
+	hm.radius = 0.06 * k
+	hm.height = 0.1 * k
+	var h := MeshInstance3D.new()
+	h.mesh = hm
+	h.material_override = fire
+	h.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	heart.add_child(h)
+
+
+## A cloak: wide at the hem, ragged along it.
+static func _cloak_mesh(top_w: float, hem_w: float, length: float) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var n := 10
+	var top: Array[Vector3] = []
+	var hem: Array[Vector3] = []
+	for i in n + 1:
+		var u := float(i) / float(n)
+		# Curved round the shoulders, its edges wrapping forward at the sides.
+		var wrap := (u * 2.0 - 1.0) * (u * 2.0 - 1.0)
+		top.append(Vector3(lerpf(-top_w, top_w, u) * 0.5, 0.0, -wrap * 0.16))
+		var rag := (0.18 if i % 2 == 0 else 0.0) * length + sin(u * 17.0) * 0.04 * length
+		hem.append(Vector3(lerpf(-hem_w, hem_w, u) * 0.5, -length + rag, 0.12 * length - wrap * 0.22))
+	for i in n:
+		st.add_vertex(top[i])
+		st.add_vertex(hem[i])
+		st.add_vertex(top[i + 1])
+		st.add_vertex(top[i + 1])
+		st.add_vertex(hem[i])
+		st.add_vertex(hem[i + 1])
+	st.generate_normals()
+	return st.commit()
+
+
+static var _mote: Texture2D = null
+
+
+## A soft round dot, shared by every aura.
+static func _mote_tex() -> Texture2D:
+	if _mote == null:
+		var g := Gradient.new()
+		g.set_color(0, Color(1, 1, 1, 1))
+		g.set_color(1, Color(1, 1, 1, 0))
+		var gt := GradientTexture2D.new()
+		gt.gradient = g
+		gt.fill = GradientTexture2D.FILL_RADIAL
+		gt.fill_from = Vector2(0.5, 0.5)
+		gt.fill_to = Vector2(0.5, 0.0)
+		gt.width = 32
+		gt.height = 32
+		_mote = gt
+	return _mote
+
+
+## More of its body that bullets can find (wings, an arched neck, a bell):
+## a shape on the same body, so a hit anywhere on it counts.
+func add_hit_shape(shape: Shape3D, at: Vector3, rot := Vector3.ZERO) -> CollisionShape3D:
+	var cs := CollisionShape3D.new()
+	cs.shape = shape
+	cs.position = at
+	cs.rotation = rot
+	add_child(cs)
+	return cs
+
+
+## Motes drifting up round a boss, always: you know one from a distance.
+func _add_aura() -> void:
+	var em := GPUParticles3D.new()
+	em.name = "Aura"
+	em.amount = 40
+	em.lifetime = 2.4
+	em.preprocess = 2.4
+	em.visibility_aabb = AABB(Vector3(-4, -1, -4) * aura_size, Vector3(8, 9, 8) * aura_size)
+	em.visibility_range_end = 140.0
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	pm.emission_sphere_radius = 0.8 * aura_size
+	pm.direction = Vector3.UP
+	pm.spread = 25.0
+	pm.initial_velocity_min = 0.4
+	pm.initial_velocity_max = 1.2
+	pm.gravity = Vector3(0, 0.35, 0)
+	pm.scale_min = 0.6
+	pm.scale_max = 1.4
+	var grad := Gradient.new()
+	grad.set_color(0, Color(1, 1, 1, 0.0))
+	grad.add_point(0.2, Color(1, 1, 1, 0.95))
+	grad.set_color(1, Color(0.5, 0.5, 0.5, 0.0))
+	var gt := GradientTexture1D.new()
+	gt.gradient = grad
+	pm.color_ramp = gt
+	em.process_material = pm
+	var qm := QuadMesh.new()
+	qm.size = Vector2(0.05, 0.05)
+	# Round glowing motes in its own colour (not squares, not white).
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	mat.vertex_color_use_as_albedo = true
+	mat.albedo_color = aura_color
+	mat.albedo_texture = _mote_tex()
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	qm.material = mat
+	em.draw_pass_1 = qm
+	em.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	em.position = Vector3(0, 1.0 * aura_size, 0)
+	add_child(em)
 
 
 func _physics_process(delta: float) -> void:

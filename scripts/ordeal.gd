@@ -208,6 +208,7 @@ func _find_ground() -> Vector3:
 	var best := Vector3.INF
 	var best_score := INF
 	var space: PhysicsDirectSpaceState3D = game.get_world_3d().direct_space_state
+	var clutter: Array[RID] = game.world.clutter_rids()
 	for k in 400:
 		var q := Vector2(randf_range(-Terrain.HALF * 0.7, Terrain.HALF * 0.7), randf_range(-Terrain.HALF * 0.7, Terrain.HALF * 0.7))
 		var h := terrain.height_at(q.x, q.y)
@@ -219,9 +220,19 @@ func _find_ground() -> Vector3:
 				near_town = true
 				break
 		for pp in game.world.villages.poi_pads:
-			if (pp.center as Vector2).distance_to(q) < R + 25.0:
+			if (pp.center as Vector2).distance_to(q) < R + float(pp.get("radius", 10.0)) + 25.0:
 				near_town = true
 				break
+		for tw in game.world.villages.towers:
+			if (tw.center as Vector2).distance_to(q) < R + 30.0:
+				near_town = true
+				break
+		# Clear of the great landmarks too (a castle tower inside the ring).
+		if game.world.villages.landmarks != null:
+			for l in game.world.villages.landmarks.labels:
+				if (l[1] as Vector2).distance_to(q) < R + 90.0:
+					near_town = true
+					break
 		if near_town or not game.world.villages.house_at(q, R + 10.0).is_empty():
 			continue
 		if game.hollow != null and game.hollow.active() and Vector2(game.hollow.data.c.x, game.hollow.data.c.z).distance_to(q) < 160.0:
@@ -253,6 +264,18 @@ func _find_ground() -> Vector3:
 			var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(o, o + Vector3(cos(a), 0.0, sin(a)) * (R - 2.0), 1))
 			if not hit.is_empty():
 				blocked += 1
+		# Anything built (not a tree or a rock, which are cleared) standing
+		# in the ring rules the place out.
+		var box := CylinderShape3D.new()
+		box.radius = R + 2.0
+		box.height = 18.0
+		var sq := PhysicsShapeQueryParameters3D.new()
+		sq.shape = box
+		sq.collision_mask = 1
+		sq.exclude = clutter
+		sq.transform = Transform3D(Basis.IDENTITY, Vector3(q.x, hi + 1.2 + 9.0, q.y))
+		if not space.intersect_shape(sq, 1).is_empty():
+			continue
 		var score := float(blocked) * 3.0 + (hi - lo) + wood * 30.0
 		if score < best_score:
 			best_score = score
@@ -275,6 +298,7 @@ func _find_ground() -> Vector3:
 func _build() -> void:
 	# The ring is cleared of trees for as long as the Ordeal lasts.
 	var cut: int = game.world.hide_trees(centre, R + 4.0)
+	game.world.hide_rocks(centre, R + 2.0)
 	print("[ordeal] ring at %s, %d trees cleared" % [str(centre.round()), cut])
 	_root = Node3D.new()
 	_root.name = "OrdealRing"
@@ -403,6 +427,7 @@ func cleanup() -> void:
 		_set_dark(-1.0)
 	if game != null and game.world != null:
 		game.world.restore_trees()
+		game.world.restore_rocks()
 	if _root != null and is_instance_valid(_root):
 		_root.queue_free()
 

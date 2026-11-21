@@ -31,6 +31,11 @@ func setup_unkindled(p_arena: Vector3, p_game: Node) -> void:
 	regen_rate = 0.0
 	shoot_skill = 0.75
 	set_meta("unkindled", true)
+	aura_color = Color(0.6, 0.78, 1.0)
+	aura_size = 1.6
+	cloak_color = Color(0.03, 0.03, 0.04)
+	cloak_long = 1.25
+	crown = "great_horns"
 
 
 func _ready() -> void:

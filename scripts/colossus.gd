@@ -66,6 +66,12 @@ func setup_colossus(p_name: String, p_title: String, p_arena: Vector3, p_game: N
 	meds = 0
 	grenades = 0
 	signature = str(SIGNATURES.get(p_name, "quake"))
+	aura_color = Color(1.0, 0.45, 0.12)
+	aura_size = 2.4
+	cloak_color = Color(0.1, 0.07, 0.06)
+	cloak_long = 1.15
+	crown = "great_horns"
+	embers = true
 	set_meta("colossus", true)
 
 
@@ -79,10 +85,10 @@ func _ready() -> void:
 			var sm := m.get_surface_override_material(0)
 			if sm is ShaderMaterial:
 				var camo := (sm as ShaderMaterial).duplicate() as ShaderMaterial
-				camo.set_shader_parameter("c_base", Color(0.09, 0.08, 0.08))
-				camo.set_shader_parameter("c_a", Color(0.95, 0.38, 0.08))
-				camo.set_shader_parameter("c_b", Color(0.16, 0.13, 0.12))
-				camo.set_shader_parameter("c_c", Color(0.04, 0.035, 0.035))
+				camo.set_shader_parameter("c_base", Color(0.07, 0.06, 0.06))
+				camo.set_shader_parameter("c_a", Color(0.12, 0.065, 0.045))
+				camo.set_shader_parameter("c_b", Color(0.1, 0.09, 0.085))
+				camo.set_shader_parameter("c_c", Color(0.03, 0.025, 0.025))
 				camo.set_shader_parameter("scale", 4.0)
 				m.set_surface_override_material(0, camo)
 	head_offset = 1.5 * SCALE
