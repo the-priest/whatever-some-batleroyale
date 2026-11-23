@@ -92,6 +92,8 @@ var intro: Intro = null
 var guide: Guide = null
 ## The sky ledges (double-jump caches).
 var reaches: Reaches = null
+## Every area reachable on foot: ladders up the cliffs.
+var traverse: Traverse = null
 var _reach_hint := ""
 ## Animals of the isle, and the Ash Beetles of the wilds.
 var fauna: Fauna = null
@@ -464,6 +466,8 @@ func _ready() -> void:
 		_run_hitcover_test()
 	elif OS.get_cmdline_user_args().has("--introtest"):
 		_run_intro_test()
+	elif OS.get_cmdline_user_args().has("--traverse"):
+		_run_traverse_test()
 	elif OS.get_cmdline_user_args().has("--guide"):
 		_run_guide_test()
 	elif OS.get_cmdline_user_args().has("--sentinel"):
@@ -531,6 +535,12 @@ func _build_world() -> void:
 	reaches.name = "Reaches"
 	world.add_child(reaches)
 	reaches.build(self, seed_value)
+	var t_tr := Time.get_ticks_msec()
+	traverse = Traverse.new()
+	traverse.name = "Traverse"
+	world.add_child(traverse)
+	traverse.build(self)
+	print("[traverse] %d walkable cells; %d regions cut off; %d ladders; %d still unreached (%d ms)" % [traverse.walkable_cells, traverse.cut_off.size(), traverse.ladders.size(), traverse.unreached_after, Time.get_ticks_msec() - t_tr])
 	fauna = Fauna.new()
 	fauna.name = "Fauna"
 	world.add_child(fauna)
@@ -1885,6 +1895,25 @@ func surface_at(pos: Vector3) -> String:
 
 
 ## Ground height under a point, including houses and props.
+## Ground `dist` metres from `from` (the way `fwd` first, then round about)
+## that the eye at `from` sees clearly and that is nearly level with it.
+func _clear_spot(from: Vector3, fwd: Vector3, dist: float) -> Vector3:
+	var first := ground_at(from + fwd * dist + Vector3.UP * 30.0)
+	var eye := from + Vector3.UP * 1.6
+	var a0 := atan2(fwd.z, fwd.x)
+	for k in 24:
+		var a := a0 + TAU * float(k) / 24.0
+		var c := ground_at(from + Vector3(cos(a), 0, sin(a)) * dist + Vector3.UP * 30.0)
+		if absf(c.y - from.y) > 1.2:
+			continue
+		var q := PhysicsRayQueryParameters3D.create(eye, c + Vector3.UP * 1.0, 1)
+		if player != null:
+			q.exclude = [player.get_rid()]
+		if get_world_3d().direct_space_state.intersect_ray(q).is_empty():
+			return c
+	return first
+
+
 func ground_at(pos: Vector3) -> Vector3:
 	var q := PhysicsRayQueryParameters3D.create(pos + Vector3.UP * 1.5, pos + Vector3.DOWN * 30.0, 1)
 	var hit := get_world_3d().direct_space_state.intersect_ray(q)
@@ -4522,6 +4551,14 @@ func _run_shot() -> void:
 					cam_pos = np + Vector3(h * 2.6, h * 0.9 + 0.6, h * 2.6)
 					cam_look = np + Vector3.UP * h * 0.5
 					break
+		if fa == "--laddercam" and not Ladder.all.is_empty():
+			var bl: Ladder = Ladder.all[0]
+			for l in Ladder.all:
+				if (l as Ladder).top.y - (l as Ladder).foot.y > bl.top.y - bl.foot.y:
+					bl = l
+			var side := bl.facing.cross(Vector3.UP)
+			cam_pos = bl.foot - bl.facing * 6.0 + side * 2.5 + Vector3.UP * 2.0
+			cam_look = bl.foot + Vector3.UP * 6.0
 		if fa == "--beastcam":
 			var bp := ground_at(Vector3(40, 300, 60))
 			var bt := Beast.new()
@@ -8485,6 +8522,67 @@ func _run_reach_test() -> void:
 	get_tree().quit()
 
 
+## Can you walk (and climb) everywhere? The grid says so, and the way up to
+## the high plateau is walked for real.
+func _run_traverse_test() -> void:
+	await get_tree().process_frame
+	var top := Vector3(Terrain.PLATEAU_C.x, terrain.height_at(Terrain.PLATEAU_C.x, Terrain.PLATEAU_C.y), Terrain.PLATEAU_C.y)
+	var path: Array = traverse.path_to(top)
+	print("[traverse] path to the plateau: %d cells" % path.size())
+	var steps: Array = []
+	for i in range(1, path.size()):
+		var a: Vector3 = path[i - 1]
+		var b: Vector3 = path[i]
+		if b.y - a.y > 2.0:
+			steps.append("(%d,%d) %.1f -> %.1f" % [int(b.x), int(b.z), a.y, b.y])
+	print("[traverse] big rises on it: %s" % str(steps))
+	_check("every walkable area is reachable on foot", traverse.unreached_after <= 12)
+	_check("cliffs have ladders", traverse.ladders.size() >= 10)
+	# Climb the tallest ladder for real.
+	_start_match()
+	for i in 30:
+		await get_tree().physics_frame
+	_land_player_now()
+	player.spawn_protect = 9999.0
+	var best: Ladder = null
+	for l in Ladder.all:
+		if best == null or (l as Ladder).top.y - (l as Ladder).foot.y > best.top.y - best.foot.y:
+			best = l
+	if best != null:
+		player.global_position = best.foot - best.facing * 0.6 + Vector3.UP * 0.2
+		player.velocity = Vector3.ZERO
+		player.yaw = atan2(-best.facing.x, -best.facing.z)
+		for i in 5:
+			await get_tree().physics_frame
+		Input.action_press("move_forward")
+		var t := 0
+		while t < 60 * 40 and player.global_position.y < best.top.y - 0.6:
+			await get_tree().physics_frame
+			t += 1
+		for i in 20:
+			await get_tree().physics_frame
+		Input.action_release("move_forward")
+		var up := player.global_position.y - best.foot.y
+		print("[traverse] climbed the tallest ladder (%.0f m): rose %.1f m, %.1f m from its top lip" % [best.top.y - best.foot.y, up, Vector2(player.global_position.x - best.lip.x, player.global_position.z - best.lip.z).length()])
+		_check("a ladder takes you to the top of its cliff", up > (best.top.y - best.foot.y) - 2.5)
+	var lines: Array = ["# Traversal", "", "Written by the game (`--traverse`). The isle sampled every %d m: you can always drop down; you climb only a walkable slope or a rise within one jump and the ledge-grab (%.1f m with the new jump)." % [int(Traverse.CELL), Traverse.CLIMB], "",
+		"- Walkable ground: %d cells" % traverse.walkable_cells,
+		"- Regions cut off before ladders: %d" % traverse.cut_off.size(),
+		"- Ladders placed: %d (one every %d m along every cliff taller than a jump)" % [traverse.ladders.size(), int(Traverse.LADDER_SPACING)],
+		"- Cells still unreached afterwards: %d (single stray cells on cliff faces)" % traverse.unreached_after, "", "| # | Foot (x, z) | Climb | Top lip (x, z) |", "|---|---|---|---|"]
+	for i in traverse.ladders.size():
+		var l: Array = traverse.ladders[i]
+		var f: Vector3 = l[0]
+		var lp: Vector3 = l[2]
+		lines.append("| %d | %d, %d | %.0f m | %d, %d |" % [i + 1, int(f.x), int(f.z), float(l[1]), int(lp.x), int(lp.z)])
+	var fa := FileAccess.open("res://docs/TRAVERSAL.md", FileAccess.WRITE)
+	if fa != null:
+		fa.store_string("\n".join(PackedStringArray(lines)) + "\n")
+		fa.close()
+	print("[traverse] done")
+	get_tree().quit()
+
+
 ## The opening film plays, holds its shots, can be skipped, and Souls Mode
 ## begins after it; difficulty eases the blows.
 func _run_intro_test() -> void:
@@ -8964,7 +9062,16 @@ func _run_classes_test() -> void:
 			break
 	if boss != null:
 		boss.set_physics_process(false)
-		player.global_position = ground_at(boss.global_position + Vector3(0, 30, 3.4)) + Vector3.UP * 0.1
+		# Beside it, on its own level (it may stand on a ledge).
+		var bp := boss.global_position
+		var stand := ground_at(bp + Vector3(0, 30, 3.4))
+		for k in 16:
+			var a := TAU * float(k) / 16.0
+			var c := ground_at(bp + Vector3(cos(a) * 3.4, 30.0, sin(a) * 3.4))
+			if absf(c.y - bp.y) < 1.5:
+				stand = c
+				break
+		player.global_position = stand + Vector3.UP * 0.1
 		for i in 3:
 			await get_tree().physics_frame
 		_face_point(boss.global_position + Vector3.UP * 2.0)
@@ -8975,7 +9082,7 @@ func _run_classes_test() -> void:
 		for t in targets:
 			if t[0] == boss:
 				found = true
-		print("[classes] sword reaches the colossus: %s (%d in the arc)" % [str(found), targets.size()])
+		print("[classes] sword reaches the colossus: %s (%d in the arc) player %s boss %s" % [str(found), targets.size(), str(player.global_position), str(boss.global_position)])
 		_check("the sword reaches a colossus on its body", found)
 		boss.set_physics_process(true)
 	# --- The Hunter.
@@ -8985,16 +9092,7 @@ func _run_classes_test() -> void:
 		await get_tree().physics_frame
 	player.set_class("hunter")
 	# Somewhere 22 m off with a clear line from the eye (no hill between).
-	var spot22 := ground_at(here + fwd * 22.0 + Vector3.UP * 30.0)
-	for k in 16:
-		var a22 := TAU * float(k) / 16.0
-		var c22 := ground_at(here + Vector3(cos(a22), 0, sin(a22)) * 22.0 + Vector3.UP * 30.0)
-		var eye22 := player.global_position + Vector3.UP * 1.6
-		var q22 := PhysicsRayQueryParameters3D.create(eye22, c22 + Vector3.UP * 1.0, 1, [player.get_rid()])
-		if get_world_3d().direct_space_state.intersect_ray(q22).is_empty():
-			spot22 = c22
-			break
-	var d3 := _dummy_at(spot22)
+	var d3 := _dummy_at(_clear_spot(here, fwd, 22.0))
 	if d3 != null:
 		d3.hp = 100.0
 		_face_point(d3.global_position + Vector3.UP * 1.2)
@@ -9015,7 +9113,7 @@ func _run_classes_test() -> void:
 		_check("a full-draw arrow strikes a soldier at 22 m", d3.hp < 60.0 or not d3.alive)
 	# --- The Pyromancer.
 	player.set_class("pyro")
-	var d4 := _dummy_at(ground_at(here + fwd * 10.0 + Vector3.UP * 30.0))
+	var d4 := _dummy_at(_clear_spot(player.global_position, fwd, 10.0))
 	if d4 != null:
 		d4.hp = 100.0
 		_face_point(d4.global_position + Vector3.UP * 1.0)
@@ -9029,7 +9127,7 @@ func _run_classes_test() -> void:
 		var e1: float = player.kit.ember
 		for i in 45:
 			await get_tree().physics_frame
-		print("[classes] fireball: ember %.0f -> %.0f, soldier hp %.0f" % [e0, e1, d4.hp])
+		print("[classes] fireball: ember %.0f -> %.0f, soldier hp %.0f (player %s soldier %s)" % [e0, e1, d4.hp, str(player.global_position), str(d4.global_position)])
 		_check("a fireball costs ember", e1 < e0)
 		_check("a fireball burns a soldier at 10 m", d4.hp < 75.0 or not d4.alive)
 		for i in 90:

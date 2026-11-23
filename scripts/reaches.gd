@@ -17,10 +17,10 @@ const COUNT := 14
 ## Ash Stride passes a veil. Taller than any jump can clear.
 const VEILS := 6
 const VEIL_LAYER := 16
-const VEIL_H := 6.5
+const VEIL_H := 13.0
 const VEIL_R := 3.4
 ## Top of the column above the highest ground beside it.
-const RISE := 3.45
+const RISE := 7.5
 const RADIUS := 1.25
 const MANTLE_REACH := 2.05
 

@@ -3890,6 +3890,20 @@ func _draw_writ_map(ctrl: Control, view: MapView, big: bool, to_map: Callable, i
 			ctrl.draw_circle(cmp, 4.5, Color(1.0, 0.62, 0.3))
 	if not hollow_mark.is_empty():
 		_draw_hollow(ctrl, view, big, to_map, inner)
+	# Ladders up the cliffs: a small rung mark, so you can find the way up.
+	for lm in Ladder.all:
+		var lad := lm as Ladder
+		if not is_instance_valid(lad):
+			continue
+		var lp: Vector2 = to_map.call(Vector2(lad.foot.x, lad.foot.z))
+		if inner.has_point(lp):
+			var s := 5.0 if big else 3.5
+			ctrl.draw_rect(Rect2(lp - Vector2(s, s), Vector2(s, s) * 2.0), Color(0.05, 0.04, 0.03, 0.85))
+			ctrl.draw_line(lp + Vector2(-s * 0.5, -s * 0.8), lp + Vector2(-s * 0.5, s * 0.8), Color(1.0, 0.82, 0.45), 1.5)
+			ctrl.draw_line(lp + Vector2(s * 0.5, -s * 0.8), lp + Vector2(s * 0.5, s * 0.8), Color(1.0, 0.82, 0.45), 1.5)
+			for r in 3:
+				var ry := -s * 0.5 + float(r) * s * 0.5
+				ctrl.draw_line(lp + Vector2(-s * 0.5, ry), lp + Vector2(s * 0.5, ry), Color(1.0, 0.82, 0.45), 1.0)
 	for bm in boss_marks:
 		var bmp: Vector2 = to_map.call(bm[0])
 		if inner.has_point(bmp):

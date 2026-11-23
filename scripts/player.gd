@@ -25,7 +25,8 @@ const CROUCH := 2.7
 const ACCEL := 42.0
 const AIR_ACCEL := 9.0
 const GRAVITY := 24.0
-const JUMP := 6.3
+## Four times the old height (height goes with the square of the speed).
+const JUMP := 12.6
 const EYE := 1.62
 const CROUCH_EYE := 1.05
 const TERMINAL := -58.0
@@ -882,6 +883,11 @@ func _ground(delta: float) -> void:
 			if game.hud != null:
 				game.hud.set_swim(false, air, false)
 	var input := _vec("move_left", "move_right", "move_forward", "move_back")
+	# A ladder: walk into it holding forward (or jump) and climb.
+	var lad: Ladder = Ladder.near(global_position) if not Ladder.all.is_empty() else null
+	if lad != null and (input.y < -0.3 or _ap("jump")) and global_position.y < lad.top.y - 0.2:
+		_climb(lad, delta)
+		return
 	var crouch := _ap("crouch")
 	_sprint_lock = maxf(0.0, _sprint_lock - delta)
 	# Toggled sprint ends when you stop running forward, aim or crouch.
@@ -2616,6 +2622,27 @@ func quickdraw() -> void:
 		game.anticheat.on_reload()
 	_sfx("equip", 2.0)
 	_emit_ammo()
+
+
+var climbing := false
+
+
+func _climb(lad: Ladder, delta: float) -> void:
+	climbing = true
+	var pull := Vector3(lad.foot.x - global_position.x, 0.0, lad.foot.z - global_position.z) * 4.0
+	velocity = Vector3(pull.x, 4.6, pull.z)
+	move_and_slide()
+	bob += delta * 6.0
+	_coyote = 0.12
+	if game != null and game.get("anticheat") != null:
+		game.anticheat.grace(0.5)
+	if global_position.y >= lad.top.y - 0.5:
+		# Over the lip and onto the ground beyond.
+		global_position = lad.lip + Vector3.UP * 0.2 + lad.facing * 0.9
+		velocity = Vector3.ZERO
+		climbing = false
+		if game != null and game.sfx != null:
+			game.sfx.play_2d("step_dirt_2", -6.0, 0.05)
 
 
 func _start_air_dash(wish: Vector3, basis_yaw: Basis) -> void:

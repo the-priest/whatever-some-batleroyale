@@ -4,8 +4,8 @@ Written by the game (`--reach` test), measured against the real movement:
 
 | Move | Highest top reachable above where you stand |
 |---|---|
-| One jump + ledge-grab | 2.88 m (3.16 m with the feather talisman) |
-| Two jumps (Ember Wings) + ledge-grab | 3.70 m (4.28 m with the feather talisman) |
+| One jump + ledge-grab | 5.36 m (6.50 m with the feather talisman) |
+| Two jumps (Ember Wings) + ledge-grab | 8.66 m (10.95 m with the feather talisman) |
 | Air dash (Ash Stride) | 3.7 m flat in 0.22 s, once per jump |
 
 ## Sky ledges (seed 7)
@@ -14,24 +14,24 @@ Each must be out of reach of one jump (with the feather) and in reach of two (wi
 
 | # | Where (x, z) | Height above the highest ground beside it | One jump | Two jumps | Verdict |
 |---|---|---|---|---|---|
-| 1 | 172, -176 | 3.45 m | no (max 3.16) | yes (max 3.70) | SEALED UNTIL EMBER WINGS |
-| 2 | -74, 77 | 3.45 m | no (max 3.16) | yes (max 3.70) | SEALED UNTIL EMBER WINGS |
-| 3 | -694, -341 | 3.45 m | no (max 3.16) | yes (max 3.70) | SEALED UNTIL EMBER WINGS |
-| 4 | -867, 244 | 3.45 m | no (max 3.16) | yes (max 3.70) | SEALED UNTIL EMBER WINGS |
-| 5 | -201, -469 | 3.45 m | no (max 3.16) | yes (max 3.70) | SEALED UNTIL EMBER WINGS |
-| 6 | 239, 436 | 3.45 m | no (max 3.16) | yes (max 3.70) | SEALED UNTIL EMBER WINGS |
-| 7 | -245, 557 | 3.45 m | no (max 3.16) | yes (max 3.70) | SEALED UNTIL EMBER WINGS |
-| 8 | -585, 302 | 3.45 m | no (max 3.16) | yes (max 3.70) | SEALED UNTIL EMBER WINGS |
-| 9 | 778, -190 | 3.45 m | no (max 3.16) | yes (max 3.70) | SEALED UNTIL EMBER WINGS |
-| 10 | 1085, -123 | 3.45 m | no (max 3.16) | yes (max 3.70) | SEALED UNTIL EMBER WINGS |
-| 11 | 347, 78 | 3.45 m | no (max 3.16) | yes (max 3.70) | SEALED UNTIL EMBER WINGS |
-| 12 | 17, 645 | 3.45 m | no (max 3.16) | yes (max 3.70) | SEALED UNTIL EMBER WINGS |
-| 13 | -185, -167 | 3.45 m | no (max 3.16) | yes (max 3.70) | SEALED UNTIL EMBER WINGS |
-| 14 | -782, -91 | 3.45 m | no (max 3.16) | yes (max 3.70) | SEALED UNTIL EMBER WINGS |
+| 1 | 172, -176 | 7.50 m | no (max 6.50) | yes (max 8.66) | SEALED UNTIL EMBER WINGS |
+| 2 | -74, 77 | 7.50 m | no (max 6.50) | yes (max 8.66) | SEALED UNTIL EMBER WINGS |
+| 3 | -694, -341 | 7.50 m | no (max 6.50) | yes (max 8.66) | SEALED UNTIL EMBER WINGS |
+| 4 | -867, 244 | 7.50 m | no (max 6.50) | yes (max 8.66) | SEALED UNTIL EMBER WINGS |
+| 5 | -201, -469 | 7.50 m | no (max 6.50) | yes (max 8.66) | SEALED UNTIL EMBER WINGS |
+| 6 | 239, 436 | 7.50 m | no (max 6.50) | yes (max 8.66) | SEALED UNTIL EMBER WINGS |
+| 7 | -245, 557 | 7.50 m | no (max 6.50) | yes (max 8.66) | SEALED UNTIL EMBER WINGS |
+| 8 | -585, 302 | 7.50 m | no (max 6.50) | yes (max 8.66) | SEALED UNTIL EMBER WINGS |
+| 9 | 778, -190 | 7.50 m | no (max 6.50) | yes (max 8.66) | SEALED UNTIL EMBER WINGS |
+| 10 | 1085, -123 | 7.50 m | no (max 6.50) | yes (max 8.66) | SEALED UNTIL EMBER WINGS |
+| 11 | 347, 78 | 7.50 m | no (max 6.50) | yes (max 8.66) | SEALED UNTIL EMBER WINGS |
+| 12 | 17, 645 | 7.50 m | no (max 6.50) | yes (max 8.66) | SEALED UNTIL EMBER WINGS |
+| 13 | -185, -167 | 7.50 m | no (max 6.50) | yes (max 8.66) | SEALED UNTIL EMBER WINGS |
+| 14 | -782, -91 | 7.50 m | no (max 6.50) | yes (max 8.66) | SEALED UNTIL EMBER WINGS |
 
 ## Veils of ash (seed 7)
 
-Rings of standing stones walled with veils: closed all round, 6.5 m tall (two jumps and the ledge-grab reach 4.28 m with the feather). Only a roll or air dash with the Ash Stride passes a veil.
+Rings of standing stones walled with veils: closed all round, 13.0 m tall (two jumps and the ledge-grab reach 10.95 m with the feather). Only a roll or air dash with the Ash Stride passes a veil.
 
 | # | Where (x, z) | Closed all round | Verdict |
 |---|---|---|---|

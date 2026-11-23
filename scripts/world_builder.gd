@@ -1261,6 +1261,26 @@ func clutter_rids() -> Array[RID]:
 	return out
 
 
+## Trees gone for good (the foot of a ladder): hidden and no longer solid,
+## and not brought back when a boss ring is put away.
+func remove_trees(c: Vector3, r: float) -> int:
+	if _tree_body == null:
+		return 0
+	var rid := _tree_body.get_rid()
+	var c2 := Vector2(c.x, c.z)
+	var n := 0
+	for k in _tree_pos.size():
+		var tp := _tree_pos[k]
+		if Vector2(tp.x, tp.z).distance_to(c2) > r:
+			continue
+		var mm: MultiMesh = _tree_mm[k]
+		mm.set_instance_transform(_tree_i[k], Transform3D(Basis().scaled(Vector3.ONE * 0.0001), tp + Vector3.DOWN * 50.0))
+		for s in _tree_n[k]:
+			PhysicsServer3D.body_set_shape_disabled(rid, _tree_s0[k] + s, true)
+		n += 1
+	return n
+
+
 func restore_trees() -> void:
 	if _tree_body == null:
 		return
